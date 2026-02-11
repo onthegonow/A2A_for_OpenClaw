@@ -78,6 +78,12 @@ class TokenStore {
 
   /**
    * Create a new federation token
+   * 
+   * Default limits (anti-abuse):
+   * - Expires in 1 day
+   * - Max 100 calls total
+   * - Rate limited: 10/min, 100/hr, 1000/day (enforced server-side)
+   * - Timeout: 5-300 seconds (enforced server-side)
    */
   create(options = {}) {
     const {
@@ -86,7 +92,7 @@ class TokenStore {
       permissions = 'chat-only',
       disclosure = 'minimal',
       notify = 'all',
-      maxCalls = null
+      maxCalls = 100  // Default limit, not unlimited
     } = options;
 
     const token = TokenStore.generateToken();

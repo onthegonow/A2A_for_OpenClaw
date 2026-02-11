@@ -46,13 +46,23 @@ function getHostname() {
 // Commands
 const commands = {
   create: (args) => {
+    // Parse max-calls: number, 'unlimited', or default (100)
+    let maxCalls = 100; // Safe default
+    if (args.flags['max-calls']) {
+      if (args.flags['max-calls'] === 'unlimited') {
+        maxCalls = null;
+      } else {
+        maxCalls = parseInt(args.flags['max-calls']) || 100;
+      }
+    }
+
     const { token, record } = store.create({
       name: args.flags.name || args.flags.n || 'unnamed',
       expires: args.flags.expires || args.flags.e || '1d',
       permissions: args.flags.permissions || args.flags.p || 'chat-only',
       disclosure: args.flags.disclosure || args.flags.d || 'minimal',
       notify: args.flags.notify || 'all',
-      maxCalls: args.flags['max-calls'] ? parseInt(args.flags['max-calls']) : null
+      maxCalls
     });
 
     const hostname = getHostname();
@@ -75,6 +85,7 @@ const commands = {
     console.log(`${'─'.repeat(50)}\n`);
     
     // Generate shareable invite block
+    const maxCallsText = record.max_calls ? `${record.max_calls} calls` : 'unlimited';
     const invite = `🤝 Agent-to-Agent Invite
 
 ${record.name} is inviting your agent to connect!
@@ -84,6 +95,7 @@ ${inviteUrl}
 
 ⏰ Expires: ${expiresText}
 🔐 Permissions: ${record.permissions}
+📊 Limits: ${maxCallsText} total, 10/min rate limit
 
 ━━━ Quick Setup ━━━
 
