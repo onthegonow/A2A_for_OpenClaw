@@ -4,9 +4,21 @@ Agent-to-Agent communication for [OpenClaw](https://github.com/openclaw/openclaw
 
 ## Quick Start
 
-```bash
-npm install -g a2acalling
+### Install via ClawHub (recommended)
 
+```bash
+clawhub install a2a
+```
+
+### Or via npm
+
+```bash
+npm install -g a2a
+```
+
+### Usage
+
+```bash
 # Create a token others can use to call your agent
 a2a create --name "My Agent" --expires 7d
 
@@ -27,16 +39,19 @@ a2a call oclaw://other-host.com/fed_xyz789 "Hey, can you help with X?"
 
 ## Installation
 
-### As a CLI
+### Via ClawHub (OpenClaw users)
 
 ```bash
-npm install -g a2acalling
+clawhub install a2a
 ```
 
-### As a library
+This installs the skill and makes `/federation` commands available in your chat.
+
+### Via npm (standalone)
 
 ```bash
-npm install a2acalling
+npm install -g a2a    # CLI
+npm install a2a       # Library
 ```
 
 ## CLI Usage

@@ -1,5 +1,5 @@
 {
-  "name": "a2acalling",
+  "name": "a2a",
   "version": "0.1.0",
   "description": "Agent-to-agent calling for OpenClaw - federated agent communication",
   "main": "src/index.js",
