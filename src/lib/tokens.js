@@ -1,0 +1,256 @@
+/**
+ * Token management for A2A federation
+ */
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+// Default config path
+const DEFAULT_CONFIG_DIR = process.env.A2A_CONFIG_DIR || 
+  process.env.OPENCLAW_CONFIG_DIR || 
+  path.join(process.env.HOME || '/tmp', '.config', 'openclaw');
+
+const DB_FILENAME = 'a2a-federation.json';
+
+class TokenStore {
+  constructor(configDir = DEFAULT_CONFIG_DIR) {
+    this.configDir = configDir;
+    this.dbPath = path.join(configDir, DB_FILENAME);
+    this._ensureDir();
+  }
+
+  _ensureDir() {
+    if (!fs.existsSync(this.configDir)) {
+      fs.mkdirSync(this.configDir, { recursive: true });
+    }
+  }
+
+  _load() {
+    if (fs.existsSync(this.dbPath)) {
+      return JSON.parse(fs.readFileSync(this.dbPath, 'utf8'));
+    }
+    return { tokens: [], remotes: [], calls: [] };
+  }
+
+  _save(db) {
+    fs.writeFileSync(this.dbPath, JSON.stringify(db, null, 2));
+  }
+
+  /**
+   * Generate a secure federation token
+   */
+  static generateToken() {
+    const bytes = crypto.randomBytes(24);
+    return 'fed_' + bytes.toString('base64url');
+  }
+
+  /**
+   * Hash a token for storage
+   */
+  static hashToken(token) {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  /**
+   * Parse duration string (1h, 1d, 7d, 30d, never) to milliseconds
+   */
+  static parseDuration(str) {
+    if (!str || str === 'never') return null;
+    const match = str.match(/^(\d+)(h|d)$/);
+    if (!match) throw new Error(`Invalid duration: ${str}`);
+    const [, num, unit] = match;
+    return unit === 'h' 
+      ? parseInt(num) * 60 * 60 * 1000 
+      : parseInt(num) * 24 * 60 * 60 * 1000;
+  }
+
+  /**
+   * Create a new federation token
+   */
+  create(options = {}) {
+    const {
+      name = 'unnamed',
+      expires = '1d',
+      permissions = 'chat-only',
+      disclosure = 'minimal',
+      notify = 'all',
+      maxCalls = null
+    } = options;
+
+    const token = TokenStore.generateToken();
+    const tokenHash = TokenStore.hashToken(token);
+    const durationMs = TokenStore.parseDuration(expires);
+    const expiresAt = durationMs ? new Date(Date.now() + durationMs).toISOString() : null;
+
+    const record = {
+      id: token.slice(0, 16),
+      token_hash: tokenHash,
+      name,
+      permissions,
+      disclosure,
+      notify,
+      max_calls: maxCalls,
+      calls_made: 0,
+      created_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      revoked: false
+    };
+
+    const db = this._load();
+    db.tokens.push(record);
+    this._save(db);
+
+    return { token, record };
+  }
+
+  /**
+   * List all tokens (optionally including revoked)
+   */
+  list(includeRevoked = false) {
+    const db = this._load();
+    return includeRevoked ? db.tokens : db.tokens.filter(t => !t.revoked);
+  }
+
+  /**
+   * Find a token by ID prefix
+   */
+  findById(idPrefix) {
+    const db = this._load();
+    return db.tokens.find(t => t.id === idPrefix || t.id.startsWith(idPrefix));
+  }
+
+  /**
+   * Validate an incoming token, returns validation result
+   */
+  validate(token) {
+    const db = this._load();
+    const tokenHash = TokenStore.hashToken(token);
+    const record = db.tokens.find(t => t.token_hash === tokenHash);
+
+    if (!record) {
+      return { valid: false, error: 'token_not_found' };
+    }
+
+    if (record.revoked) {
+      return { valid: false, error: 'token_revoked' };
+    }
+
+    if (record.expires_at && new Date(record.expires_at) < new Date()) {
+      return { valid: false, error: 'token_expired' };
+    }
+
+    if (record.max_calls && record.calls_made >= record.max_calls) {
+      return { valid: false, error: 'max_calls_exceeded' };
+    }
+
+    // Increment call count
+    record.calls_made++;
+    record.last_used = new Date().toISOString();
+    this._save(db);
+
+    return {
+      valid: true,
+      id: record.id,
+      name: record.name,
+      permissions: record.permissions,
+      disclosure: record.disclosure,
+      notify: record.notify,
+      calls_remaining: record.max_calls ? record.max_calls - record.calls_made : null
+    };
+  }
+
+  /**
+   * Revoke a token by ID
+   */
+  revoke(idPrefix) {
+    const db = this._load();
+    const record = db.tokens.find(t => t.id === idPrefix || t.id.startsWith(idPrefix));
+    
+    if (!record) {
+      return { success: false, error: 'not_found' };
+    }
+
+    record.revoked = true;
+    record.revoked_at = new Date().toISOString();
+    this._save(db);
+
+    return { success: true, record };
+  }
+
+  /**
+   * Add a remote agent endpoint
+   */
+  addRemote(inviteUrl, name = null) {
+    const match = inviteUrl.match(/^oclaw:\/\/([^/]+)\/(.+)$/);
+    if (!match) {
+      throw new Error(`Invalid invite URL: ${inviteUrl}`);
+    }
+
+    const [, host, token] = match;
+    const remoteName = name || host;
+
+    const db = this._load();
+    
+    // Check for duplicate
+    const existing = db.remotes.find(r => r.host === host && r.token === token);
+    if (existing) {
+      return { success: false, error: 'duplicate', existing };
+    }
+
+    const remote = {
+      id: crypto.randomBytes(8).toString('hex'),
+      name: remoteName,
+      host,
+      token,
+      added_at: new Date().toISOString()
+    };
+
+    db.remotes.push(remote);
+    this._save(db);
+
+    return { success: true, remote };
+  }
+
+  /**
+   * List remote agents
+   */
+  listRemotes() {
+    const db = this._load();
+    return db.remotes;
+  }
+
+  /**
+   * Get a remote by name or host
+   */
+  getRemote(nameOrHost) {
+    const db = this._load();
+    return db.remotes.find(r => 
+      r.name === nameOrHost || 
+      r.host === nameOrHost ||
+      r.id === nameOrHost
+    );
+  }
+
+  /**
+   * Remove a remote agent
+   */
+  removeRemote(nameOrHost) {
+    const db = this._load();
+    const idx = db.remotes.findIndex(r => 
+      r.name === nameOrHost || 
+      r.host === nameOrHost ||
+      r.id === nameOrHost
+    );
+    
+    if (idx === -1) {
+      return { success: false, error: 'not_found' };
+    }
+
+    const [removed] = db.remotes.splice(idx, 1);
+    this._save(db);
+    return { success: true, remote: removed };
+  }
+}
+
+module.exports = { TokenStore };

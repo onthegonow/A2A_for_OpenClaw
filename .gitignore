@@ -1,0 +1,11 @@
+node_modules/
+*.log
+.DS_Store
+*.local
+
+# Secrets - NEVER commit
+.env
+.env.*
+
+# Don't commit test tokens
+a2a-federation.json

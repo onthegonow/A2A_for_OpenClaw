@@ -1,0 +1,38 @@
+{
+  "name": "a2acalling",
+  "version": "0.1.0",
+  "description": "Agent-to-agent calling for OpenClaw - federated agent communication",
+  "main": "src/index.js",
+  "bin": {
+    "a2a": "bin/cli.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node test/run.js"
+  },
+  "keywords": [
+    "openclaw",
+    "claudebot",
+    "agent",
+    "federation",
+    "a2a",
+    "ai"
+  ],
+  "author": "OpenClaw Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onthegonow/A2A_for_OpenClaw.git"
+  },
+  "bugs": {
+    "url": "https://github.com/onthegonow/A2A_for_OpenClaw/issues"
+  },
+  "homepage": "https://github.com/onthegonow/A2A_for_OpenClaw#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "express": "^4.18.0"
+  }
+}
