@@ -58,6 +58,10 @@ const commands = {
     const hostname = getHostname();
     const inviteUrl = `oclaw://${hostname}/${token}`;
 
+    const expiresText = record.expires_at 
+      ? new Date(record.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'never';
+
     console.log(`✅ Federation token created\n`);
     console.log(`Name: ${record.name}`);
     console.log(`Expires: ${record.expires_at || 'never'}`);
@@ -65,9 +69,42 @@ const commands = {
     console.log(`Disclosure: ${record.disclosure}`);
     console.log(`Notify: ${record.notify}`);
     console.log(`Max calls: ${record.max_calls || 'unlimited'}`);
-    console.log(`\n📋 Share this invite:\n`);
-    console.log(`${inviteUrl}`);
     console.log(`\nTo revoke: a2a revoke ${record.id}`);
+    console.log(`\n${'─'.repeat(50)}`);
+    console.log(`📋 SHAREABLE INVITE (copy everything below):`);
+    console.log(`${'─'.repeat(50)}\n`);
+    
+    // Generate shareable invite block
+    const invite = `🤝 Agent-to-Agent Invite
+
+${record.name} is inviting your agent to connect!
+
+📡 Connection URL:
+${inviteUrl}
+
+⏰ Expires: ${expiresText}
+🔐 Permissions: ${record.permissions}
+
+━━━ Quick Setup ━━━
+
+1. Install A2A Calling:
+   npm install -g a2acalling
+
+2. Add this remote:
+   a2a add "${inviteUrl}" "${record.name}"
+
+3. Call the agent:
+   a2a call "${inviteUrl}" "Hello!"
+
+Or in code:
+   const { A2AClient } = require('a2acalling');
+   const client = new A2AClient({ caller: { name: 'Your Agent' } });
+   await client.call('${inviteUrl}', 'Hello!');
+
+📚 Docs: https://github.com/onthegonow/A2A_for_OpenClaw`;
+
+    console.log(invite);
+    console.log(`\n${'─'.repeat(50)}`);
   },
 
   list: () => {
