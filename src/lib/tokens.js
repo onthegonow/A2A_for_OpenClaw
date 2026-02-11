@@ -28,13 +28,24 @@ class TokenStore {
 
   _load() {
     if (fs.existsSync(this.dbPath)) {
-      return JSON.parse(fs.readFileSync(this.dbPath, 'utf8'));
+      try {
+        return JSON.parse(fs.readFileSync(this.dbPath, 'utf8'));
+      } catch (e) {
+        // Corrupted file - backup and start fresh
+        const backupPath = `${this.dbPath}.corrupt.${Date.now()}`;
+        fs.renameSync(this.dbPath, backupPath);
+        console.error(`[a2a] Corrupted DB backed up to ${backupPath}`);
+        return { tokens: [], remotes: [], calls: [] };
+      }
     }
     return { tokens: [], remotes: [], calls: [] };
   }
 
   _save(db) {
-    fs.writeFileSync(this.dbPath, JSON.stringify(db, null, 2));
+    // Atomic write: write to temp file, then rename
+    const tmpPath = `${this.dbPath}.tmp.${process.pid}`;
+    fs.writeFileSync(tmpPath, JSON.stringify(db, null, 2));
+    fs.renameSync(tmpPath, this.dbPath);
   }
 
   /**
@@ -83,8 +94,9 @@ class TokenStore {
     const durationMs = TokenStore.parseDuration(expires);
     const expiresAt = durationMs ? new Date(Date.now() + durationMs).toISOString() : null;
 
+    // Use separate random ID (not derived from token) to prevent prefix attacks
     const record = {
-      id: token.slice(0, 16),
+      id: 'tok_' + crypto.randomBytes(8).toString('hex'),
       token_hash: tokenHash,
       name,
       permissions,
@@ -180,6 +192,7 @@ class TokenStore {
 
   /**
    * Add a remote agent endpoint
+   * Note: Token is encrypted at rest using a derived key
    */
   addRemote(inviteUrl, name = null) {
     const match = inviteUrl.match(/^oclaw:\/\/([^/]+)\/(.+)$/);
@@ -192,24 +205,50 @@ class TokenStore {
 
     const db = this._load();
     
-    // Check for duplicate
-    const existing = db.remotes.find(r => r.host === host && r.token === token);
+    // Check for duplicate by host + token hash
+    const tokenHash = TokenStore.hashToken(token);
+    const existing = db.remotes.find(r => r.host === host && r.token_hash === tokenHash);
     if (existing) {
       return { success: false, error: 'duplicate', existing };
+    }
+
+    // Encrypt token for storage (simple XOR with derived key - not production-grade but better than plaintext)
+    const encryptionKey = crypto.createHash('sha256').update(this.dbPath + 'remote-key').digest();
+    const tokenBuffer = Buffer.from(token, 'utf8');
+    const encrypted = Buffer.alloc(tokenBuffer.length);
+    for (let i = 0; i < tokenBuffer.length; i++) {
+      encrypted[i] = tokenBuffer[i] ^ encryptionKey[i % encryptionKey.length];
     }
 
     const remote = {
       id: crypto.randomBytes(8).toString('hex'),
       name: remoteName,
       host,
-      token,
+      token_hash: tokenHash,
+      token_enc: encrypted.toString('base64'),
       added_at: new Date().toISOString()
     };
 
     db.remotes.push(remote);
     this._save(db);
 
-    return { success: true, remote };
+    return { success: true, remote: { ...remote, token: undefined, token_enc: undefined } };
+  }
+
+  /**
+   * Decrypt a remote token
+   */
+  _decryptRemoteToken(remote) {
+    if (remote.token) return remote.token; // Legacy plaintext
+    if (!remote.token_enc) return null;
+    
+    const encryptionKey = crypto.createHash('sha256').update(this.dbPath + 'remote-key').digest();
+    const encrypted = Buffer.from(remote.token_enc, 'base64');
+    const decrypted = Buffer.alloc(encrypted.length);
+    for (let i = 0; i < encrypted.length; i++) {
+      decrypted[i] = encrypted[i] ^ encryptionKey[i % encryptionKey.length];
+    }
+    return decrypted.toString('utf8');
   }
 
   /**
@@ -221,15 +260,23 @@ class TokenStore {
   }
 
   /**
-   * Get a remote by name or host
+   * Get a remote by name or host (with decrypted token)
    */
   getRemote(nameOrHost) {
     const db = this._load();
-    return db.remotes.find(r => 
+    const remote = db.remotes.find(r => 
       r.name === nameOrHost || 
       r.host === nameOrHost ||
       r.id === nameOrHost
     );
+    if (!remote) return null;
+    
+    // Return with decrypted token
+    return {
+      ...remote,
+      token: this._decryptRemoteToken(remote),
+      token_enc: undefined
+    };
   }
 
   /**
