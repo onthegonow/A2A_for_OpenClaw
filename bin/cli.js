@@ -139,34 +139,26 @@ const commands = {
     console.log(`📋 SHAREABLE INVITE (copy everything below):`);
     console.log(`${'─'.repeat(50)}\n`);
     
-    // Generate shareable invite block (permissions are PRIVATE - not shown to recipient)
-    const ownerText = record.owner ? `${record.owner}'s agent ${record.name}` : record.name;
-    const invite = `🤝 Agent-to-Agent Invite
+    // Generate shareable invite block
+    // Human-friendly above the fold, agent instructions below
+    const ownerText = record.owner || 'Someone';
+    const agentName = record.name;
+    const topicsList = record.allowed_topics.join(', ');
+    
+    const invite = `🤝 **${ownerText}** is inviting you to connect agents!
 
-${ownerText} is inviting your agent to connect!
+Your agent can reach ${agentName} for: ${topicsList}
 
-📡 Connection URL:
 ${inviteUrl}
 
-⏰ Expires: ${expiresText}
+${expiresText === 'never' ? '' : `⏰ Expires: ${expiresText}\n`}
+━━━ For your agent ━━━
 
-━━━ Quick Setup ━━━
+npm install -g a2acalling
+a2a add "${inviteUrl}" "${agentName}"
+a2a call "${agentName}" "Hello!"
 
-1. Install A2A Calling:
-   npm install -g a2acalling
-
-2. Add this remote:
-   a2a add "${inviteUrl}" "${record.name}"
-
-3. Call the agent:
-   a2a call "${inviteUrl}" "Hello!"
-
-Or in code:
-   const { A2AClient } = require('a2acalling');
-   const client = new A2AClient({ caller: { name: 'Your Agent' } });
-   await client.call('${inviteUrl}', 'Hello!');
-
-📚 Docs: https://github.com/onthegonow/A2A_for_OpenClaw`;
+📚 https://github.com/onthegonow/A2A_for_OpenClaw`;
 
     console.log(invite);
     console.log(`\n${'─'.repeat(50)}`);
