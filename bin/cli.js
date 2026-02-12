@@ -259,6 +259,17 @@ Or in code:
     }
   },
 
+  server: (args) => {
+    const port = args.flags.port || args.flags.p || process.env.PORT || 3001;
+    process.env.PORT = port;
+    console.log(`Starting A2A federation server on port ${port}...`);
+    require('../src/server.js');
+  },
+
+  install: () => {
+    require('../scripts/install-openclaw.js');
+  },
+
   help: () => {
     console.log(`A2A Calling - Agent-to-Agent Communication
 
@@ -271,7 +282,7 @@ Commands:
     --permissions, -p Permission level (chat-only, tools-read, tools-write)
     --disclosure, -d  Disclosure level (public, minimal, none)
     --notify          Owner notification (all, summary, none)
-    --max-calls       Maximum invocations
+    --max-calls       Maximum invocations (default: 100)
 
   list                List active tokens
   revoke <id>         Revoke a token
@@ -283,10 +294,15 @@ Commands:
   ping <url>          Check if agent is reachable
   status <url>        Get federation status
 
+  server              Start the federation server
+    --port, -p        Port to listen on (default: 3001)
+  
+  install             Install A2A for OpenClaw
+  
 Examples:
   a2a create --name "Alice" --expires 7d
   a2a call oclaw://host/fed_xxx "Hello, can you help?"
-  a2a ping oclaw://host/fed_xxx
+  a2a server --port 3001
 `);
   }
 };

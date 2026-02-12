@@ -4,7 +4,8 @@
   "description": "Agent-to-agent calling for OpenClaw - federated agent communication",
   "main": "src/index.js",
   "bin": {
-    "a2a": "bin/cli.js"
+    "a2a": "bin/cli.js",
+    "a2acalling": "scripts/install-openclaw.js"
   },
   "scripts": {
     "start": "node src/server.js",
