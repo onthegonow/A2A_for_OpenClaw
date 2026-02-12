@@ -97,7 +97,7 @@ const commands = {
     const { token, record } = store.create({
       name: args.flags.name || args.flags.n || 'unnamed',
       owner: args.flags.owner || args.flags.o || null,
-      expires: args.flags.expires || args.flags.e || '1d',
+      expires: args.flags.expires || args.flags.e || 'never',
       permissions: args.flags.permissions || args.flags.p || 'chat-only',
       disclosure: args.flags.disclosure || args.flags.d || 'minimal',
       notify: args.flags.notify || 'all',
@@ -139,8 +139,7 @@ const commands = {
     console.log(`📋 SHAREABLE INVITE (copy everything below):`);
     console.log(`${'─'.repeat(50)}\n`);
     
-    // Generate shareable invite block
-    const maxCallsText = record.max_calls ? `${record.max_calls} calls` : 'unlimited';
+    // Generate shareable invite block (permissions are PRIVATE - not shown to recipient)
     const ownerText = record.owner ? `${record.owner}'s agent ${record.name}` : record.name;
     const invite = `🤝 Agent-to-Agent Invite
 
@@ -150,9 +149,6 @@ ${ownerText} is inviting your agent to connect!
 ${inviteUrl}
 
 ⏰ Expires: ${expiresText}
-🔐 Tier: ${record.tier}
-📋 Topics: ${record.allowed_topics.join(', ')}
-📊 Limits: ${maxCallsText} total, 10/min rate limit
 
 ━━━ Quick Setup ━━━
 
