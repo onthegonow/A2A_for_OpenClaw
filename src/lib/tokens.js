@@ -44,8 +44,13 @@ class TokenStore {
   _save(db) {
     // Atomic write: write to temp file, then rename
     const tmpPath = `${this.dbPath}.tmp.${process.pid}`;
-    fs.writeFileSync(tmpPath, JSON.stringify(db, null, 2));
+    fs.writeFileSync(tmpPath, JSON.stringify(db, null, 2), { mode: 0o600 });
     fs.renameSync(tmpPath, this.dbPath);
+    try {
+      fs.chmodSync(this.dbPath, 0o600);
+    } catch (err) {
+      // Best effort - ignore on platforms without chmod support.
+    }
   }
 
   /**
@@ -459,6 +464,78 @@ class TokenStore {
     const [removed] = db.remotes.splice(idx, 1);
     this._save(db);
     return { success: true, remote: removed };
+  }
+
+  /**
+   * Ensure an inbound caller is present in contacts.
+   *
+   * Inbound callers authenticate with a token we issued; we usually don't
+   * have their endpoint URL, so these records are "placeholders" with:
+   * - host: "inbound"
+   * - no token stored
+   * - linked_token_id: token id used to call us (tok_...)
+   *
+   * This allows mapping call history (SQLite contact_id=tok_...) to a contact
+   * row in the dashboard via linked_token_id.
+   */
+  ensureInboundContact(caller, tokenId) {
+    if (!caller || !caller.name) {
+      return null;
+    }
+
+    const name = String(caller.name || '').trim().slice(0, 120);
+    const owner = caller.owner ? String(caller.owner).trim().slice(0, 120) : null;
+
+    const db = this._load();
+    db.remotes = db.remotes || [];
+
+    // Prefer stable linking by the token used for inbound auth.
+    let remote = tokenId
+      ? db.remotes.find(r => r.linked_token_id === tokenId)
+      : null;
+
+    // Fallback match by agent name/owner (less reliable, but helpful).
+    if (!remote) {
+      remote = db.remotes.find(r => r.name === name || (owner && r.owner === owner));
+    }
+
+    if (remote) {
+      remote.name = remote.name || name;
+      if (owner && !remote.owner) {
+        remote.owner = owner;
+      }
+      if (tokenId && !remote.linked_token_id) {
+        remote.linked_token_id = tokenId;
+      }
+      remote.host = remote.host || 'inbound';
+      remote.tags = Array.isArray(remote.tags) ? remote.tags : [];
+      if (!remote.tags.includes('inbound')) {
+        remote.tags.push('inbound');
+      }
+      remote.status = remote.status || 'unknown';
+      remote.updated_at = new Date().toISOString();
+      this._save(db);
+      return remote;
+    }
+
+    const contact = {
+      id: crypto.randomBytes(8).toString('hex'),
+      name,
+      owner,
+      host: 'inbound',
+      token_hash: null,
+      token_enc: null,
+      notes: tokenId ? `Inbound caller via token ${tokenId}` : 'Inbound caller',
+      tags: ['inbound'],
+      linked_token_id: tokenId || null,
+      status: 'unknown',
+      last_seen: null,
+      added_at: new Date().toISOString()
+    };
+
+    db.remotes.push(contact);
+    this._save(db);
+    return contact;
   }
 }
 

@@ -112,8 +112,13 @@ class A2AConfig {
       this.config.createdAt = this.config.updatedAt;
     }
     const tmpPath = `${CONFIG_FILE}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(this.config, null, 2));
+    fs.writeFileSync(tmpPath, JSON.stringify(this.config, null, 2), { mode: 0o600 });
     fs.renameSync(tmpPath, CONFIG_FILE);
+    try {
+      fs.chmodSync(CONFIG_FILE, 0o600);
+    } catch (err) {
+      // Best effort - ignore on platforms without chmod support.
+    }
   }
 
   // Check if onboarding is complete

@@ -397,42 +397,15 @@ function fallbackCollaborationUpdate(state, inboundMessage, responseText, tierTo
  */
 function ensureContact(caller, tokenId) {
   if (!caller?.name) return null;
-  
+
   try {
-    const remotes = tokenStore.listRemotes();
-    const existing = remotes.find(r => 
-      r.name === caller.name || 
-      (caller.owner && r.owner === caller.owner)
-    );
-    
-    if (existing) {
-      return existing;
+    const contact = tokenStore.ensureInboundContact(caller, tokenId);
+    if (contact) {
+      console.log(`[a2a] 📇 Contact ensured: ${caller.name}${caller.owner ? ` (${caller.owner})` : ''}`);
     }
-    
-    // Create a placeholder contact for the caller
-    const contact = {
-      id: `contact_${Date.now()}`,
-      name: caller.name,
-      owner: caller.owner || null,
-      host: 'inbound', // They called us, we don't have their URL
-      added_at: new Date().toISOString(),
-      notes: `Inbound caller via token ${tokenId}`,
-      tags: ['inbound'],
-      status: 'unknown',
-      linkedTokenId: tokenId
-    };
-    
-    // Save to remotes
-    const db = JSON.parse(fs.readFileSync(tokenStore.dbPath, 'utf8'));
-    db.remotes = db.remotes || [];
-    db.remotes.push(contact);
-    fs.writeFileSync(tokenStore.dbPath, JSON.stringify(db, null, 2));
-    
-    console.log(`[a2a] 📇 New contact added: ${caller.name}${caller.owner ? ` (${caller.owner})` : ''}`);
     return contact;
-    
   } catch (err) {
-    console.error('[a2a] Failed to add contact:', err.message);
+    console.error('[a2a] Failed to ensure contact:', err.message);
     return null;
   }
 }

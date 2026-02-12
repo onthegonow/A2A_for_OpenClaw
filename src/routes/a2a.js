@@ -57,6 +57,14 @@ const MAX_MESSAGE_LENGTH = 10000;  // 10KB max message
 const MAX_TIMEOUT_SECONDS = 300;   // 5 min max timeout
 const MIN_TIMEOUT_SECONDS = 5;     // 5 sec min timeout
 
+function isLoopbackAddress(ip) {
+  if (!ip) return false;
+  if (ip === '::1' || ip === '127.0.0.1' || ip === '::ffff:127.0.0.1') {
+    return true;
+  }
+  return ip.startsWith('::ffff:127.');
+}
+
 function checkRateLimit(tokenId, limits = { minute: 10, hour: 100, day: 1000 }) {
   const now = Date.now();
   const minute = Math.floor(now / 60000);
@@ -399,9 +407,18 @@ function createRoutes(options = {}) {
   router.get('/conversations', (req, res) => {
     // This endpoint should be protected by local auth, not A2A tokens
     // For now, require an admin token or local access
+    const expected = process.env.A2A_ADMIN_TOKEN;
     const adminToken = req.headers['x-admin-token'];
-    if (adminToken !== process.env.A2A_ADMIN_TOKEN && req.ip !== '127.0.0.1') {
-      return res.status(401).json({ error: 'unauthorized' });
+    if (!isLoopbackAddress(req.ip)) {
+      if (!expected) {
+        return res.status(401).json({
+          error: 'admin_token_required',
+          message: 'Set A2A_ADMIN_TOKEN to access conversation admin routes from non-local addresses'
+        });
+      }
+      if (adminToken !== expected) {
+        return res.status(401).json({ error: 'unauthorized' });
+      }
     }
 
     const convStore = getConversationStore();
@@ -426,9 +443,18 @@ function createRoutes(options = {}) {
    * Get conversation details with context
    */
   router.get('/conversations/:id', (req, res) => {
+    const expected = process.env.A2A_ADMIN_TOKEN;
     const adminToken = req.headers['x-admin-token'];
-    if (adminToken !== process.env.A2A_ADMIN_TOKEN && req.ip !== '127.0.0.1') {
-      return res.status(401).json({ error: 'unauthorized' });
+    if (!isLoopbackAddress(req.ip)) {
+      if (!expected) {
+        return res.status(401).json({
+          error: 'admin_token_required',
+          message: 'Set A2A_ADMIN_TOKEN to access conversation admin routes from non-local addresses'
+        });
+      }
+      if (adminToken !== expected) {
+        return res.status(401).json({ error: 'unauthorized' });
+      }
     }
 
     const convStore = getConversationStore();

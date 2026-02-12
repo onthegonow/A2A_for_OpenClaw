@@ -169,7 +169,11 @@ function ensureDashboardAccess(req, res, next) {
     return next();
   }
   if (!adminToken) {
-    return next();
+    return res.status(401).json({
+      success: false,
+      error: 'admin_token_required',
+      message: 'Set A2A_ADMIN_TOKEN to access dashboard from non-local addresses'
+    });
   }
   if (headerToken === adminToken || queryToken === adminToken) {
     return next();

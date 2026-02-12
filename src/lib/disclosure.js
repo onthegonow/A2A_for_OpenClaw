@@ -39,8 +39,13 @@ function saveManifest(manifest) {
   }
   manifest.updated_at = new Date().toISOString();
   const tmpPath = `${MANIFEST_FILE}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(manifest, null, 2));
+  fs.writeFileSync(tmpPath, JSON.stringify(manifest, null, 2), { mode: 0o600 });
   fs.renameSync(tmpPath, MANIFEST_FILE);
+  try {
+    fs.chmodSync(MANIFEST_FILE, 0o600);
+  } catch (err) {
+    // Best effort - ignore on platforms without chmod support.
+  }
 }
 
 /**

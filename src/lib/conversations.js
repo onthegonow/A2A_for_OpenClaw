@@ -39,6 +39,11 @@ class ConversationStore {
     try {
       const Database = require('better-sqlite3');
       this.db = new Database(this.dbPath);
+      try {
+        fs.chmodSync(this.dbPath, 0o600);
+      } catch (err) {
+        // Best effort - ignore on platforms without chmod support.
+      }
       this._migrate();
       return this.db;
     } catch (err) {
