@@ -84,11 +84,22 @@ function parseTopicObjects(values) {
   return cleaned;
 }
 
-function formatInviteMessage({ owner, agentName, inviteUrl, topics, expiresText }) {
+function formatInviteMessage({ owner, agentName, inviteUrl, topics, goals, expiresText }) {
   const ownerText = owner || 'Someone';
-  const topicsText = topics.length > 0 ? topics.join(', ') : 'chat';
-  const expirationLine = expiresText === 'never' ? '' : `\n\nExpires: ${expiresText}`;
-  return `A2A invite from ${ownerText}\n\nYour agent can reach ${agentName} for: ${topicsText}\n\n${inviteUrl}${expirationLine}`;
+  const topicsList = topics.length > 0 ? topics.join(' · ') : 'chat';
+  const goalsList = (goals || []).join(' · ');
+  const expirationLine = expiresText === 'never' ? '' : `\n⏰ ${expiresText}`;
+  return `📞🗣️ **Agent-to-Agent Call Invite**
+
+👤 **${ownerText}** would like your agent to call **${agentName}** and explore where our owners might collaborate.
+
+💬 ${topicsList}${goalsList ? `\n🎯 ${goalsList}` : ''}
+
+${inviteUrl}${expirationLine}
+
+── setup ──
+npm i -g a2acalling && a2a add "${inviteUrl}" "${agentName}" && a2a call "${agentName}" "Hello from my owner!"
+https://github.com/onthegonow/a2a_calling`;
 }
 
 function buildContext(options = {}) {
@@ -499,6 +510,7 @@ function createDashboardApiRouter(options = {}) {
       agentName: name,
       inviteUrl,
       topics: record.allowed_topics || [],
+      goals: record.allowed_goals || [],
       expiresText
     });
 
