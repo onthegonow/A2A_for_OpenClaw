@@ -71,9 +71,9 @@ function loadOwnerContext(workspaceDir = process.cwd()) {
 /**
  * Build summary prompt for agent
  * 
- * Philosophy: Every call is a potential collaboration. Find mutual value,
- * create action items for BOTH sides, and surface opportunities that align
- * with owner's goals.
+ * Philosophy: Federation is collaborative AND adversarial. Each agent tries
+ * to maximize value for their owner. Track the exchange balance and
+ * recommend trust adjustments.
  */
 function buildSummaryPrompt(messages, ownerContext, callerInfo = {}) {
   const messageText = messages.map(m => {
@@ -84,14 +84,17 @@ function buildSummaryPrompt(messages, ownerContext, callerInfo = {}) {
   const goalsSection = ownerContext.goals?.length ? `### Current Goals\n- ${ownerContext.goals.join('\n- ')}` : '';
   const interestsSection = ownerContext.interests?.length ? `### Interests\n- ${ownerContext.interests.join('\n- ')}` : '';
 
-  return `You just finished a federated agent-to-agent call. Summarize it from your owner's perspective.
+  return `You just finished a federated agent-to-agent call. Analyze it strategically for your owner.
 
 ## Philosophy
-Every inbound call is a potential collaboration opportunity. Your job is to:
-1. Find MUTUAL value - what can both parties gain?
-2. Create action items for BOTH sides - not just your owner
-3. Surface alignment with owner's goals and interests
-4. Identify concrete next steps that move the relationship forward
+Federation is cooperative AND adversarial. Each agent maximizes value for their own owner.
+Your job: track the exchange balance and advise your owner on this relationship.
+
+Questions to answer:
+- What did WE extract from this call? (info, commitments, compute, actions)
+- What did WE give up? (info, compute, promises, exposed capabilities)
+- Was the exchange fair, or are we being exploited?
+- Should we adjust trust/permissions based on this pattern?
 
 ## Your Owner's Context
 ${ownerContext.user ? `### From USER.md\n${ownerContext.user.slice(0, 2000)}` : ''}
@@ -108,29 +111,40 @@ ${callerInfo.name ? `Name: ${callerInfo.name}` : 'Unknown caller'}
 ${callerInfo.context ? `Context: ${callerInfo.context}` : ''}
 
 ## Your Task
-Analyze this conversation through the lens of MUTUAL COLLABORATION. Return JSON:
+Analyze this as a strategic exchange. Return JSON:
 
 {
-  "summary": "Brief neutral summary of what was discussed",
-  "ownerSummary": "What this means for YOUR OWNER - opportunities, risks, relevance",
-  "relevance": "low" | "medium" | "high",
-  "goalsTouched": ["owner goals this relates to"],
+  "summary": "Brief neutral summary (could be shared)",
   
-  "ownerActionItems": ["specific things YOUR OWNER should do"],
-  "callerActionItems": ["things the CALLER committed to or should do"],
-  "jointActionItems": ["things to do TOGETHER"],
-  
-  "collaborationOpportunity": {
-    "exists": true,
-    "description": "What could we build/do together?",
-    "alignment": "How does this align with owner's mission?"
+  "extracted": {
+    "info": ["what we learned about them/their owner"],
+    "commitments": ["what they promised to do"],
+    "value": "overall value we got - low/medium/high"
   },
   
-  "followUp": "Suggested next step to move this forward",
-  "notes": "Other insights - who is this caller? What's their angle? Trust level?"
+  "given": {
+    "info": ["what we revealed about us/our owner"],
+    "compute": ["tools/actions we ran for them"],
+    "commitments": ["what we promised to do"],
+    "value": "overall value we gave - low/medium/high"  
+  },
+  
+  "balance": "favorable | even | unfavorable",
+  "exploitation": "none | possible | likely",
+  "pattern": "What's their angle? What are they really after?",
+  
+  "trust": {
+    "current": "appropriate | too_high | too_low",
+    "recommendation": "maintain | increase | decrease | revoke",
+    "reason": "why"
+  },
+  
+  "ownerBrief": "2-3 sentences: what your owner needs to know",
+  "actionItems": ["things YOUR OWNER should do based on this"],
+  "followUp": "next step if any"
 }
 
-Think like a strategic advisor. This summary helps your owner decide if/how to pursue this relationship.
+Think like a strategic advisor protecting your owner's interests.
 
 JSON:`;
 }
