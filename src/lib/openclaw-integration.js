@@ -6,6 +6,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createLogger } = require('./logger');
+
+const logger = createLogger({ component: 'a2a.openclaw-integration' });
 
 /**
  * Load owner context from OpenClaw workspace files
@@ -194,7 +197,16 @@ function createExecSummarizer(workspaceDir = process.cwd()) {
         notes: null
       };
     } catch (err) {
-      console.error('[a2a] Exec summarizer failed:', err.message);
+      logger.error('Exec summarizer failed', {
+        event: 'exec_summary_failed',
+        trace_id: callerInfo?.trace_id || callerInfo?.traceId || null,
+        error: err,
+        error_code: 'OPENCLAW_EXEC_SUMMARIZER_FAILED',
+        hint: 'Verify `openclaw prompt --json` is available and returns valid JSON.',
+        data: {
+          workspace_dir: workspaceDir
+        }
+      });
       return { summary: null };
     } finally {
       // Cleanup
@@ -239,7 +251,16 @@ function createHttpSummarizer(endpoint = 'http://localhost:3000/api/summarize') 
       });
       
       req.on('error', (err) => {
-        console.error('[a2a] HTTP summarizer failed:', err.message);
+        logger.error('HTTP summarizer failed', {
+          event: 'http_summary_failed',
+          trace_id: callerInfo?.trace_id || callerInfo?.traceId || null,
+          error: err,
+          error_code: 'OPENCLAW_HTTP_SUMMARIZER_FAILED',
+          hint: 'Check summarizer endpoint reachability and response format.',
+          data: {
+            endpoint
+          }
+        });
         resolve({ summary: null });
       });
       
@@ -290,7 +311,16 @@ function createSessionSummarizer(gatewayUrl, gatewayToken) {
       });
       
       req.on('error', (err) => {
-        console.error('[a2a] Session summarizer failed:', err.message);
+        logger.error('Session summarizer failed', {
+          event: 'session_summary_failed',
+          trace_id: callerInfo?.trace_id || callerInfo?.traceId || null,
+          error: err,
+          error_code: 'OPENCLAW_SESSION_SUMMARIZER_FAILED',
+          hint: 'Verify OpenClaw gateway URL/token and /api/internal/summarize availability.',
+          data: {
+            gateway_url: gatewayUrl || 'http://localhost:3000'
+          }
+        });
         resolve({ summary: null });
       });
       
@@ -308,7 +338,12 @@ function createAutoSummarizer(options = {}) {
   
   // If gateway URL provided, use session summarizer
   if (options.gatewayUrl || process.env.OPENCLAW_GATEWAY_URL) {
-    console.log('[a2a] Using session summarizer');
+    logger.info('Using session summarizer', {
+      event: 'summary_mode_selected',
+      data: {
+        mode: 'session'
+      }
+    });
     return createSessionSummarizer(
       options.gatewayUrl || process.env.OPENCLAW_GATEWAY_URL,
       options.gatewayToken || process.env.OPENCLAW_TOKEN
@@ -317,12 +352,24 @@ function createAutoSummarizer(options = {}) {
   
   // If HTTP endpoint provided, use that
   if (options.summaryEndpoint) {
-    console.log('[a2a] Using HTTP summarizer');
+    logger.info('Using HTTP summarizer', {
+      event: 'summary_mode_selected',
+      data: {
+        mode: 'http',
+        endpoint: options.summaryEndpoint
+      }
+    });
     return createHttpSummarizer(options.summaryEndpoint);
   }
   
   // Fall back to exec summarizer
-  console.log('[a2a] Using exec summarizer');
+  logger.info('Using exec summarizer', {
+    event: 'summary_mode_selected',
+    data: {
+      mode: 'exec',
+      workspace_dir: workspaceDir
+    }
+  });
   return createExecSummarizer(workspaceDir);
 }
 

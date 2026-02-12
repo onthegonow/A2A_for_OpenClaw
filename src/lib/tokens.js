@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { createLogger } = require('./logger');
 
 // Default config path
 const DEFAULT_CONFIG_DIR = process.env.A2A_CONFIG_DIR || 
@@ -12,6 +13,7 @@ const DEFAULT_CONFIG_DIR = process.env.A2A_CONFIG_DIR ||
   path.join(process.env.HOME || '/tmp', '.config', 'openclaw');
 
 const DB_FILENAME = 'a2a.json';
+const logger = createLogger({ component: 'a2a.tokens' });
 
 class TokenStore {
   constructor(configDir = DEFAULT_CONFIG_DIR) {
@@ -34,7 +36,16 @@ class TokenStore {
         // Corrupted file - backup and start fresh
         const backupPath = `${this.dbPath}.corrupt.${Date.now()}`;
         fs.renameSync(this.dbPath, backupPath);
-        console.error(`[a2a] Corrupted DB backed up to ${backupPath}`);
+        logger.error('Token database was corrupted and moved to backup', {
+          event: 'token_db_corrupt_backup_created',
+          error: e,
+          error_code: 'TOKEN_DB_CORRUPTED',
+          hint: 'Inspect the backup file, then restore valid JSON schema in a2a.json.',
+          data: {
+            db_path: this.dbPath,
+            backup_path: backupPath
+          }
+        });
         return { tokens: [], remotes: [], calls: [] };
       }
     }

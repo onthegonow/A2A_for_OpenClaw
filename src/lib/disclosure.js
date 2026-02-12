@@ -7,6 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createLogger } = require('./logger');
 
 const CONFIG_DIR = process.env.A2A_CONFIG_DIR ||
   process.env.OPENCLAW_CONFIG_DIR ||
@@ -15,6 +16,7 @@ const CONFIG_DIR = process.env.A2A_CONFIG_DIR ||
 const MANIFEST_FILE = path.join(CONFIG_DIR, 'a2a-disclosure.json');
 
 const TIER_HIERARCHY = ['public', 'friends', 'family'];
+const logger = createLogger({ component: 'a2a.disclosure' });
 
 /**
  * Load manifest from disk. Returns {} if not found.
@@ -25,7 +27,15 @@ function loadManifest() {
       return JSON.parse(fs.readFileSync(MANIFEST_FILE, 'utf8'));
     }
   } catch (e) {
-    console.error('[a2a] Failed to load disclosure manifest:', e.message);
+    logger.error('Failed to load disclosure manifest', {
+      event: 'disclosure_manifest_load_failed',
+      error: e,
+      error_code: 'DISCLOSURE_MANIFEST_LOAD_FAILED',
+      hint: 'Fix invalid JSON or file permissions in a2a-disclosure.json.',
+      data: {
+        manifest_file: MANIFEST_FILE
+      }
+    });
   }
   return {};
 }

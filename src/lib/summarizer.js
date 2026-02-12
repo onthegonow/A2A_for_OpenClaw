@@ -5,6 +5,10 @@
  * OpenClaw installations can provide their own summarizer via config.
  */
 
+const { createLogger } = require('./logger');
+
+const logger = createLogger({ component: 'a2a.summarizer' });
+
 /**
  * Default summarizer using simple extraction (no LLM)
  * Returns basic summary without owner context
@@ -102,7 +106,15 @@ JSON response:`;
         notes: null
       };
     } catch (err) {
-      console.error('[a2a] LLM summarization failed:', err.message);
+      logger.error('LLM summarization failed', {
+        event: 'llm_summary_failed',
+        error: err,
+        error_code: 'LLM_SUMMARIZATION_FAILED',
+        hint: 'Verify upstream summarizer model availability and prompt JSON output format.',
+        data: {
+          message_count: messages.length
+        }
+      });
       return defaultSummarizer(messages, ownerContext);
     }
   };
@@ -116,7 +128,14 @@ function createOpenClawSummarizer(openclawConfig = {}) {
   return async function(messages, ownerContext = {}) {
     // This would integrate with OpenClaw's internal APIs
     // For now, fall back to default
-    console.warn('[a2a] OpenClaw summarizer not yet integrated, using default');
+    logger.warn('OpenClaw summarizer not yet integrated, using default summarizer', {
+      event: 'openclaw_summary_not_integrated',
+      error_code: 'OPENCLAW_SUMMARIZER_NOT_INTEGRATED',
+      hint: 'Configure runtime adapter summary command or OpenClaw internal summarizer endpoint.',
+      data: {
+        has_openclaw_config: Boolean(openclawConfig && Object.keys(openclawConfig).length)
+      }
+    });
     return defaultSummarizer(messages, ownerContext);
   };
 }

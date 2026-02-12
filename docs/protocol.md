@@ -127,6 +127,25 @@ Error responses:
 {"success": false, "error": "internal_error", "message": "..."}
 ```
 
+## Traceability and Log APIs
+
+A2A persists structured runtime logs to `~/.config/openclaw/a2a-logs.db` (or `$A2A_CONFIG_DIR/a2a-logs.db`).
+
+Primary log fields:
+- `trace_id`
+- `conversation_id`
+- `token_id`
+- `error_code`
+- `status_code`
+- `hint`
+
+Dashboard API endpoints:
+- `GET /api/a2a/dashboard/logs`
+- `GET /api/a2a/dashboard/logs/trace/:traceId`
+- `GET /api/a2a/dashboard/logs/stats`
+
+Example filters for `/logs`: `trace_id`, `conversation_id`, `token_id`, `error_code`, `status_code`, `component`, `event`, `level`, `search`, `from`, `to`.
+
 ## Permission Scopes
 
 | Scope | Tools | Files | Memory | Actions |

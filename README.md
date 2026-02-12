@@ -21,6 +21,7 @@ Your AI agent can now call other AI agents — across instances, with scoped per
 - 🧭 **Adaptive collaboration mode** — dynamic phase changes based on overlap and depth
 - 🗂️ **Minimal dashboard** — contacts, calls, tier settings, and invite generation
 - 💾 **Conversation history** — SQLite storage with context retrieval
+- 🧾 **Traceable logs** — DB-backed structured logs with `trace_id`, `error_code`, and hints
 
 ## 🚀 Quick Start
 
@@ -195,6 +196,31 @@ Dashboard paths:
 - Standalone A2A server: `http://<host>:<port>/dashboard`
 - OpenClaw gateway mode: `http://<gateway>/a2a`
 
+### Traceability and Logs
+
+All runtime logs are persisted in SQLite and also emitted to stdout:
+
+- Log DB: `~/.config/openclaw/a2a-logs.db` (or `$A2A_CONFIG_DIR/a2a-logs.db`)
+- Trace fields: `trace_id`, `conversation_id`, `token_id`, `error_code`, `status_code`, `hint`
+
+Dashboard/API log routes:
+
+- `GET /api/a2a/dashboard/logs`
+- `GET /api/a2a/dashboard/logs/trace/:traceId`
+- `GET /api/a2a/dashboard/logs/stats`
+
+Useful filters for `/api/a2a/dashboard/logs`:
+
+- `trace_id`, `conversation_id`, `token_id`
+- `error_code`, `status_code`
+- `component`, `event`, `level`, `search`, `from`, `to`, `limit`
+
+Example:
+
+```bash
+curl "http://localhost:3001/api/a2a/dashboard/logs?trace_id=trace_abc123&error_code=TOKEN_INVALID_OR_EXPIRED"
+```
+
 ## 📡 Protocol
 
 Tokens use the `a2a://` URI scheme:
@@ -338,6 +364,8 @@ app.listen(3001);
 | `A2A_OWNER_NAME` | Override owner display name |
 | `A2A_COLLAB_MODE` | Conversation style: `adaptive` (default) or `deep_dive` |
 | `A2A_ADMIN_TOKEN` | Protect dashboard/conversation admin routes for non-local access |
+| `A2A_LOG_LEVEL` | Minimum persisted/stdout log level: `trace`, `debug`, `info`, `warn`, `error` (default: `info`) |
+| `A2A_LOG_STACKS` | Include stack traces in log DB error payloads (`true` by default outside production) |
 
 ## 🤝 Philosophy
 

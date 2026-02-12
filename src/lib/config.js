@@ -6,12 +6,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const { createLogger } = require('./logger');
 
 const CONFIG_DIR = process.env.A2A_CONFIG_DIR || 
   process.env.OPENCLAW_CONFIG_DIR || 
   path.join(process.env.HOME || '/tmp', '.config', 'openclaw');
 
 const CONFIG_FILE = path.join(CONFIG_DIR, 'a2a-config.json');
+const logger = createLogger({ component: 'a2a.config' });
 
 const DEFAULT_CONFIG = {
   // Has the user completed onboarding?
@@ -99,7 +101,15 @@ class A2AConfig {
         const saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
         return { ...DEFAULT_CONFIG, ...saved };
       } catch (e) {
-        console.error('[a2a] Config corrupted, using defaults');
+        logger.error('A2A config is corrupted, using defaults', {
+          event: 'a2a_config_corrupt',
+          error: e,
+          error_code: 'A2A_CONFIG_CORRUPTED',
+          hint: 'Fix invalid JSON in a2a-config.json or regenerate it via setup.',
+          data: {
+            config_file: CONFIG_FILE
+          }
+        });
         return { ...DEFAULT_CONFIG };
       }
     }

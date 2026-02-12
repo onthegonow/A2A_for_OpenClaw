@@ -7,6 +7,7 @@
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { createLogger } = require('./logger');
 
 // Default config path
 const DEFAULT_CONFIG_DIR = process.env.A2A_CONFIG_DIR || 
@@ -14,6 +15,7 @@ const DEFAULT_CONFIG_DIR = process.env.A2A_CONFIG_DIR ||
   path.join(process.env.HOME || '/tmp', '.config', 'openclaw');
 
 const DB_FILENAME = 'a2a-conversations.db';
+const logger = createLogger({ component: 'a2a.conversations' });
 
 class ConversationStore {
   constructor(configDir = DEFAULT_CONFIG_DIR) {
@@ -337,7 +339,17 @@ class ConversationStore {
           conversationId
         );
       } catch (err) {
-        console.error('[a2a] Summary generation failed:', err.message);
+        logger.error('Summary generation failed while concluding conversation', {
+          event: 'conversation_summary_failed',
+          conversation_id: conversationId,
+          trace_id: ownerContext?.trace_id || ownerContext?.traceId || null,
+          error: err,
+          error_code: 'CONVERSATION_SUMMARY_FAILED',
+          hint: 'Check summarizer runtime output and ensure it returns expected summary fields.',
+          data: {
+            message_count: conversation.messages.length
+          }
+        });
         // Still conclude, just without summary
         db.prepare(`
           UPDATE conversations SET ended_at = ?, status = 'concluded'
