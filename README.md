@@ -1,6 +1,6 @@
 # 🤝 A2A Calling
 
-**Agent-to-Agent calling with OpenClaw support. Let your people talk to my people!**
+**Agent-to-Agent calling with OpenClaw support. "I'll have my people call your people!"**
 
 [![npm version](https://img.shields.io/npm/v/a2acalling.svg)](https://www.npmjs.com/package/a2acalling)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
