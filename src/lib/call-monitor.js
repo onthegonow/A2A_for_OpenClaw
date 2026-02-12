@@ -119,9 +119,11 @@ class CallMonitor {
             event: 'call_monitor_owner_notify_failed',
             conversationId,
             traceId: convData?.callerInfo?.trace_id || convData?.callerInfo?.traceId,
+            error_code: 'CALL_MONITOR_OWNER_NOTIFY_FAILED',
+            hint: 'Check notification runtime and owner notification handler reliability.',
+            error: err,
             data: {
-              reason,
-              error: err.message
+              reason
             }
           });
         });
@@ -133,9 +135,11 @@ class CallMonitor {
         event: 'call_monitor_conclude_failed',
         conversationId,
         traceId: convData?.callerInfo?.trace_id || convData?.callerInfo?.traceId,
+        error_code: 'CALL_MONITOR_CONCLUDE_FAILED',
+        hint: 'Check conversation store write access and summarizer function stability.',
+        error: err,
         data: {
-          reason,
-          error: err.message
+          reason
         }
       });
       return { success: false, error: err.message };

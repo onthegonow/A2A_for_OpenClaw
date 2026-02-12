@@ -434,8 +434,11 @@ function ensureContact(caller, tokenId) {
     logger.error('Failed to ensure contact', {
       event: 'contact_ensure_failed',
       tokenId,
+      error_code: 'CONTACT_ENSURE_FAILED',
+      hint: 'Validate token/contact store files and write permissions.',
+      error: err,
       data: {
-        error: err.message
+        caller_name: caller?.name || null
       }
     });
     return null;
@@ -553,12 +556,16 @@ async function callAgent(message, a2aContext) {
       usedMetadata = applyCollaborationPatch(collabState, parsed.statePatch);
       if (!usedMetadata) {
         callLogger.warn('Invalid collaboration patch; applying fallback heuristics', {
-          event: 'collaboration_patch_invalid'
+          event: 'collaboration_patch_invalid',
+          error_code: 'COLLABORATION_PATCH_INVALID',
+          hint: 'Ensure assistant emits valid collaboration metadata JSON block.'
         });
       }
     } else if (parsed.parseError) {
       callLogger.warn('Could not parse collaboration metadata; applying fallback heuristics', {
         event: 'collaboration_metadata_parse_failed',
+        error_code: 'COLLABORATION_METADATA_PARSE_FAILED',
+        hint: 'Inspect response format and ensure metadata wrapper markers are intact.',
         data: {
           parse_error: parsed.parseError
         }
@@ -593,8 +600,11 @@ async function callAgent(message, a2aContext) {
   } catch (err) {
     callLogger.error('Runtime turn handling failed; using fallback response', {
       event: 'call_turn_failed_fallback',
+      error_code: 'RUNTIME_TURN_FAILED',
+      hint: 'Inspect runtime adapter logs in this trace to identify CLI/bridge failure.',
+      error: err,
       data: {
-        error: err.message
+        phase: 'runtime_turn'
       }
     });
     return runtime.buildFallbackResponse(message, {
@@ -648,8 +658,11 @@ Be concise but specific. No filler.`;
       event: 'summary_generation_failed',
       traceId: callerInfo?.trace_id || callerInfo?.traceId,
       conversationId: callerInfo?.conversation_id || callerInfo?.conversationId,
+      error_code: 'SUMMARY_GENERATION_FAILED',
+      hint: 'Check summarizer runtime and command configuration for summary stage.',
+      error: err,
       data: {
-        error: err.message
+        phase: 'summary'
       }
     });
     return null;

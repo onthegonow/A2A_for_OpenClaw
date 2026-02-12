@@ -123,4 +123,37 @@ module.exports = function (test, assert, helpers) {
 
     teardown(loggerModule);
   });
+
+  test('captures error_code, hint, status_code, and optional stack traces', () => {
+    setup();
+    const loggerModule = loadLoggerModule();
+    const logger = loggerModule.createLogger({
+      component: 'unit.logger',
+      configDir: tmp.dir,
+      stdout: false,
+      minLevel: 'trace',
+      includeStacks: true
+    });
+
+    const err = new Error('boom');
+    err.code = 'E_BANG';
+    logger.error('exploded', {
+      event: 'error_case',
+      error_code: 'UNIT_EXPLODED',
+      status_code: 500,
+      hint: 'Check unit test explosion path.',
+      error: err
+    });
+
+    const logs = logger.list({ errorCode: 'UNIT_EXPLODED', statusCode: 500, limit: 10 });
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0].error_code, 'UNIT_EXPLODED');
+    assert.equal(logs[0].status_code, 500);
+    assert.equal(logs[0].hint, 'Check unit test explosion path.');
+    assert.equal(logs[0].data.error.code, 'E_BANG');
+    assert.ok(typeof logs[0].data.error.stack === 'string');
+    assert.includes(logs[0].data.error.stack, 'Error: boom');
+
+    teardown(loggerModule);
+  });
 };

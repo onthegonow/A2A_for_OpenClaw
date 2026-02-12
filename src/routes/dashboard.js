@@ -209,6 +209,8 @@ function createDashboardApiRouter(options = {}) {
       level: req.query.level || null,
       component: req.query.component || null,
       event: req.query.event || null,
+      errorCode: req.query.error_code || req.query.errorCode || null,
+      statusCode: req.query.status_code || req.query.statusCode || null,
       traceId: req.query.trace_id || req.query.traceId || null,
       conversationId: req.query.conversation_id || req.query.conversationId || null,
       tokenId: req.query.token_id || req.query.tokenId || null,

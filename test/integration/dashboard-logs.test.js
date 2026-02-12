@@ -41,6 +41,10 @@ module.exports = function (test, assert, helpers) {
     logger.error('dashboard test error', {
       event: 'dash_other',
       traceId: 'trace_dash_2',
+      error_code: 'DASH_TEST_ERROR',
+      status_code: 500,
+      hint: 'Synthetic dashboard test failure.',
+      error: Object.assign(new Error('synthetic failure'), { code: 'E_DASH_TEST' }),
       data: { idx: 3 }
     });
 
@@ -80,6 +84,13 @@ module.exports = function (test, assert, helpers) {
     const byEvent = await client.get('/api/a2a/dashboard/logs?event=dash_test&limit=10');
     assert.equal(byEvent.statusCode, 200);
     assert.equal(byEvent.body.logs.length, 2);
+
+    const byErrorCode = await client.get('/api/a2a/dashboard/logs?error_code=DASH_TEST_ERROR&limit=10');
+    assert.equal(byErrorCode.statusCode, 200);
+    assert.equal(byErrorCode.body.logs.length, 1);
+    assert.equal(byErrorCode.body.logs[0].error_code, 'DASH_TEST_ERROR');
+    assert.equal(byErrorCode.body.logs[0].status_code, 500);
+    assert.equal(byErrorCode.body.logs[0].hint, 'Synthetic dashboard test failure.');
 
     await teardown();
   });

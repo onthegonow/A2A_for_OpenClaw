@@ -189,7 +189,11 @@ function createRoutes(options = {}) {
     // Extract token
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      reqLogger.warn('Invoke request missing bearer token');
+      reqLogger.warn('Invoke request missing bearer token', {
+        error_code: 'AUTH_MISSING_BEARER',
+        status_code: 401,
+        hint: 'Send Authorization: Bearer <a2a_token>.'
+      });
       return res.status(401).json({ 
         success: false, 
         error: 'missing_token', 
@@ -204,7 +208,11 @@ function createRoutes(options = {}) {
     if (!validation.valid) {
       // Use generic error to prevent token enumeration
       // All invalid token states return same response
-      reqLogger.warn('Invoke token validation failed');
+      reqLogger.warn('Invoke token validation failed', {
+        error_code: 'TOKEN_INVALID_OR_EXPIRED',
+        status_code: 401,
+        hint: 'Create a fresh invite token and retry with the new bearer token.'
+      });
       return res.status(401).json({ 
         success: false, 
         error: 'unauthorized', 
@@ -217,6 +225,9 @@ function createRoutes(options = {}) {
     if (rateCheck.limited) {
       reqLogger.warn('Invoke request rate limited', {
         tokenId: validation.id,
+        error_code: 'TOKEN_RATE_LIMITED',
+        status_code: 429,
+        hint: 'Respect Retry-After and reduce invoke frequency for this token.',
         data: {
           retry_after: rateCheck.retryAfter
         }
@@ -234,7 +245,10 @@ function createRoutes(options = {}) {
 
     if (!message) {
       reqLogger.warn('Invoke request missing message', {
-        tokenId: validation.id
+        tokenId: validation.id,
+        error_code: 'REQUEST_MISSING_MESSAGE',
+        status_code: 400,
+        hint: 'Include a non-empty string field `message` in the request body.'
       });
       return res.status(400).json({ 
         success: false, 
@@ -247,6 +261,9 @@ function createRoutes(options = {}) {
     if (typeof message !== 'string' || message.length > MAX_MESSAGE_LENGTH) {
       reqLogger.warn('Invoke request has invalid message payload', {
         tokenId: validation.id,
+        error_code: 'REQUEST_INVALID_MESSAGE',
+        status_code: 400,
+        hint: `Ensure message is a string <= ${MAX_MESSAGE_LENGTH} characters.`,
         data: {
           message_type: typeof message,
           message_length: typeof message === 'string' ? message.length : null
@@ -314,8 +331,11 @@ function createRoutes(options = {}) {
         reqLogger.error('Conversation tracking error', {
           conversationId: a2aContext.conversation_id,
           tokenId: validation.id,
+          error_code: 'CONVERSATION_TRACKING_FAILED',
+          hint: 'Check SQLite conversation DB file permissions and schema availability.',
+          error: err,
           data: {
-            error: err.message
+            phase: 'conversation_tracking'
           }
         });
       }
@@ -337,8 +357,11 @@ function createRoutes(options = {}) {
           reqLogger.error('Message storage error', {
             conversationId: a2aContext.conversation_id,
             tokenId: validation.id,
+            error_code: 'CONVERSATION_MESSAGE_STORE_FAILED',
+            hint: 'Check SQLite conversation DB write access and disk availability.',
+            error: err,
             data: {
-              error: err.message
+              phase: 'message_store'
             }
           });
         }
@@ -359,8 +382,11 @@ function createRoutes(options = {}) {
           reqLogger.error('Failed to notify owner', {
             conversationId: a2aContext.conversation_id,
             tokenId: validation.id,
+            error_code: 'OWNER_NOTIFY_FAILED',
+            hint: 'Verify runtime notify channel settings and external notifier health.',
+            error: err,
             data: {
-              error: err.message
+              phase: 'owner_notify'
             }
           });
         });
@@ -388,9 +414,12 @@ function createRoutes(options = {}) {
       reqLogger.error('Message handling error', {
         conversationId: a2aContext.conversation_id,
         tokenId: validation.id,
+        error_code: 'INVOKE_HANDLER_FAILED',
+        status_code: 500,
+        hint: 'Inspect handler/runtime logs in this trace and validate upstream dependencies.',
+        error: err,
         data: {
-          duration_ms: Date.now() - startedAt,
-          error: err.message
+          duration_ms: Date.now() - startedAt
         }
       });
       res.status(500).json({
@@ -414,7 +443,11 @@ function createRoutes(options = {}) {
     // Extract token
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      reqLogger.warn('End request missing bearer token');
+      reqLogger.warn('End request missing bearer token', {
+        error_code: 'AUTH_MISSING_BEARER',
+        status_code: 401,
+        hint: 'Send Authorization: Bearer <a2a_token>.'
+      });
       return res.status(401).json({ 
         success: false, 
         error: 'unauthorized', 
@@ -425,7 +458,11 @@ function createRoutes(options = {}) {
     const token = authHeader.slice(7);
     const validation = tokenStore.validate(token);
     if (!validation.valid) {
-      reqLogger.warn('End request token validation failed');
+      reqLogger.warn('End request token validation failed', {
+        error_code: 'TOKEN_INVALID_OR_EXPIRED',
+        status_code: 401,
+        hint: 'Use a currently valid invite token for conversation end calls.'
+      });
       return res.status(401).json({ 
         success: false, 
         error: 'unauthorized', 
@@ -436,7 +473,10 @@ function createRoutes(options = {}) {
     const { conversation_id } = req.body;
     if (!conversation_id) {
       reqLogger.warn('End request missing conversation_id', {
-        tokenId: validation.id
+        tokenId: validation.id,
+        error_code: 'REQUEST_MISSING_CONVERSATION_ID',
+        status_code: 400,
+        hint: 'Provide `conversation_id` returned from /invoke.'
       });
       return res.status(400).json({
         success: false,
@@ -473,8 +513,11 @@ function createRoutes(options = {}) {
           reqLogger.error('Failed to notify owner after conversation end', {
             conversationId: conversation_id,
             tokenId: validation.id,
+            error_code: 'OWNER_NOTIFY_FAILED',
+            hint: 'Verify notify runtime integration for post-conclusion notifications.',
+            error: err,
             data: {
-              error: err.message
+              phase: 'conversation_end_notify'
             }
           });
         });
@@ -499,9 +542,12 @@ function createRoutes(options = {}) {
       reqLogger.error('End conversation error', {
         conversationId: conversation_id,
         tokenId: validation.id,
+        error_code: 'END_CONVERSATION_FAILED',
+        status_code: 500,
+        hint: 'Check conversation existence and summarizer runtime status for this trace.',
+        error: err,
         data: {
-          duration_ms: Date.now() - startedAt,
-          error: err.message
+          duration_ms: Date.now() - startedAt
         }
       });
       res.status(500).json({

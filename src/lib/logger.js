@@ -25,6 +25,15 @@ const LOG_LEVEL_ORDER = {
   error: 50
 };
 
+function envBool(name, fallback = false) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || raw === '') {
+    return fallback;
+  }
+  const normalized = String(raw).trim().toLowerCase();
+  return !(normalized === '0' || normalized === 'false' || normalized === 'no');
+}
+
 function normalizeLevel(level) {
   const normalized = String(level || '').trim().toLowerCase();
   return LOG_LEVEL_ORDER[normalized] ? normalized : 'info';
@@ -43,16 +52,53 @@ function sanitizeText(value, maxLength = 1000) {
     .slice(0, maxLength);
 }
 
-function normalizeContext(context = {}) {
+function serializeError(error, options = {}) {
+  if (!error) return null;
+  if (error instanceof Error) {
+    const payload = {
+      name: error.name || 'Error',
+      message: sanitizeText(error.message || 'Unknown error', 2000)
+    };
+    if (error.code) payload.code = String(error.code);
+    if (error.cause) payload.cause = sanitizeText(String(error.cause), 400);
+    if (options.includeStacks && error.stack) {
+      payload.stack = String(error.stack).slice(0, 8000);
+    }
+    return payload;
+  }
+  if (typeof error === 'object') {
+    try {
+      return JSON.parse(JSON.stringify(error));
+    } catch (err) {
+      return { message: sanitizeText(String(error), 2000) };
+    }
+  }
+  return { message: sanitizeText(String(error), 2000) };
+}
+
+function normalizeContext(context = {}, options = {}) {
   const entry = context && typeof context === 'object' ? { ...context } : {};
+  const errorDetails = serializeError(entry.error, { includeStacks: options.includeStacks });
+  const baseData = entry.data && typeof entry.data === 'object' ? { ...entry.data } : {};
+  if (errorDetails) {
+    baseData.error = errorDetails;
+  }
+  const hasData = Object.keys(baseData).length > 0;
+  const statusCodeRaw = entry.status_code ?? entry.statusCode;
+  const statusCode = Number.isFinite(Number(statusCodeRaw)) ? Number(statusCodeRaw) : null;
+  const explicitErrorCode = entry.error_code || entry.errorCode || null;
+  const inferredErrorCode = explicitErrorCode || (errorDetails && errorDetails.code ? errorDetails.code : null);
   return {
     event: entry.event ? sanitizeText(entry.event, 120) : null,
     trace_id: entry.trace_id || entry.traceId || null,
     conversation_id: entry.conversation_id || entry.conversationId || null,
     token_id: entry.token_id || entry.tokenId || null,
     request_id: entry.request_id || entry.requestId || null,
+    error_code: inferredErrorCode ? sanitizeText(inferredErrorCode, 120) : null,
+    hint: entry.hint ? sanitizeText(entry.hint, 500) : null,
+    status_code: statusCode,
     component: entry.component ? sanitizeText(entry.component, 120) : null,
-    data: entry.data && typeof entry.data === 'object' ? entry.data : null
+    data: hasData ? baseData : null
   };
 }
 
@@ -105,6 +151,9 @@ class LogStore {
         conversation_id TEXT,
         token_id TEXT,
         request_id TEXT,
+        error_code TEXT,
+        status_code INTEGER,
+        hint TEXT,
         data TEXT
       );
 
@@ -114,15 +163,30 @@ class LogStore {
       CREATE INDEX IF NOT EXISTS idx_logs_trace ON logs(trace_id);
       CREATE INDEX IF NOT EXISTS idx_logs_conversation ON logs(conversation_id);
       CREATE INDEX IF NOT EXISTS idx_logs_token ON logs(token_id);
+      CREATE INDEX IF NOT EXISTS idx_logs_error_code ON logs(error_code);
     `);
+
+    const columns = this.db.prepare(`PRAGMA table_info(logs)`).all();
+    const hasErrorCode = columns.some(c => c.name === 'error_code');
+    const hasStatusCode = columns.some(c => c.name === 'status_code');
+    const hasHint = columns.some(c => c.name === 'hint');
+    if (!hasErrorCode) {
+      this.db.exec(`ALTER TABLE logs ADD COLUMN error_code TEXT`);
+    }
+    if (!hasStatusCode) {
+      this.db.exec(`ALTER TABLE logs ADD COLUMN status_code INTEGER`);
+    }
+    if (!hasHint) {
+      this.db.exec(`ALTER TABLE logs ADD COLUMN hint TEXT`);
+    }
   }
 
   _prepareStatements() {
     this.insertStmt = this.db.prepare(`
       INSERT INTO logs (
         timestamp, level, component, event, message,
-        trace_id, conversation_id, token_id, request_id, data
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        trace_id, conversation_id, token_id, request_id, error_code, status_code, hint, data
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
   }
 
@@ -150,6 +214,9 @@ class LogStore {
         entry.conversation_id,
         entry.token_id,
         entry.request_id,
+        entry.error_code,
+        entry.status_code,
+        entry.hint,
         dataText
       );
       return true;
@@ -179,6 +246,14 @@ class LogStore {
       where.push('event = ?');
       params.push(String(options.event));
     }
+    if (options.errorCode) {
+      where.push('error_code = ?');
+      params.push(String(options.errorCode));
+    }
+    if (options.statusCode !== undefined && options.statusCode !== null && options.statusCode !== '') {
+      where.push('status_code = ?');
+      params.push(Number(options.statusCode));
+    }
     if (options.traceId) {
       where.push('trace_id = ?');
       params.push(String(options.traceId));
@@ -207,7 +282,7 @@ class LogStore {
 
     const query = `
       SELECT id, timestamp, level, component, event, message,
-             trace_id, conversation_id, token_id, request_id, data
+             trace_id, conversation_id, token_id, request_id, error_code, status_code, hint, data
       FROM logs
       ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY id DESC
@@ -226,6 +301,9 @@ class LogStore {
       conversation_id: row.conversation_id,
       token_id: row.token_id,
       request_id: row.request_id,
+      error_code: row.error_code,
+      status_code: row.status_code,
+      hint: row.hint,
       data: row.data ? safeJsonParse(row.data) : null
     }));
   }
@@ -236,7 +314,7 @@ class LogStore {
     const limit = Math.min(1000, Math.max(1, Number.parseInt(options.limit || '500', 10) || 500));
     return db.prepare(`
       SELECT id, timestamp, level, component, event, message,
-             trace_id, conversation_id, token_id, request_id, data
+             trace_id, conversation_id, token_id, request_id, error_code, status_code, hint, data
       FROM logs
       WHERE trace_id = ?
       ORDER BY id ASC
@@ -252,6 +330,9 @@ class LogStore {
       conversation_id: row.conversation_id,
       token_id: row.token_id,
       request_id: row.request_id,
+      error_code: row.error_code,
+      status_code: row.status_code,
+      hint: row.hint,
       data: row.data ? safeJsonParse(row.data) : null
     }));
   }
@@ -325,6 +406,9 @@ class Logger {
     this.bindings = options.bindings || {};
     this.stdout = options.stdout !== false;
     this.minLevel = normalizeLevel(options.minLevel || process.env.A2A_LOG_LEVEL || 'info');
+    this.includeStacks = options.includeStacks !== undefined
+      ? Boolean(options.includeStacks)
+      : envBool('A2A_LOG_STACKS', process.env.NODE_ENV !== 'production');
   }
 
   child(bindings = {}) {
@@ -332,7 +416,8 @@ class Logger {
       component: bindings.component || this.component,
       bindings: { ...this.bindings, ...bindings },
       stdout: this.stdout,
-      minLevel: this.minLevel
+      minLevel: this.minLevel,
+      includeStacks: this.includeStacks
     });
   }
 
@@ -367,7 +452,9 @@ class Logger {
       ...(this.bindings || {}),
       ...(context || {})
     };
-    const normalized = normalizeContext(mergedContext);
+    const normalized = normalizeContext(mergedContext, {
+      includeStacks: this.includeStacks
+    });
 
     const entry = {
       timestamp: now,
@@ -379,6 +466,9 @@ class Logger {
       conversation_id: normalized.conversation_id ? String(normalized.conversation_id) : null,
       token_id: normalized.token_id ? String(normalized.token_id) : null,
       request_id: normalized.request_id ? String(normalized.request_id) : null,
+      error_code: normalized.error_code,
+      status_code: normalized.status_code,
+      hint: normalized.hint,
       data: normalized.data
     };
 
@@ -412,9 +502,12 @@ class Logger {
     if (entry.conversation_id) parts.push(`conv=${entry.conversation_id}`);
     if (entry.token_id) parts.push(`tok=${entry.token_id}`);
     if (entry.request_id) parts.push(`req=${entry.request_id}`);
+    if (entry.error_code) parts.push(`code=${entry.error_code}`);
+    if (entry.status_code !== null && entry.status_code !== undefined) parts.push(`status=${entry.status_code}`);
     if (entry.data && Object.keys(entry.data).length > 0) {
       parts.push(`data=${JSON.stringify(entry.data)}`);
     }
+    if (entry.hint) parts.push(`hint=${entry.hint}`);
     const line = parts.join(' ');
     if (entry.level === 'error' || entry.level === 'warn') {
       console.error(line);
@@ -449,7 +542,8 @@ function createLogger(options = {}) {
     component: options.component || 'a2a',
     bindings: options.bindings || {},
     stdout: options.stdout !== false,
-    minLevel: options.minLevel
+    minLevel: options.minLevel,
+    includeStacks: options.includeStacks
   });
 }
 

@@ -342,8 +342,11 @@ function createRuntimeAdapter(options = {}) {
           event: 'generic_agent_command_failed',
           traceId: context?.traceId,
           conversationId: context?.conversationId,
+          error_code: 'GENERIC_AGENT_COMMAND_FAILED',
+          hint: 'Verify A2A_AGENT_COMMAND exits 0 and returns valid text/JSON response.',
+          error: err,
           data: {
-            error: err.message
+            command_present: Boolean(genericAgentCommand)
           }
         });
       }
@@ -377,8 +380,11 @@ function createRuntimeAdapter(options = {}) {
           event: 'generic_summary_command_failed',
           traceId: callerInfo?.trace_id || callerInfo?.traceId,
           conversationId: callerInfo?.conversation_id || callerInfo?.conversationId,
+          error_code: 'GENERIC_SUMMARY_COMMAND_FAILED',
+          hint: 'Verify A2A_SUMMARY_COMMAND returns JSON with summary field or plain text.',
+          error: err,
           data: {
-            error: err.message
+            command_present: Boolean(genericSummaryCommand)
           }
         });
       }
@@ -399,8 +405,11 @@ function createRuntimeAdapter(options = {}) {
         traceId: payload?.trace_id || payload?.traceId,
         conversationId: payload?.conversationId,
         tokenId: payload?.token?.id,
+        error_code: 'GENERIC_NOTIFY_COMMAND_FAILED',
+        hint: 'Validate A2A_NOTIFY_COMMAND and downstream notifier transport availability.',
+        error: err,
         data: {
-          error: err.message
+          command_present: Boolean(genericNotifyCommand)
         }
       });
     }
@@ -422,8 +431,11 @@ function createRuntimeAdapter(options = {}) {
         event: 'openclaw_turn_failed_fallback',
         traceId,
         conversationId: context?.conversationId,
+        error_code: 'OPENCLAW_TURN_FAILED_FALLBACK',
+        hint: 'Inspect OpenClaw CLI health or set A2A_RUNTIME=generic for explicit fallback mode.',
+        error: err,
         data: {
-          error: err.message
+          failover_enabled: failoverEnabled
         }
       });
       return runGenericTurn({
@@ -462,8 +474,11 @@ function createRuntimeAdapter(options = {}) {
         event: 'openclaw_summary_failed_fallback',
         traceId: traceId || callerInfo?.trace_id || callerInfo?.traceId,
         conversationId: conversationId || callerInfo?.conversation_id || callerInfo?.conversationId,
+        error_code: 'OPENCLAW_SUMMARY_FAILED_FALLBACK',
+        hint: 'Inspect OpenClaw summary session output and summarizer prompt input.',
+        error: err,
         data: {
-          error: err.message
+          failover_enabled: failoverEnabled
         }
       });
       return runGenericSummary({
@@ -507,8 +522,11 @@ function createRuntimeAdapter(options = {}) {
         traceId,
         conversationId,
         tokenId: token?.id,
+        error_code: 'OPENCLAW_NOTIFY_FAILED_FALLBACK',
+        hint: 'Check OpenClaw messaging channel config and notify permissions.',
+        error: err,
         data: {
-          error: err.message
+          failover_enabled: failoverEnabled
         }
       });
       await runGenericNotify(payload);
