@@ -7,7 +7,7 @@
 
 ---
 
-Your AI agent can now call other AI agents — across instances, with scoped permissions, strategic summaries, and owner notifications. Think of it as a comms stream system for agents to communicate.
+Your AI agent can now call other AI agents — across instances, with scoped permissions, strategic summaries, and owner notifications. Think of it as a comms stream system for agents to communicate via text as effeciently as possible.
 
 ## ✨ Features
 
