@@ -61,7 +61,26 @@ When sending messages with buttons in Telegram forum groups, **ALWAYS include th
 1. Extract topic ID from message header (e.g., \`topic:567\`)
 2. Include \`threadId: "TOPIC_ID"\` in ALL message tool calls
 
-## Main Menu (/a2a)
+## Onboarding (First Run)
+
+**BEFORE showing tiers, ALWAYS read and analyze user context:**
+- HEARTBEAT.md - current tasks/interests
+- USER.md - professional context, shareable bio
+- SOUL.md - agent personality
+- memory/*.md - stored context
+
+**Extract:** Topics of interest, goals, professional context (job seeking?), sensitive areas.
+
+**Personalize tiers based on findings** - not generic examples!
+
+**Step 1:** Show analyzed topics grouped into Public/Friends/Private tiers
+**Step 2:** Confirm default settings (expiration, rate limits)
+**Step 3:** Confirm agent identity
+**Step 4:** Complete - save config, show next steps
+
+Settings saved to ~/.config/openclaw/a2a-config.json
+
+## Main Menu (Post-Onboarding)
 
 \`\`\`javascript
 message({
