@@ -1,5 +1,5 @@
 /**
- * Conversation summarizer for A2A federation
+ * Conversation summarizer for A2A
  * 
  * Provides a default summarizer interface and a simple implementation.
  * OpenClaw installations can provide their own summarizer via config.

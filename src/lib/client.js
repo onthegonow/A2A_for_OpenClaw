@@ -26,7 +26,7 @@ class A2AClient {
   /**
    * Call a remote agent
    * 
-   * @param {string} endpoint - a2a:// URL or {host, token}
+   * @param {string|object} endpoint - a2a:// URL or {host, token}
    * @param {string} message - Message to send
    * @param {object} options - Additional options
    * @returns {Promise<object>} Response from remote agent
@@ -62,7 +62,81 @@ class A2AClient {
       const req = protocol.request({
         hostname,
         port,
-        path: '/api/federation/invoke',
+        path: '/api/a2a/invoke',
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body)
+        },
+        timeout: this.timeout
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            if (res.statusCode >= 400) {
+              reject(new A2AError(json.error || 'request_failed', json.message || data, res.statusCode));
+            } else {
+              resolve(json);
+            }
+          } catch (e) {
+            reject(new A2AError('parse_error', `Failed to parse response: ${data}`, res.statusCode));
+          }
+        });
+      });
+
+      req.on('error', (e) => {
+        reject(new A2AError('network_error', e.message));
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new A2AError('timeout', 'Request timed out'));
+      });
+
+      req.write(body);
+      req.end();
+    });
+  }
+
+  /**
+   * Explicitly end a remote conversation and trigger call conclusion
+   * 
+   * @param {string|object} endpoint - a2a:// URL or {host, token}
+   * @param {string} conversationId - Conversation ID to conclude
+   * @returns {Promise<object>} End response from remote agent
+   */
+  async end(endpoint, conversationId) {
+    if (!conversationId) {
+      throw new A2AError('missing_conversation_id', 'conversationId is required');
+    }
+
+    let host, token;
+    
+    if (typeof endpoint === 'string') {
+      ({ host, token } = A2AClient.parseInvite(endpoint));
+    } else {
+      ({ host, token } = endpoint);
+    }
+
+    const body = JSON.stringify({
+      conversation_id: conversationId
+    });
+
+    const isLocalhost = host === 'localhost' || host.startsWith('localhost:') || host.startsWith('127.');
+    const hasExplicitPort = host.includes(':');
+    const port = hasExplicitPort ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
+    const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
+    const protocol = useHttp ? http : https;
+    const hostname = host.split(':')[0];
+
+    return new Promise((resolve, reject) => {
+      const req = protocol.request({
+        hostname,
+        port,
+        path: '/api/a2a/end',
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -124,7 +198,7 @@ class A2AClient {
       const req = protocol.request({
         hostname,
         port,
-        path: '/api/federation/ping',
+        path: '/api/a2a/ping',
         method: 'GET',
         timeout: 5000
       }, (res) => {
@@ -149,7 +223,7 @@ class A2AClient {
   }
 
   /**
-   * Get federation status of a remote
+   * Get A2A status of a remote
    */
   async status(endpoint) {
     let host;
@@ -171,7 +245,7 @@ class A2AClient {
       const req = protocol.request({
         hostname,
         port,
-        path: '/api/federation/status',
+        path: '/api/a2a/status',
         method: 'GET',
         timeout: 5000
       }, (res) => {

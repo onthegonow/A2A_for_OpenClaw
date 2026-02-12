@@ -1,7 +1,7 @@
 {
   "name": "a2acalling",
-  "version": "0.1.5",
-  "description": "Agent-to-agent calling for OpenClaw - federated agent communication",
+  "version": "0.1.6",
+  "description": "Agent-to-agent calling for OpenClaw - A2A agent communication",
   "main": "src/index.js",
   "bin": {
     "a2a": "bin/cli.js",
@@ -15,8 +15,8 @@
     "openclaw",
     "claudebot",
     "agent",
-    "federation",
     "a2a",
+    "calling",
     "ai"
   ],
   "author": "OpenClaw Contributors",

@@ -24,7 +24,7 @@ a2acalling/
 │   │   ├── tokens.js    # Token storage & validation
 │   │   └── client.js    # Outbound A2A client
 │   └── routes/
-│       └── federation.js # Express routes for /api/federation
+│       └── a2a.js # Express routes for /api/a2a
 ├── docs/
 │   └── protocol.md      # Protocol specification
 └── .env                  # Secrets (gitignored)
@@ -47,15 +47,15 @@ node -e "const a2a = require('./src'); console.log(a2a.version)"
 2. **Permission presets**: `chat-only` (default), `tools-read`, `tools-write`  
 3. **Disclosure levels**: `public`, `minimal` (default), `none`
 4. **Rate limits**: 10/min, 100/hr, 1000/day per token
-5. **Storage**: JSON file at `~/.config/openclaw/a2a-federation.json`
+5. **Storage**: JSON file at `~/.config/openclaw/a2a.json`
 
 ## Integration Points
 
 This package is designed to integrate with OpenClaw:
 
-1. **Gateway routes**: Mount `createRoutes()` at `/api/federation`
-2. **Agent tool**: Add `federation_call` tool using `A2AClient`
-3. **Commands**: Wire `/federation` commands to CLI functions
+1. **Gateway routes**: Mount `createRoutes()` at `/api/a2a`
+2. **Agent tool**: Add `a2a_call` tool using `A2AClient`
+3. **Commands**: Wire `/a2a` commands to CLI functions
 
 ## Commit Convention
 

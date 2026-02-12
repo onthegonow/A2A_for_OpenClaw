@@ -1,5 +1,5 @@
 /**
- * OpenClaw Integration for A2A Federation
+ * OpenClaw Integration for A2A
  * 
  * Provides owner-context summarization using OpenClaw's agent system.
  */
@@ -71,7 +71,7 @@ function loadOwnerContext(workspaceDir = process.cwd()) {
 /**
  * Build summary prompt for agent
  * 
- * Philosophy: Federation is collaborative AND adversarial. Each agent tries
+ * Philosophy: A2A is collaborative AND adversarial. Each agent tries
  * to maximize value for their owner while finding genuine mutual wins.
  * Track the exchange balance AND surface partnership opportunities.
  */
@@ -84,10 +84,10 @@ function buildSummaryPrompt(messages, ownerContext, callerInfo = {}) {
   const goalsSection = ownerContext.goals?.length ? `### Current Goals\n- ${ownerContext.goals.join('\n- ')}` : '';
   const interestsSection = ownerContext.interests?.length ? `### Interests\n- ${ownerContext.interests.join('\n- ')}` : '';
 
-  return `You just finished a federated agent-to-agent call. Analyze it strategically for your owner.
+  return `You just finished a A2A agent-to-agent call. Analyze it strategically for your owner.
 
 ## Philosophy
-Federation is cooperative AND adversarial. Each agent maximizes value for their own owner — but the best outcomes are mutual wins. Your job:
+A2A is cooperative AND adversarial. Each agent maximizes value for their own owner — but the best outcomes are mutual wins. Your job:
 
 1. **Track the exchange** — what did we get vs give?
 2. **Find mutual value** — what can BOTH parties gain?

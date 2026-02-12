@@ -5,7 +5,7 @@
  * This script:
  * 1. Installs the a2a skill to the user's OpenClaw skills directory
  * 2. Adds /a2a as a custom command in OpenClaw config
- * 3. Sets up the federation server as a systemd service (optional)
+ * 3. Sets up the A2A server as a systemd service (optional)
  * 
  * Usage:
  *   npx a2acalling install
@@ -47,10 +47,10 @@ function error(msg) { console.error(`${red('[a2a]')} ${msg}`); }
 // Skill content
 const SKILL_MD = `---
 name: a2a
-description: "Agent-to-Agent federation. Handle /a2a commands to create tokens, manage connections, and call remote agents. Triggers on: /a2a, federation, agent token, a2a invite."
+description: "Agent-to-Agent a2a. Handle /a2a commands to create tokens, manage connections, and call remote agents. Triggers on: /a2a, a2a, agent token, a2a invite."
 ---
 
-# A2A Federation
+# A2A
 
 Handle agent-to-agent communication with Telegram inline buttons + \`a2a\` CLI.
 
@@ -88,7 +88,7 @@ message({
   channel: "telegram",
   target: "CHAT_ID",
   threadId: "TOPIC_ID",  // REQUIRED for forum topics!
-  message: "🤝 **A2A Federation**\\n\\nWhat would you like to do?",
+  message: "🤝 **A2A**\\n\\nWhat would you like to do?",
   buttons: [
     [{ text: "📝 Create Invite", callback_data: "/a2a invite" }, { text: "📋 List Tokens", callback_data: "/a2a list" }],
     [{ text: "🗑 Revoke Token", callback_data: "/a2a revoke" }, { text: "📡 Add Remote", callback_data: "/a2a add" }]
@@ -209,7 +209,7 @@ function install() {
   console.log(`
 ${bold('━━━ Server Setup ━━━')}
 
-To receive incoming calls, run the a2a server:
+To receive incoming calls, run the A2A server:
 
   ${green(`A2A_HOSTNAME="${hostname}:${port}" a2a server`)}
 
@@ -257,7 +257,7 @@ ${bold('A2A Calling - OpenClaw Integration')}
 Usage:
   npx a2acalling install [options]    Install A2A for OpenClaw
   npx a2acalling uninstall            Remove A2A skill
-  npx a2acalling server               Start federation server
+  npx a2acalling server               Start A2A server
 
 Install Options:
   --hostname <host>    Hostname for invite URLs (default: system hostname)

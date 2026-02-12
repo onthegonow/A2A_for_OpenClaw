@@ -9,4 +9,4 @@ package-lock.json
 .env.*
 
 # Don't commit test tokens
-a2a-federation.json
+a2a.json

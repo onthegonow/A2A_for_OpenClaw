@@ -1,8 +1,8 @@
-# Federation Protocol v0 Reference
+# A2A Protocol v0 Reference
 
 ## Overview
 
-Federation enables OpenClaw agents to call each other across instances with scoped permissions and owner notification.
+A2A enables OpenClaw agents to call each other across instances with scoped permissions and owner notification.
 
 ## Token Format
 
@@ -16,16 +16,16 @@ Token structure: `fed_<base64url(24 random bytes)>`
 
 ## API Endpoints
 
-All endpoints are prefixed with `/api/federation/`
+All endpoints are prefixed with `/api/a2a/`
 
 ### GET /status
 
-Check if federation is enabled.
+Check if A2A is enabled.
 
 Response:
 ```json
 {
-  "federation": true,
+  "a2a": true,
   "version": "0.1.0",
   "capabilities": ["invoke", "multi-turn"],
   "rate_limits": {
@@ -93,6 +93,40 @@ Error responses:
 {"success": false, "error": "missing_message", "message": "..."}
 ```
 
+### POST /end
+
+Explicitly end a conversation and trigger conclusion/summarization.
+
+Headers:
+```
+Authorization: Bearer fed_abc123xyz
+Content-Type: application/json
+```
+
+Request body:
+```json
+{
+  "conversation_id": "conv_123456"
+}
+```
+
+Success response:
+```json
+{
+  "success": true,
+  "conversation_id": "conv_123456",
+  "status": "concluded",
+  "summary": "Optional summary text"
+}
+```
+
+Error responses:
+```json
+{"success": false, "error": "unauthorized", "message": "..."}
+{"success": false, "error": "missing_conversation_id", "message": "..."}
+{"success": false, "error": "internal_error", "message": "..."}
+```
+
 ## Permission Scopes
 
 | Scope | Tools | Files | Memory | Actions |
@@ -111,7 +145,7 @@ Error responses:
 
 ## Token Storage Schema
 
-Stored in `~/.config/openclaw/federation.json`:
+Stored in `~/.config/openclaw/a2a.json`:
 
 ```json
 {
@@ -156,7 +190,7 @@ Limits reset on natural boundaries (minute, hour, day UTC).
 ## Security Considerations
 
 1. **Token hashing**: Tokens stored as SHA-256 hashes server-side
-2. **TLS required**: All federation calls should use HTTPS
+2. **TLS required**: All A2A calls should use HTTPS
 3. **No credential forwarding**: Tokens are never forwarded to other agents
 4. **Audit logging**: All invocations are logged with caller info
 5. **Auto-revocation**: Tokens may auto-revoke after repeated errors
@@ -172,13 +206,17 @@ To continue a conversation, include `conversation_id` from the previous response
 }
 ```
 
+When finished, either:
+- Call `POST /end` with the same `conversation_id` for explicit conclusion, or
+- Let the receiver auto-conclude on idle timeout/max duration (if enabled).
+
 Conversations expire after 1 hour of inactivity.
 
 ## Owner Notifications
 
 When `notify: all`:
 ```
-🤝 Federation call received
+🤝 A2A call received
 
 From: Alice's Agent (alice.example.com)
 Token: "Work collab" (expires 2026-02-18)
@@ -199,16 +237,16 @@ Owner can reply to inject into the conversation.
 
 Add to gateway routes:
 ```javascript
-const federation = require('./skills/federation/scripts/server');
-app.use('/api/federation', federation);
+const a2a = require('./skills/a2a/scripts/server');
+app.use('/api/a2a', a2a);
 ```
 
 ### Agent Context
 
-When handling a federation call, inject context:
+When handling an A2A call, inject context:
 ```json
 {
-  "federation": {
+  "a2a": {
     "active": true,
     "caller": "Alice's Agent",
     "permissions": "chat-only",
@@ -217,10 +255,10 @@ When handling a federation call, inject context:
 }
 ```
 
-### New Tool: federation_call
+### New Tool: a2a_call
 
 ```typescript
-federation_call({
+a2a_call({
   endpoint: string,    // a2a:// URL
   message: string,     // Message to send
   conversation_id?: string  // For multi-turn

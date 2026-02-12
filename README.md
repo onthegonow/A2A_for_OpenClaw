@@ -40,7 +40,7 @@ a2a create --name "My Agent" --owner "Your Name" --tier friends
 a2a add "a2a://their-host.com/fed_xyz789" "Alice's Agent"
 
 # Make a call
-a2a call "Alice's Agent" "Hey! Want to collaborate on the federation protocol?"
+a2a call "Alice's Agent" "Hey! Want to collaborate on the a2a protocol?"
 
 # Or call directly
 a2a call "a2a://their-host.com/fed_xyz789" "Hello!"
@@ -120,7 +120,7 @@ Every call generates an owner-context summary that tracks the exchange:
 {
   "exchange": {
     "weGot": ["learned about their developer tools project"],
-    "weGave": ["shared our A2A federation work"],
+    "weGave": ["shared our A2A work"],
     "balance": "even",
     "fair": true
   },
@@ -171,7 +171,7 @@ a2a ping <target>             # Check if agent is available
 ### Server
 
 ```bash
-a2a serve [options]           # Start federation server
+a2a server [options]          # Start A2A server
   --port, -p <port>           # Port (default: 3001)
 ```
 
@@ -187,9 +187,10 @@ a2a://<hostname>:<port>/<token>
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/federation/status` | Check federation support |
-| `GET` | `/api/federation/ping` | Health check with auth |
-| `POST` | `/api/federation/invoke` | Call the agent |
+| `GET` | `/api/a2a/status` | Check A2A support |
+| `GET` | `/api/a2a/ping` | Health check with auth |
+| `POST` | `/api/a2a/invoke` | Call the agent |
+| `POST` | `/api/a2a/end` | End a conversation and return summary data |
 
 ### Invoke Request
 
@@ -211,6 +212,25 @@ a2a://<hostname>:<port>/<token>
   "response": "Agent's response",
   "can_continue": true,
   "tokens_remaining": null
+}
+```
+
+### End Conversation Request
+
+```json
+{
+  "conversation_id": "conv_123"
+}
+```
+
+### End Conversation Response
+
+```json
+{
+  "success": true,
+  "conversation_id": "conv_123",
+  "status": "concluded",
+  "summary": "Optional call summary"
 }
 ```
 
@@ -237,6 +257,12 @@ const followUp = await client.call(
   'Thanks! One more question...',
   { conversationId: response.conversation_id }
 );
+
+// Explicitly end the call when done
+const ended = await client.end(
+  'a2a://their-host.com/fed_token123',
+  response.conversation_id
+);
 ```
 
 ### Receiving Calls (Server)
@@ -248,7 +274,7 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-app.use('/api/federation', createRoutes({
+app.use('/api/a2a', createRoutes({
   tokenStore: new TokenStore(),
   
   async handleMessage(message, context) {
@@ -284,7 +310,7 @@ app.listen(3001);
 
 ## 🤝 Philosophy
 
-Federation is **cooperative AND adversarial**. Each agent maximizes value for their owner — but the best outcomes are mutual wins.
+A2A is **cooperative AND adversarial**. Each agent maximizes value for their owner — but the best outcomes are mutual wins.
 
 Your agent should:
 1. **Protect your interests** — track what you're giving vs. getting

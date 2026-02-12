@@ -5,7 +5,7 @@
  * // Server side - mount routes
  * const { createRoutes, TokenStore } = require('a2acalling');
  * const tokenStore = new TokenStore();
- * app.use('/api/federation', createRoutes({ tokenStore, handleMessage }));
+ * app.use('/api/a2a', createRoutes({ tokenStore, handleMessage }));
  * 
  * @example
  * // Client side - call remote agent
@@ -16,7 +16,7 @@
 
 const { TokenStore } = require('./lib/tokens');
 const { A2AClient, A2AError } = require('./lib/client');
-const { createRoutes } = require('./routes/federation');
+const { createRoutes } = require('./routes/a2a');
 
 // Lazy load optional dependencies
 let ConversationStore = null;

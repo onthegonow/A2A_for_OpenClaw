@@ -1,7 +1,7 @@
 /**
- * Federation API Routes
+ * A2A API Routes
  * 
- * Mount at: /api/federation
+ * Mount at: /api/a2a
  * 
  * Security notes:
  * - Rate limiting is in-memory (resets on restart) - for production, use Redis
@@ -98,7 +98,7 @@ function checkRateLimit(tokenId, limits = { minute: 10, hour: 100, day: 1000 }) 
 }
 
 /**
- * Create federation routes
+ * Create a2a routes
  * 
  * @param {object} options
  * @param {TokenStore} options.tokenStore - Token store instance
@@ -132,11 +132,11 @@ function createRoutes(options = {}) {
 
   /**
    * GET /status
-   * Check if federation is enabled
+   * Check if A2A is enabled
    */
   router.get('/status', (req, res) => {
     res.json({
-      federation: true,
+      a2a: true,
       version: require('../../package.json').version,
       capabilities: ['invoke', 'multi-turn'],
       rate_limits: limits
@@ -221,10 +221,10 @@ function createRoutes(options = {}) {
       context: String(caller.context || '').slice(0, 500)
     } : {};
 
-    // Build federation context with secure conversation ID
+    // Build a2a context with secure conversation ID
     const isNewConversation = !conversation_id;
-    const federationContext = {
-      mode: 'federation',
+    const a2aContext = {
+      mode: 'a2a',
       token_id: validation.id,
       token_name: validation.name,
       tier: validation.tier,
@@ -238,7 +238,7 @@ function createRoutes(options = {}) {
     if (convStore) {
       try {
         convStore.startConversation({
-          id: federationContext.conversation_id,
+          id: a2aContext.conversation_id,
           contactId: validation.id,
           contactName: sanitizedCaller.name || validation.name,
           tokenId: validation.id,
@@ -247,11 +247,11 @@ function createRoutes(options = {}) {
         
         // Track activity for auto-conclude
         if (monitor) {
-          monitor.trackActivity(federationContext.conversation_id, sanitizedCaller);
+          monitor.trackActivity(a2aContext.conversation_id, sanitizedCaller);
         }
         
         // Store incoming message
-        convStore.addMessage(federationContext.conversation_id, {
+        convStore.addMessage(a2aContext.conversation_id, {
           direction: 'inbound',
           role: 'user',
           content: message
@@ -263,12 +263,12 @@ function createRoutes(options = {}) {
 
     try {
       // Handle the message
-      const response = await handleMessage(message, federationContext, { timeout: boundedTimeout * 1000 });
+      const response = await handleMessage(message, a2aContext, { timeout: boundedTimeout * 1000 });
       
       // Store outgoing response
       if (convStore) {
         try {
-          convStore.addMessage(federationContext.conversation_id, {
+          convStore.addMessage(a2aContext.conversation_id, {
             direction: 'outbound',
             role: 'assistant',
             content: response.text
@@ -287,7 +287,7 @@ function createRoutes(options = {}) {
           context,
           message,
           response: response.text,
-          conversation_id: federationContext.conversation_id
+          conversation_id: a2aContext.conversation_id
         }).catch(err => {
           console.error('[a2a] Failed to notify owner:', err.message);
         });
@@ -295,7 +295,7 @@ function createRoutes(options = {}) {
 
       res.json({
         success: true,
-        conversation_id: federationContext.conversation_id,
+        conversation_id: a2aContext.conversation_id,
         response: response.text,
         can_continue: response.canContinue !== false,
         tokens_remaining: validation.calls_remaining
@@ -392,10 +392,10 @@ function createRoutes(options = {}) {
   /**
    * GET /conversations
    * List conversations (requires auth)
-   * This is for the agent owner, not federated callers
+   * This is for the agent owner, not remote callers
    */
   router.get('/conversations', (req, res) => {
-    // This endpoint should be protected by local auth, not federation tokens
+    // This endpoint should be protected by local auth, not A2A tokens
     // For now, require an admin token or local access
     const adminToken = req.headers['x-admin-token'];
     if (adminToken !== process.env.A2A_ADMIN_TOKEN && req.ip !== '127.0.0.1') {
@@ -455,7 +455,7 @@ function createRoutes(options = {}) {
  */
 async function defaultMessageHandler(message, context, options) {
   return {
-    text: `[A2A Federation Active] Received message from ${context.caller?.name || 'unknown'}. Agent integration pending.`,
+    text: `[A2A Active] Received message from ${context.caller?.name || 'unknown'}. Agent integration pending.`,
     canContinue: true
   };
 }

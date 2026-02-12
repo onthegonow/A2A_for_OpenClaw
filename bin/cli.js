@@ -3,7 +3,7 @@
  * A2A Calling CLI
  * 
  * Usage:
- *   a2a create [options]     Create a federation token
+ *   a2a create [options]     Create an A2A token
  *   a2a list                 List active tokens
  *   a2a revoke <id>          Revoke a token
  *   a2a add <url> [name]     Add a remote agent
@@ -122,7 +122,7 @@ const commands = {
         console.log(`✅ Token created (link failed: ${linkResult.error})\n`);
       }
     } else {
-      console.log(`✅ Federation token created\n`);
+      console.log(`✅ A2A token created\n`);
     }
     
     console.log(`Name: ${record.name}`);
@@ -167,11 +167,11 @@ a2a call "${agentName}" "Hello!"
   list: () => {
     const tokens = store.list();
     if (tokens.length === 0) {
-      console.log('No active federation tokens.');
+      console.log('No active A2A tokens.');
       return;
     }
 
-    console.log('Active federation tokens:\n');
+    console.log('Active A2A tokens:\n');
     for (const t of tokens) {
       const expired = t.expires_at && new Date(t.expires_at) < new Date();
       const status = expired ? '⚠️  EXPIRED' : '✅ Active';
@@ -715,7 +715,7 @@ a2a call "${agentName}" "Hello!"
     const client = new A2AClient();
     try {
       const status = await client.status(url);
-      console.log(`Federation status for ${url}:\n`);
+      console.log(`A2A status for ${url}:\n`);
       console.log(JSON.stringify(status, null, 2));
     } catch (err) {
       console.error(`❌ Failed to get status: ${err.message}`);
@@ -726,7 +726,7 @@ a2a call "${agentName}" "Hello!"
   server: (args) => {
     const port = args.flags.port || args.flags.p || process.env.PORT || 3001;
     process.env.PORT = port;
-    console.log(`Starting A2A federation server on port ${port}...`);
+    console.log(`Starting A2A server on port ${port}...`);
     require('../src/server.js');
   },
 
@@ -747,7 +747,7 @@ a2a call "${agentName}" "Hello!"
       const req = http.request({
         hostname: serverHost === 'localhost' ? '127.0.0.1' : serverHost,
         port: serverPort,
-        path: '/api/federation/ping',
+        path: '/api/a2a/ping',
         timeout: 2000
       }, (res) => {
         resolve(res.statusCode === 200);
@@ -822,7 +822,7 @@ ${inviteUrl}
 Usage: a2a <command> [options]
 
 Commands:
-  create              Create a federation token
+  create              Create an A2A token
     --name, -n        Token/agent name
     --owner, -o       Owner name (human behind the agent)
     --expires, -e     Expiration (1h, 1d, 7d, 30d, never)
@@ -864,10 +864,10 @@ Conversations:
 Calling:
   call <contact|url> <msg>  Call a remote agent
   ping <url>          Check if agent is reachable
-  status <url>        Get federation status
+  status <url>        Get A2A status
 
 Server:
-  server              Start the federation server
+  server              Start the A2A server
     --port, -p        Port to listen on (default: 3001)
   
   quickstart          One-command setup: check server + create invite

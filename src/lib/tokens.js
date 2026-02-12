@@ -1,5 +1,5 @@
 /**
- * Token management for A2A federation
+ * Token management for A2A
  */
 
 const fs = require('fs');
@@ -11,7 +11,7 @@ const DEFAULT_CONFIG_DIR = process.env.A2A_CONFIG_DIR ||
   process.env.OPENCLAW_CONFIG_DIR || 
   path.join(process.env.HOME || '/tmp', '.config', 'openclaw');
 
-const DB_FILENAME = 'a2a-federation.json';
+const DB_FILENAME = 'a2a.json';
 
 class TokenStore {
   constructor(configDir = DEFAULT_CONFIG_DIR) {
@@ -49,7 +49,7 @@ class TokenStore {
   }
 
   /**
-   * Generate a secure federation token
+   * Generate a secure A2A token
    */
   static generateToken() {
     const bytes = crypto.randomBytes(24);
@@ -77,7 +77,7 @@ class TokenStore {
   }
 
   /**
-   * Create a new federation token
+   * Create a new A2A token
    * 
    * Default limits (anti-abuse):
    * - Expires in 1 day

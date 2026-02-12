@@ -1,5 +1,5 @@
 /**
- * Conversation storage and summarization for A2A federation
+ * Conversation storage and summarization for A2A
  * 
  * Uses SQLite for local storage with auto-summarization on call conclusion.
  */
