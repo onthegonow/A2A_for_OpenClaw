@@ -1,6 +1,6 @@
 {
   "name": "a2acalling",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agent-to-agent calling for OpenClaw - federated agent communication",
   "main": "src/index.js",
   "bin": {
@@ -32,13 +32,8 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "peerDependencies": {
-    "express": "^4.18.0"
-  },
-  "optionalDependencies": {
-    "better-sqlite3": "^11.10.0"
-  },
-  "devDependencies": {
-    "express": "^5.2.1"
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.0"
   }
 }
