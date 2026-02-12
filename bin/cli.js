@@ -80,13 +80,13 @@ function getHostname() {
 // Commands
 const commands = {
   create: (args) => {
-    // Parse max-calls: number, 'unlimited', or default (100)
-    let maxCalls = 100; // Safe default
+    // Parse max-calls: number, 'unlimited', or default (unlimited)
+    let maxCalls = null; // Default: unlimited
     if (args.flags['max-calls']) {
       if (args.flags['max-calls'] === 'unlimited') {
         maxCalls = null;
       } else {
-        maxCalls = parseInt(args.flags['max-calls']) || 100;
+        maxCalls = parseInt(args.flags['max-calls']) || null;
       }
     }
 
