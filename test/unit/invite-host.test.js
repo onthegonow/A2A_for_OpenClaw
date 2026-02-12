@@ -86,4 +86,37 @@ module.exports = function (test, assert, helpers) {
 
     tmp.cleanup();
   });
+
+  test('resolveInviteHost prefers quick tunnel when requested', async () => {
+    tmp = helpers.tmpConfigDir('invite-tunnel');
+    delete process.env.A2A_HOSTNAME;
+    delete process.env.A2A_DISABLE_QUICK_TUNNEL;
+
+    const quickTunnelPath = require.resolve('../../src/lib/quick-tunnel');
+    const previous = require.cache[quickTunnelPath];
+    require.cache[quickTunnelPath] = {
+      id: quickTunnelPath,
+      filename: quickTunnelPath,
+      loaded: true,
+      exports: {
+        ensureQuickTunnel: async () => ({ host: 'demo.trycloudflare.com' })
+      }
+    };
+
+    delete require.cache[require.resolve('../../src/lib/invite-host')];
+    const { resolveInviteHost } = require('../../src/lib/invite-host');
+    const resolved = await resolveInviteHost({
+      fallbackHost: 'localhost',
+      defaultPort: 3001,
+      preferQuickTunnel: true
+    });
+    assert.equal(resolved.host, 'demo.trycloudflare.com:443');
+    assert.equal(resolved.source, 'quick_tunnel');
+
+    delete require.cache[quickTunnelPath];
+    if (previous) {
+      require.cache[quickTunnelPath] = previous;
+    }
+    tmp.cleanup();
+  });
 };

@@ -161,6 +161,11 @@ async function resolveInviteHost(options = {}) {
     ? options.externalIpTtlMs
     : undefined;
 
+  const preferQuickTunnel = Boolean(options.preferQuickTunnel) ||
+    String(process.env.A2A_PREFER_QUICK_TUNNEL || '').toLowerCase() === 'true';
+  const quickTunnelDisabled = Boolean(options.disableQuickTunnel) ||
+    String(process.env.A2A_DISABLE_QUICK_TUNNEL || '').toLowerCase() === 'true';
+
   const shouldReplaceWithExternalIp = isLocalOrUnroutableHost(parsed.hostname) || (
     options.refreshExternalIp && isPublicIpHostname(parsed.hostname)
   );
@@ -172,6 +177,32 @@ async function resolveInviteHost(options = {}) {
       originalHost: candidateHostWithPort,
       warnings
     };
+  }
+
+  if (preferQuickTunnel && !quickTunnelDisabled) {
+    try {
+      const { ensureQuickTunnel } = require('./quick-tunnel');
+      const tunnel = await ensureQuickTunnel({
+        localPort: desiredPort
+      });
+      if (tunnel && tunnel.host) {
+        const tunnelParsed = splitHostPort(tunnel.host);
+        const finalHost = formatHostPort(tunnelParsed.hostname, tunnelParsed.port || 443);
+        if (candidateSource !== 'env' && config && typeof config.setAgent === 'function') {
+          // Persist the secure public hostname for future invite generation.
+          config.setAgent({ hostname: finalHost });
+        }
+        warnings.push(`Using secure Quick Tunnel endpoint "${finalHost}" for internet-facing invites.`);
+        return {
+          host: finalHost,
+          source: 'quick_tunnel',
+          originalHost: candidateHostWithPort,
+          warnings
+        };
+      }
+    } catch (err) {
+      warnings.push(`Quick Tunnel unavailable (${err.message}). Falling back to external IP host detection.`);
+    }
   }
 
   const external = await getExternalIp({
@@ -216,4 +247,3 @@ module.exports = {
   isLocalOrUnroutableHost,
   resolveInviteHost
 };
-

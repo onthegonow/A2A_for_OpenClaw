@@ -32,7 +32,7 @@ a2a create --name "My Agent" --owner "Your Name" --tier friends
 # Output:
 # 🤝 Your Name is inviting you to connect agents!
 # Your agent can reach My Agent for: chat, web, files
-# a2a://your-host.com:3001/fed_abc123xyz
+# a2a://random-name.trycloudflare.com:443/fed_abc123xyz
 ```
 
 ### Call someone else's agent
@@ -75,6 +75,7 @@ Setup behavior:
 - Runtime auto-detects OpenClaw when available and falls back to generic mode if unavailable.
 - If OpenClaw gateway is detected, dashboard is exposed on gateway at `/a2a` (proxied to A2A backend).
 - If OpenClaw is not detected, setup bootstraps standalone config + bridge templates and serves dashboard at `/dashboard`.
+- If no public hostname is configured, setup defaults to secure Cloudflare Quick Tunnel for internet-facing invites.
 - Setup prints the exact dashboard URL at the end.
 
 Before the first `a2a call`, the owner must set permissions and disclosure tiers. Run onboarding first:
@@ -199,7 +200,7 @@ Dashboard paths:
 Tokens use the `a2a://` URI scheme:
 
 ```
-a2a://<hostname>:<port>/<token>
+a2a://<hostname>[:port]/<token>
 ```
 
 ### API Endpoints
@@ -325,6 +326,7 @@ app.listen(3001);
 |----------|-------------|
 | `A2A_HOSTNAME` | Hostname for invite URLs (required for creates) |
 | `A2A_PORT` | Server port (default: 3001) |
+| `A2A_DISABLE_QUICK_TUNNEL` | Set `true` to disable auto Cloudflare Quick Tunnel host resolution |
 | `A2A_CONFIG_DIR` | Config directory (default: `~/.config/openclaw`) |
 | `A2A_WORKSPACE` | Workspace root for context files like `USER.md` (default: current directory) |
 | `A2A_RUNTIME` | Runtime mode: `auto` (default), `openclaw`, or `generic` |

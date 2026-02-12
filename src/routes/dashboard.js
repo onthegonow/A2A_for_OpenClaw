@@ -509,7 +509,8 @@ function createDashboardApiRouter(options = {}) {
 
     const resolvedHost = await resolveInviteHost({
       config: context.config,
-      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001
+      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001,
+      preferQuickTunnel: true
     });
     const host = resolvedHost.host;
     const inviteUrl = `a2a://${host}/${token}`;

@@ -7,6 +7,8 @@
  *   so dashboard is accessible at /a2a on gateway.
  * - If gateway is not detected, dashboard runs on standalone A2A server.
  * - If OpenClaw is not installed, bootstrap standalone runtime templates.
+ * - If no public hostname is configured, default to secure Quick Tunnel
+ *   for internet-facing invite URLs (lazy cloudflared download).
  *
  * Usage:
  *   npx a2acalling install
@@ -140,7 +142,7 @@ function writeExecutableFile(filePath, content) {
  * Ensure config and disclosure manifest exist.
  * Called from both OpenClaw and standalone install paths.
  */
-function ensureConfigAndManifest(hostname, port) {
+function ensureConfigAndManifest(inviteHost, port, options = {}) {
   const configDir = resolveA2AConfigDir();
   ensureDir(configDir);
 
@@ -153,8 +155,9 @@ function ensureConfigAndManifest(hostname, port) {
     config.setDefaults(defaults);
 
     const agent = config.getAgent() || {};
-    if (!agent.hostname) {
-      config.setAgent({ hostname: `${hostname}:${port}` });
+    const desiredHost = String(inviteHost || '').trim();
+    if ((desiredHost && !agent.hostname) || (desiredHost && options.forceHostname)) {
+      config.setAgent({ hostname: desiredHost });
     }
 
     const manifest = loadManifest();
@@ -172,8 +175,8 @@ function ensureConfigAndManifest(hostname, port) {
   return configDir;
 }
 
-function ensureStandaloneBootstrap(hostname, port) {
-  const configDir = ensureConfigAndManifest(hostname, port);
+function ensureStandaloneBootstrap(inviteHost, port, options = {}) {
+  const configDir = ensureConfigAndManifest(inviteHost, port, options);
 
   const configFile = path.join(configDir, 'a2a-config.json');
   const manifestFile = path.join(configDir, 'a2a-disclosure.json');
@@ -417,10 +420,47 @@ function loadSkillMd() {
   return null;
 }
 
+function readExistingConfiguredInviteHost() {
+  try {
+    const { A2AConfig } = require('../src/lib/config');
+    const { splitHostPort, isLocalOrUnroutableHost } = require('../src/lib/invite-host');
+    const config = new A2AConfig();
+    const existing = String((config.getAgent() || {}).hostname || '').trim();
+    if (!existing) return '';
+    const parsed = splitHostPort(existing);
+    if (!parsed.hostname || isLocalOrUnroutableHost(parsed.hostname)) {
+      return '';
+    }
+    return existing;
+  } catch (err) {
+    return '';
+  }
+}
+
+async function maybeSetupQuickTunnel(port) {
+  const disabled = Boolean(flags['no-quick-tunnel']) ||
+    String(process.env.A2A_DISABLE_QUICK_TUNNEL || '').toLowerCase() === 'true';
+  if (disabled) return null;
+
+  try {
+    const { ensureQuickTunnel } = require('../src/lib/quick-tunnel');
+    const tunnel = await ensureQuickTunnel({ localPort: Number.parseInt(String(port), 10) || 3001 });
+    if (!tunnel || !tunnel.host) return null;
+    return {
+      ...tunnel,
+      inviteHost: `${tunnel.host}:443`
+    };
+  } catch (err) {
+    warn(`Quick Tunnel setup failed: ${err.message}`);
+    warn('Falling back to direct host invites (may require firewall/NAT config).');
+    return null;
+  }
+}
+
 async function install() {
   log('Installing A2A Calling...\n');
 
-  const hostname = flags.hostname || process.env.HOSTNAME || 'localhost';
+  const localHostname = process.env.HOSTNAME || 'localhost';
 
   // Port scanning: use explicit port or scan for available one
   let port;
@@ -443,6 +483,12 @@ async function install() {
     }
   }
   const backendUrl = flags['dashboard-backend'] || `http://127.0.0.1:${port}`;
+  const explicitInviteHost = flags.hostname ||
+    process.env.A2A_HOSTNAME ||
+    process.env.OPENCLAW_HOSTNAME ||
+    readExistingConfiguredInviteHost();
+  const quickTunnel = explicitInviteHost ? null : await maybeSetupQuickTunnel(port);
+  const inviteHost = explicitInviteHost || (quickTunnel && quickTunnel.inviteHost) || `${localHostname}:${port}`;
   const forceStandalone = Boolean(flags.standalone) || String(process.env.A2A_FORCE_STANDALONE || '').toLowerCase() === 'true';
   const hasOpenClawBinary = commandExists('openclaw');
   const hasOpenClawConfig = fs.existsSync(OPENCLAW_CONFIG);
@@ -465,10 +511,14 @@ async function install() {
     log(`Installed skill to: ${skillDir}`);
 
     // Ensure config and manifest exist even in OpenClaw path
-    ensureConfigAndManifest(hostname, port);
+    ensureConfigAndManifest(inviteHost, port, {
+      forceHostname: Boolean(flags.hostname || process.env.A2A_HOSTNAME || process.env.OPENCLAW_HOSTNAME || quickTunnel)
+    });
   } else {
     warn('OpenClaw not detected. Enabling standalone A2A bootstrap.');
-    standaloneBootstrap = ensureStandaloneBootstrap(hostname, port);
+    standaloneBootstrap = ensureStandaloneBootstrap(inviteHost, port, {
+      forceHostname: Boolean(flags.hostname || process.env.A2A_HOSTNAME || process.env.OPENCLAW_HOSTNAME || quickTunnel)
+    });
   }
 
   // 3. Update OpenClaw config + gateway plugin setup (if available)
@@ -476,7 +526,7 @@ async function install() {
   let configUpdated = false;
   let gatewayDetected = false;
   let dashboardMode = 'standalone';
-  let dashboardUrl = `http://${hostname}:${port}/dashboard`;
+  let dashboardUrl = `http://${localHostname}:${port}/dashboard`;
 
   if (config) {
     // Add custom command for each enabled channel
@@ -539,7 +589,7 @@ ${bold('━━━ Server Setup ━━━')}
 
 To receive incoming calls and host A2A APIs:
 
-  ${green(`A2A_HOSTNAME="${hostname}:${port}" a2a server --port ${port}`)}
+  ${green(`A2A_HOSTNAME="${inviteHost}" a2a server --port ${port}`)}
 
 ${bold('━━━ Dashboard Setup ━━━')}
 
@@ -553,6 +603,12 @@ ${dashboardMode === 'gateway'
 ${bold('━━━ Runtime Setup ━━━')}
 
 ${runtimeLine}
+${quickTunnel
+  ? `Quick Tunnel enabled:
+  ${green(quickTunnel.url)}
+Invites will use: ${green(inviteHost)}
+`
+  : 'Quick Tunnel not enabled (using configured/direct invite host).'}
 ${standaloneBootstrap
   ? `Standalone bridge templates:
   ${green(standaloneBootstrap.turnScript)}
@@ -618,11 +674,12 @@ Usage:
   npx a2acalling server               Start A2A server
 
 Install Options:
-  --hostname <host>          Hostname for invite URLs (default: system hostname)
+  --hostname <host>          Hostname for invite URLs (skip quick tunnel when set)
   --port <port>              A2A server port (default: 3001)
   --gateway-url <url>        Force gateway base URL for printed dashboard link
   --dashboard-backend <url>  Backend URL used by gateway dashboard proxy
   --standalone               Force standalone bootstrap (ignore OpenClaw detection)
+  --no-quick-tunnel          Disable auto quick tunnel for no-DNS environments
 
 Examples:
   npx a2acalling install --hostname myserver.com --port 3001

@@ -51,6 +51,12 @@ cat ~/.config/openclaw/a2a-config.json 2>/dev/null | grep '"onboardingComplete"'
 
 Extract: professional context, interests, goals, skills, sensitive areas. Group them into Public/Friends/Family tiers based on sensitivity.
 
+## Network Ingress (Internet-Facing Invites)
+
+- By default, A2A now prefers a secure Quick Tunnel endpoint for invite URLs when no public hostname is configured.
+- If the owner has custom infrastructure (domain, reverse proxy, managed tunnel), they can set `A2A_HOSTNAME` to their own public endpoint and bypass Quick Tunnel.
+- Managed/domain-specific ingress automation is intentionally not bundled yet. Advanced users can implement it based on their own network and security requirements.
+
 ## Commands
 
 ### Quickstart
