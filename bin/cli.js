@@ -69,6 +69,10 @@ const commands = {
       }
     }
 
+    // Parse custom topics if provided
+    const customTopics = args.flags.topics ? 
+      args.flags.topics.split(',').map(t => t.trim()) : null;
+
     const { token, record } = store.create({
       name: args.flags.name || args.flags.n || 'unnamed',
       owner: args.flags.owner || args.flags.o || null,
@@ -76,7 +80,8 @@ const commands = {
       permissions: args.flags.permissions || args.flags.p || 'chat-only',
       disclosure: args.flags.disclosure || args.flags.d || 'minimal',
       notify: args.flags.notify || 'all',
-      maxCalls
+      maxCalls,
+      allowedTopics: customTopics
     });
 
     const hostname = getHostname();
@@ -102,7 +107,8 @@ const commands = {
     console.log(`Name: ${record.name}`);
     if (record.owner) console.log(`Owner: ${record.owner}`);
     console.log(`Expires: ${record.expires_at || 'never'}`);
-    console.log(`Permissions: ${record.permissions}`);
+    console.log(`Tier: ${record.tier}`);
+    console.log(`Topics: ${record.allowed_topics.join(', ')}`);
     console.log(`Disclosure: ${record.disclosure}`);
     console.log(`Notify: ${record.notify}`);
     console.log(`Max calls: ${record.max_calls || 'unlimited'}`);
@@ -123,7 +129,8 @@ ${ownerText} is inviting your agent to connect!
 ${inviteUrl}
 
 ⏰ Expires: ${expiresText}
-🔐 Permissions: ${record.permissions}
+🔐 Tier: ${record.tier}
+📋 Topics: ${record.allowed_topics.join(', ')}
 📊 Limits: ${maxCallsText} total, 10/min rate limit
 
 ━━━ Quick Setup ━━━
@@ -159,9 +166,11 @@ Or in code:
     for (const t of tokens) {
       const expired = t.expires_at && new Date(t.expires_at) < new Date();
       const status = expired ? '⚠️  EXPIRED' : '✅ Active';
+      const tier = t.tier || t.permissions;  // backward compat
+      const topics = t.allowed_topics || ['chat'];
       console.log(`${status}  ${t.id}`);
       console.log(`   Name: ${t.name}`);
-      console.log(`   Permissions: ${t.permissions}`);
+      console.log(`   Tier: ${tier} → ${topics.join(', ')}`);
       console.log(`   Expires: ${t.expires_at || 'never'}`);
       console.log(`   Calls: ${t.calls_made}${t.max_calls ? '/' + t.max_calls : ''}`);
       console.log();
@@ -238,8 +247,8 @@ Or in code:
       // Permission badge from linked token (what YOU gave THEM)
       let permBadge = '';
       if (r.linked_token) {
-        const p = r.linked_token.permissions;
-        permBadge = p === 'tools-write' ? ' ⚡' : p === 'tools-read' ? ' 🔧' : ' 🌐';
+        const tier = r.linked_token.tier || r.linked_token.permissions;
+        permBadge = tier === 'tools-write' ? ' ⚡' : tier === 'tools-read' ? ' 🔧' : ' 🌐';
       }
       
       console.log(`${statusIcon} ${r.name}${ownerText}${permBadge}`);
@@ -324,10 +333,12 @@ Or in code:
     // Show linked token (permissions you gave them)
     if (remote.linked_token) {
       const t = remote.linked_token;
-      const permLabel = t.permissions === 'tools-write' ? '⚡ tools-write' : 
-                        t.permissions === 'tools-read' ? '🔧 tools-read' : '🌐 chat-only';
+      const tier = t.tier || t.permissions;
+      const topics = t.allowed_topics || ['chat'];
+      const tierIcon = tier === 'tools-write' ? '⚡' : tier === 'tools-read' ? '🔧' : '🌐';
       console.log(`🔐 Your token to them: ${t.id}`);
-      console.log(`   Permissions: ${permLabel}`);
+      console.log(`   Tier: ${tierIcon} ${tier}`);
+      console.log(`   Topics: ${topics.join(', ')}`);
       console.log(`   Calls: ${t.calls_made}${t.max_calls ? '/' + t.max_calls : ''}`);
       if (t.revoked) console.log(`   ⚠️  REVOKED`);
     } else {
@@ -659,7 +670,8 @@ Commands:
     --name, -n        Token/agent name
     --owner, -o       Owner name (human behind the agent)
     --expires, -e     Expiration (1h, 1d, 7d, 30d, never)
-    --permissions, -p Permission level (chat-only, tools-read, tools-write)
+    --permissions, -p Tier (chat-only, tools-read, tools-write)
+    --topics          Custom topics (comma-separated, overrides tier defaults)
     --disclosure, -d  Disclosure level (public, minimal, none)
     --notify          Owner notification (all, summary, none)
     --max-calls       Maximum invocations (default: 100)
@@ -703,8 +715,9 @@ Legacy:
   
 Examples:
   a2a create --name "bappybot" --owner "Benjamin Pollack" --expires 7d
-  a2a contacts add oclaw://host/fed_xxx --name "Alice" --owner "Alice Chen" --trust verified
-  a2a contacts ping Alice
+  a2a create --name "custom" --topics "chat,calendar.read,email.read"
+  a2a contacts add oclaw://host/fed_xxx --name "Alice" --owner "Alice Chen"
+  a2a contacts link Alice tok_abc123
   a2a call Alice "Hello!"
   a2a server --port 3001
 `);

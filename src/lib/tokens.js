@@ -93,7 +93,10 @@ class TokenStore {
       permissions = 'chat-only',
       disclosure = 'minimal',
       notify = 'all',
-      maxCalls = 100  // Default limit, not unlimited
+      maxCalls = 100,  // Default limit, not unlimited
+      // Snapshot of actual capabilities at creation time
+      allowedTopics = null,  // Array of topic strings, e.g. ['chat', 'calendar.read']
+      tierSettings = null    // Object with tier-specific settings
     } = options;
 
     const token = TokenStore.generateToken();
@@ -101,13 +104,22 @@ class TokenStore {
     const durationMs = TokenStore.parseDuration(expires);
     const expiresAt = durationMs ? new Date(Date.now() + durationMs).toISOString() : null;
 
+    // Default topics based on permissions tier (snapshot at creation)
+    const defaultTopics = {
+      'chat-only': ['chat'],
+      'tools-read': ['chat', 'calendar.read', 'email.read', 'search'],
+      'tools-write': ['chat', 'calendar', 'email', 'search', 'tools']
+    };
+
     // Use separate random ID (not derived from token) to prevent prefix attacks
     const record = {
       id: 'tok_' + crypto.randomBytes(8).toString('hex'),
       token_hash: tokenHash,
       name,
       owner,
-      permissions,
+      tier: permissions,  // Keep tier label for display
+      allowed_topics: allowedTopics || defaultTopics[permissions] || ['chat'],
+      tier_settings: tierSettings || {},  // Snapshot of settings at creation
       disclosure,
       notify,
       max_calls: maxCalls,
@@ -173,7 +185,9 @@ class TokenStore {
       valid: true,
       id: record.id,
       name: record.name,
-      permissions: record.permissions,
+      tier: record.tier || record.permissions,  // backward compat
+      allowed_topics: record.allowed_topics || ['chat'],
+      tier_settings: record.tier_settings || {},
       disclosure: record.disclosure,
       notify: record.notify,
       calls_remaining: record.max_calls ? record.max_calls - record.calls_made : null
