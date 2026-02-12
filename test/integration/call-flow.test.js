@@ -353,7 +353,9 @@ module.exports = function (test, assert, helpers) {
 
     assert.equal(capturedContext.mode, 'a2a');
     assert.equal(capturedContext.token_name, 'Golda Deluxe');
-    assert.equal(capturedContext.tier, 'tools-read');
+    assert.equal(capturedContext.tier, 'friends');
+    assert.ok(capturedContext.capabilities);
+    assert.includes(capturedContext.capabilities, 'context-read');
     assert.equal(capturedContext.disclosure, 'public');
     assert.includes(capturedContext.allowed_topics, 'market-analysis');
     assert.equal(capturedContext.caller.name, 'Golda Deluxe');

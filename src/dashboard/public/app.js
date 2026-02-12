@@ -272,7 +272,7 @@ function renderInvites() {
     tr.innerHTML = `
       <td>${invite.id}</td>
       <td>${invite.name || '-'}</td>
-      <td>${invite.tier_label || invite.tier || '-'}</td>
+      <td>${invite.tier || '-'}</td>
       <td>${invite.calls_made || 0}${invite.max_calls ? `/${invite.max_calls}` : ''}</td>
       <td>${fmtDate(invite.expires_at)}</td>
       <td>${invite.revoked ? 'revoked' : 'active'}</td>

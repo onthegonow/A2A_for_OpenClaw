@@ -81,8 +81,7 @@ module.exports = function (test, assert, helpers) {
     // Verify token record
     assert.equal(record.name, 'Golda Deluxe');
     assert.equal(record.owner, null);
-    assert.equal(record.tier, 'tools-read');
-    assert.equal(record.tier_label, 'friends');
+    assert.equal(record.tier, 'friends');
     assert.equal(record.max_calls, 50);
     assert.includes(record.allowed_topics, 'market-analysis');
     assert.includes(record.allowed_topics, 'luxury-consulting');
@@ -92,7 +91,7 @@ module.exports = function (test, assert, helpers) {
     const validation = store.validate(token);
     assert.ok(validation.valid);
     assert.equal(validation.name, 'Golda Deluxe');
-    assert.equal(validation.tier, 'tools-read');
+    assert.equal(validation.tier, 'friends');
 
     // ── Step 5: Build full prompt from profile ─────────────────
     delete require.cache[require.resolve('../../src/lib/prompt-template')];

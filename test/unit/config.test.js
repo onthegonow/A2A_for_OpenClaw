@@ -63,13 +63,26 @@ module.exports = function (test, assert, helpers) {
     const config = freshConfig();
     config.setTier('public', {
       description: 'Updated description',
-      capabilities: ['chat-only']
+      capabilities: ['context-read', 'search']
     });
 
     const tiers = config.getTiers();
     assert.equal(tiers.public.description, 'Updated description');
-    assert.deepEqual(tiers.public.capabilities, ['chat-only']);
+    assert.deepEqual(tiers.public.capabilities, ['context-read', 'search']);
     assert.equal(tiers.public.name, 'Public'); // original field preserved
+    tmp.cleanup();
+  });
+
+  test('default tiers include default capabilities', () => {
+    const config = freshConfig();
+    const tiers = config.getTiers();
+
+    assert.deepEqual(tiers.public.capabilities, ['context-read']);
+    assert.includes(tiers.friends.capabilities, 'context-read');
+    assert.includes(tiers.friends.capabilities, 'calendar.read');
+    assert.includes(tiers.private.capabilities, 'tools');
+    assert.includes(tiers.private.capabilities, 'memory');
+    assert.deepEqual(tiers.custom.capabilities, ['context-read']);
     tmp.cleanup();
   });
 

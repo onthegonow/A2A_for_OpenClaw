@@ -22,7 +22,7 @@ const DEFAULT_CONFIG = {
     public: {
       name: 'Public',
       description: 'Basic networking - safe for anyone',
-      capabilities: [],
+      capabilities: ['context-read'],
       topics: [],
       goals: [],
       disclosure: 'minimal',
@@ -31,7 +31,7 @@ const DEFAULT_CONFIG = {
     friends: {
       name: 'Friends',
       description: 'Most capabilities, no sensitive financial data',
-      capabilities: [],
+      capabilities: ['context-read', 'calendar.read', 'email.read', 'search'],
       topics: [],
       goals: [],
       disclosure: 'public',
@@ -40,7 +40,7 @@ const DEFAULT_CONFIG = {
     private: {
       name: 'Private',
       description: 'Full access - only for you',
-      capabilities: [],
+      capabilities: ['context-read', 'calendar', 'email', 'search', 'tools', 'memory'],
       topics: [],
       goals: [],
       disclosure: 'public',
@@ -49,7 +49,7 @@ const DEFAULT_CONFIG = {
     custom: {
       name: 'Custom',
       description: 'User-defined permissions',
-      capabilities: [],
+      capabilities: ['context-read'],
       topics: [],
       goals: [],
       disclosure: 'minimal',

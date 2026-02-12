@@ -117,7 +117,7 @@ module.exports = function (test, assert, helpers) {
       allowedGoals: [...new Set(mergedGoals)]
     });
 
-    console.log(`  Token created: tier=${record.tier} label=${record.tier_label}`);
+    console.log(`  Token created: tier=${record.tier} label=${record.tier}`);
     console.log(`  Allowed topics: ${record.allowed_topics.join(', ')}`);
     console.log(`  Allowed goals:  ${record.allowed_goals.join(', ') || '(none)'}`);
 
@@ -263,7 +263,7 @@ module.exports = function (test, assert, helpers) {
       ensureContact(a2aContext.caller, a2aContext.token_id);
 
       const loadedManifest = disc.loadManifest();
-      const tierLabel = record.tier_label || 'friends';
+      const tierLabel = record.tier || 'friends';
       const tierTopics = disc.getTopicsForTier(tierLabel);
       const formattedTopics = disc.formatTopicsForPrompt(tierTopics);
 
@@ -493,7 +493,7 @@ module.exports = function (test, assert, helpers) {
     console.log('\n' + '═'.repeat(70));
     console.log(`  LOW-OVERLAP CALL TRANSCRIPT: Bramble Voss → ${bappybot.name}`);
     console.log(`  Conversation ID: ${conversationId}`);
-    console.log(`  Token tier: ${record.tier_label} (${record.tier})`);
+    console.log(`  Token tier: ${record.tier} (${record.tier})`);
     console.log(`  Allowed topics: ${record.allowed_topics.join(', ')}`);
     console.log(`  Allowed goals:  ${record.allowed_goals.join(', ') || '(none)'}`);
     console.log(`  Disclosure level: ${record.disclosure}`);
@@ -577,7 +577,7 @@ module.exports = function (test, assert, helpers) {
       `🌱 A2A Test Call — LOW OVERLAP`,
       ``,
       `📞 Bramble Voss (Josefina Araya) → ${bappybot.name}`,
-      `🔑 Tier: ${record.tier_label} (${record.tier})`,
+      `🔑 Tier: ${record.tier} (${record.tier})`,
       `📊 Topics: ${record.allowed_topics.join(', ')}`,
       `🎯 Goals: ${record.allowed_goals.join(', ') || '(none)'}`,
       `📊 ${transcript.length} messages across ${Math.ceil(transcript.length / 2)} turns`,

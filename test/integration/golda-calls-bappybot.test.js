@@ -105,7 +105,7 @@ module.exports = function (test, assert, helpers) {
       // NO tierSettings override — uses real config
     });
 
-    console.log(`  Token created: tier=${record.tier} label=${record.tier_label}`);
+    console.log(`  Token created: tier=${record.tier} label=${record.tier}`);
     console.log(`  Allowed topics: ${record.allowed_topics.join(', ')}`);
     console.log(`  Allowed goals:  ${record.allowed_goals.join(', ') || '(none)'}`);
 
@@ -209,7 +209,7 @@ module.exports = function (test, assert, helpers) {
 
       // Build connection prompt from disclosure manifest (mirrors server.js)
       const loadedManifest = disc.loadManifest();
-      const tierLabel = record.tier_label || 'public';
+      const tierLabel = record.tier || 'public';
       const tierTopics = disc.getTopicsForTier(tierLabel);
       const formattedTopics = disc.formatTopicsForPrompt(tierTopics);
 
@@ -384,7 +384,7 @@ module.exports = function (test, assert, helpers) {
     console.log('\n' + '═'.repeat(70));
     console.log(`  CALL TRANSCRIPT: Golda Deluxe → ${bappybot.name}`);
     console.log(`  Conversation ID: ${conversationId}`);
-    console.log(`  Token tier: ${record.tier_label} (${record.tier})`);
+    console.log(`  Token tier: ${record.tier} (${record.tier})`);
     console.log(`  Allowed topics: ${record.allowed_topics.join(', ')}`);
     console.log(`  Allowed goals:  ${record.allowed_goals.join(', ') || '(none)'}`);
     console.log(`  Disclosure level: ${record.disclosure}`);
@@ -442,7 +442,7 @@ module.exports = function (test, assert, helpers) {
       `🤝 A2A Test Call Complete`,
       ``,
       `📞 Golda Deluxe → ${bappybot.name}`,
-      `🔑 Tier: ${record.tier_label} (${record.tier})`,
+      `🔑 Tier: ${record.tier} (${record.tier})`,
       `📊 Topics: ${record.allowed_topics.join(', ')}`,
       `🎯 Goals: ${record.allowed_goals.join(', ') || '(none)'}`,
       `📊 ${transcript.length} messages across ${Math.ceil(transcript.length / 2)} turns`,

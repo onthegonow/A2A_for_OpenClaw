@@ -84,16 +84,6 @@ function parseTopicObjects(values) {
   return cleaned;
 }
 
-function inferPermissionForTier(tierId) {
-  const alias = {
-    public: 'chat-only',
-    friends: 'tools-read',
-    family: 'tools-write',
-    private: 'tools-write'
-  };
-  return alias[tierId] || tierId;
-}
-
 function formatInviteMessage({ owner, agentName, inviteUrl, topics, expiresText }) {
   const ownerText = owner || 'Someone';
   const topicsText = topics.length > 0 ? topics.join(', ') : 'chat';
@@ -485,13 +475,11 @@ function createDashboardApiRouter(options = {}) {
 
     const allowedTopics = sanitizeStringArray(body.topics || tier.topics || []);
     const allowedGoals = sanitizeStringArray(body.goals || tier.goals || []);
-    const permission = inferPermissionForTier(tierId);
-
     const { token, record } = context.tokenStore.create({
       name,
       owner,
       expires,
-      permissions: permission,
+      permissions: tierId,
       disclosure,
       notify,
       maxCalls,

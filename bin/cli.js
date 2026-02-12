@@ -99,7 +99,7 @@ const commands = {
       name: args.flags.name || args.flags.n || 'unnamed',
       owner: args.flags.owner || args.flags.o || null,
       expires: args.flags.expires || args.flags.e || 'never',
-      permissions: args.flags.permissions || args.flags.p || 'chat-only',
+      permissions: args.flags.permissions || args.flags.p || 'public',
       disclosure: args.flags.disclosure || args.flags.d || 'minimal',
       notify: args.flags.notify || 'all',
       maxCalls,
@@ -256,7 +256,7 @@ https://github.com/onthegonow/a2a_calling`;
       let permBadge = '';
       if (r.linked_token) {
         const tier = r.linked_token.tier || r.linked_token.permissions;
-        permBadge = tier === 'tools-write' ? ' ⚡' : tier === 'tools-read' ? ' 🔧' : ' 🌐';
+        permBadge = tier === 'family' ? ' ⚡' : tier === 'friends' ? ' 🔧' : ' 🌐';
       }
       
       console.log(`${statusIcon} ${r.name}${ownerText}${permBadge}`);
@@ -270,7 +270,7 @@ https://github.com/onthegonow/a2a_calling`;
       console.log();
     }
     
-    console.log('Legend: 🌐 chat-only  🔧 tools-read  ⚡ tools-write');
+    console.log('Legend: 🌐 public  🔧 friends  ⚡ family');
   },
 
   'contacts:add': (args) => {
@@ -343,7 +343,7 @@ https://github.com/onthegonow/a2a_calling`;
       const t = remote.linked_token;
       const tier = t.tier || t.permissions;
       const topics = t.allowed_topics || ['chat'];
-      const tierIcon = tier === 'tools-write' ? '⚡' : tier === 'tools-read' ? '🔧' : '🌐';
+      const tierIcon = tier === 'family' ? '⚡' : tier === 'friends' ? '🔧' : '🌐';
       console.log(`🔐 Your token to them: ${t.id}`);
       console.log(`   Tier: ${tierIcon} ${tier}`);
       console.log(`   Topics: ${topics.join(', ')}`);
@@ -432,8 +432,8 @@ https://github.com/onthegonow/a2a_calling`;
       process.exit(1);
     }
 
-    const permLabel = result.token.permissions === 'tools-write' ? '⚡ tools-write' : 
-                      result.token.permissions === 'tools-read' ? '🔧 tools-read' : '🌐 chat-only';
+    const permLabel = result.token.tier === 'family' ? '⚡ family' :
+                      result.token.tier === 'friends' ? '🔧 friends' : '🌐 public';
     
     console.log(`✅ Linked token to contact`);
     console.log(`   Contact: ${result.remote.name}`);
@@ -770,7 +770,7 @@ https://github.com/onthegonow/a2a_calling`;
         name,
         owner,
         expires: '7d',
-        permissions: 'chat-only',
+        permissions: 'public',
         maxCalls: 100
       });
 
@@ -823,7 +823,7 @@ Commands:
     --name, -n        Token/agent name
     --owner, -o       Owner name (human behind the agent)
     --expires, -e     Expiration (1h, 1d, 7d, 30d, never)
-    --permissions, -p Tier (chat-only, tools-read, tools-write)
+    --permissions, -p Tier (public, friends, family)
     --topics          Custom topics (comma-separated, overrides tier defaults)
     --disclosure, -d  Disclosure level (public, minimal, none)
     --notify          Owner notification (all, summary, none)
@@ -847,7 +847,7 @@ Contacts:
   contacts ping <n>   Ping contact, update status
   contacts rm <n>     Remove contact
 
-Permission badges: 🌐 chat-only  🔧 tools-read  ⚡ tools-write
+Permission badges: 🌐 public  🔧 friends  ⚡ family
 
 Conversations:
   conversations       List all conversations

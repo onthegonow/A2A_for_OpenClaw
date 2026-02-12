@@ -229,6 +229,7 @@ function createRoutes(options = {}) {
       token_id: validation.id,
       token_name: validation.name,
       tier: validation.tier,
+      capabilities: validation.capabilities,
       allowed_topics: validation.allowed_topics,
       disclosure: validation.disclosure,
       caller: sanitizedCaller,

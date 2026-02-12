@@ -98,8 +98,8 @@ module.exports = function (test, assert, helpers) {
     assert.match(record.id, /^tok_/);
     assert.equal(record.name, 'unnamed');
     assert.equal(record.owner, null);
-    assert.equal(record.tier, 'chat-only');
-    assert.equal(record.tier_label, 'chat-only');
+    assert.equal(record.tier, 'public');
+    assert.deepEqual(record.capabilities, ['context-read']);
     assert.deepEqual(record.allowed_topics, ['chat']);
     assert.deepEqual(record.allowed_goals, []);
     assert.equal(record.disclosure, 'minimal');
@@ -118,8 +118,8 @@ module.exports = function (test, assert, helpers) {
     assert.match(token, /^fed_/);
     assert.equal(record.name, 'Golda Deluxe');
     assert.equal(record.owner, null); // unnamed owner
-    assert.equal(record.tier, 'tools-read'); // friends normalizes to tools-read
-    assert.equal(record.tier_label, 'friends');
+    assert.equal(record.tier, 'friends');
+    assert.deepEqual(record.capabilities, ['context-read', 'calendar.read', 'email.read', 'search']);
     assert.equal(record.disclosure, 'public');
     assert.equal(record.max_calls, 50);
     assert.deepEqual(record.allowed_topics, profile.token.allowedTopics);
@@ -133,20 +133,37 @@ module.exports = function (test, assert, helpers) {
     cleanup();
   });
 
-  test('tier aliases normalize correctly', () => {
+  test('tiers stored as labels with capabilities', () => {
     const store = freshStore();
 
     const pub = store.create({ permissions: 'public' });
-    assert.equal(pub.record.tier, 'chat-only');
-    assert.equal(pub.record.tier_label, 'public');
+    assert.equal(pub.record.tier, 'public');
+    assert.deepEqual(pub.record.capabilities, ['context-read']);
 
     const friend = store.create({ permissions: 'friends' });
-    assert.equal(friend.record.tier, 'tools-read');
-    assert.equal(friend.record.tier_label, 'friends');
+    assert.equal(friend.record.tier, 'friends');
+    assert.includes(friend.record.capabilities, 'context-read');
+    assert.includes(friend.record.capabilities, 'calendar.read');
 
     const family = store.create({ permissions: 'family' });
-    assert.equal(family.record.tier, 'tools-write');
-    assert.equal(family.record.tier_label, 'family');
+    assert.equal(family.record.tier, 'family');
+    assert.includes(family.record.capabilities, 'tools');
+    assert.includes(family.record.capabilities, 'memory');
+
+    tmp.cleanup();
+  });
+
+  test('legacy tier values mapped to labels on create', () => {
+    const store = freshStore();
+
+    const pub = store.create({ permissions: 'chat-only' });
+    assert.equal(pub.record.tier, 'public');
+
+    const friend = store.create({ permissions: 'tools-read' });
+    assert.equal(friend.record.tier, 'friends');
+
+    const family = store.create({ permissions: 'tools-write' });
+    assert.equal(family.record.tier, 'family');
 
     tmp.cleanup();
   });
@@ -219,7 +236,9 @@ module.exports = function (test, assert, helpers) {
     const result = store.validate(token);
     assert.ok(result.valid);
     assert.equal(result.name, 'Golda Deluxe');
-    assert.equal(result.tier, 'tools-read');
+    assert.equal(result.tier, 'friends');
+    assert.ok(result.capabilities);
+    assert.includes(result.capabilities, 'context-read');
     assert.equal(result.disclosure, 'public');
     assert.includes(result.allowed_topics, 'market-analysis');
     assert.deepEqual(result.allowed_goals, profile.token.allowedGoals);

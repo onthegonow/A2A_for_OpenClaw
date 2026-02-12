@@ -47,7 +47,7 @@
  * ARCHITECTURE REFERENCE
  * ──────────────────────
  * Token record fields:
- *   id, token_hash, name, owner, tier, tier_label, allowed_topics,
+ *   id, token_hash, name, owner, tier, capabilities, allowed_topics,
  *   allowed_goals, tier_settings, disclosure, notify, max_calls,
  *   calls_made, created_at, expires_at, revoked
  *
