@@ -19,8 +19,12 @@ const {
   buildAdaptiveConnectionPrompt,
   extractCollaborationState
 } = require('./lib/prompt-template');
+const { findAvailablePort } = require('./lib/port-scanner');
 
-const port = process.env.PORT || parseInt(process.argv[2]) || 3001;
+const DEFAULT_PORTS = [80, 3001, 8080, 8443, 9001];
+const requestedPort = process.env.PORT ? parseInt(process.env.PORT, 10)
+  : process.argv[2] ? parseInt(process.argv[2], 10)
+  : null;
 const workspaceDir = process.env.A2A_WORKSPACE || process.env.OPENCLAW_WORKSPACE || process.cwd();
 
 // Load workspace context for agent identity
@@ -632,10 +636,43 @@ app.get('/', (req, res) => {
   res.json({ service: 'a2a', status: 'ok', agent: agentContext.name });
 });
 
-app.listen(port, () => {
-  console.log(`[a2a] A2A server listening on port ${port}`);
-  console.log(`[a2a] Agent: ${agentContext.name} - LIVE`);
-  console.log(`[a2a] Runtime mode: ${runtime.mode}${runtime.failoverEnabled ? ' (failover enabled)' : ''}`);
-  console.log(`[a2a] Collaboration mode: ${resolveCollabMode()}`);
-  console.log(`[a2a] Features: adaptive collaboration, auto-contacts, summaries, dashboard`);
-});
+async function startServer() {
+  let port;
+
+  if (requestedPort) {
+    // Explicit port requested — try it first, fall back to defaults if busy
+    const { isPortAvailable } = require('./lib/port-scanner');
+    if (await isPortAvailable(requestedPort)) {
+      port = requestedPort;
+    } else {
+      console.warn(`[a2a] Requested port ${requestedPort} is in use, scanning for alternatives...`);
+      port = await findAvailablePort(DEFAULT_PORTS);
+    }
+  } else {
+    port = await findAvailablePort(DEFAULT_PORTS);
+  }
+
+  if (!port) {
+    console.error(`[a2a] No available port found. Tried: ${requestedPort ? requestedPort + ', ' : ''}${DEFAULT_PORTS.join(', ')}`);
+    console.error('[a2a] Set PORT env or free one of the default ports.');
+    process.exit(1);
+  }
+
+  const server = app.listen(port, () => {
+    console.log(`[a2a] A2A server listening on port ${port}`);
+    console.log(`[a2a] Agent: ${agentContext.name} - LIVE`);
+    console.log(`[a2a] Runtime mode: ${runtime.mode}${runtime.failoverEnabled ? ' (failover enabled)' : ''}`);
+    console.log(`[a2a] Collaboration mode: ${resolveCollabMode()}`);
+    console.log(`[a2a] Features: adaptive collaboration, auto-contacts, summaries, dashboard`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[a2a] Port ${port} became unavailable (EADDRINUSE). Exiting.`);
+      process.exit(1);
+    }
+    throw err;
+  });
+}
+
+startServer();

@@ -39,6 +39,23 @@ function getConvStore() {
 
 const store = new TokenStore();
 
+// Check onboarding status — warns but does not block
+function checkOnboarding(commandName) {
+  try {
+    const { A2AConfig } = require('../src/lib/config');
+    const config = new A2AConfig();
+    if (!config.isOnboarded()) {
+      console.warn('\n\u26a0\ufe0f  A2A onboarding not complete.');
+      console.warn('   Run "a2a quickstart" first to set up your agent\'s disclosure topics and permissions.');
+      console.warn('   Without onboarding, invites will have empty topics and calls use generic responses.\n');
+      return false;
+    }
+    return true;
+  } catch (e) {
+    return true; // Don't block if config is broken
+  }
+}
+
 // Format relative time
 function formatTimeAgo(date) {
   const seconds = Math.floor((new Date() - date) / 1000);
@@ -73,14 +90,29 @@ function parseArgs(argv) {
   return args;
 }
 
-// Get hostname for invite URLs
-function getHostname() {
-  return process.env.A2A_HOSTNAME || process.env.OPENCLAW_HOSTNAME || process.env.HOSTNAME || 'localhost';
+async function resolveInviteHostname() {
+  const { resolveInviteHost } = require('../src/lib/invite-host');
+
+  try {
+    const { A2AConfig } = require('../src/lib/config');
+    const config = new A2AConfig();
+    const resolved = await resolveInviteHost({
+      config,
+      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001
+    });
+    return resolved;
+  } catch (err) {
+    return resolveInviteHost({
+      fallbackHost: process.env.OPENCLAW_HOSTNAME || process.env.HOSTNAME || 'localhost',
+      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001
+    });
+  }
 }
 
 // Commands
 const commands = {
-  create: (args) => {
+  create: async (args) => {
+    checkOnboarding('create');
     // Parse max-calls: number, 'unlimited', or default (unlimited)
     let maxCalls = null; // Default: unlimited
     if (args.flags['max-calls']) {
@@ -106,12 +138,20 @@ const commands = {
       allowedTopics: customTopics
     });
 
-    const hostname = getHostname();
+    const resolvedHost = await resolveInviteHostname();
+    const hostname = resolvedHost.host;
     const inviteUrl = `a2a://${hostname}/${token}`;
 
     const expiresText = record.expires_at 
       ? new Date(record.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       : 'never';
+
+    if (resolvedHost.warnings && resolvedHost.warnings.length) {
+      for (const w of resolvedHost.warnings) {
+        console.warn(`\n⚠️  ${w}`);
+      }
+      console.warn('');
+    }
 
     // Auto-link to contact if specified
     const linkContact = args.flags.link || args.flags.l;
@@ -636,6 +676,7 @@ https://github.com/onthegonow/a2a_calling`;
   },
 
   call: async (args) => {
+    checkOnboarding('call');
     let target = args._[1];
     const message = args._.slice(2).join(' ') || args.flags.message || args.flags.m;
 
@@ -723,29 +764,60 @@ https://github.com/onthegonow/a2a_calling`;
   },
 
   server: (args) => {
-    const port = args.flags.port || args.flags.p || process.env.PORT || 3001;
-    process.env.PORT = port;
-    console.log(`Starting A2A server on port ${port}...`);
+    const explicitPort = args.flags.port || args.flags.p || process.env.PORT;
+    if (explicitPort) {
+      process.env.PORT = explicitPort;
+      console.log(`Starting A2A server on port ${explicitPort}...`);
+    } else {
+      console.log('Starting A2A server (scanning for available port)...');
+    }
     require('../src/server.js');
   },
 
   quickstart: (args) => {
-    const hostname = process.env.A2A_HOSTNAME || process.env.HOSTNAME || 'localhost:3001';
+    // Auto-complete onboarding if not done
+    try {
+      const { A2AConfig } = require('../src/lib/config');
+      const { readContextFiles, generateDefaultManifest, saveManifest } = require('../src/lib/disclosure');
+      const conf = new A2AConfig();
+      if (!conf.isOnboarded()) {
+        console.log('Setting up disclosure manifest from workspace context...');
+        const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
+        const contextFiles = readContextFiles(workspaceDir);
+        const manifest = generateDefaultManifest(contextFiles);
+        saveManifest(manifest);
+
+        const sources = [];
+        if (contextFiles.user) sources.push('USER.md');
+        if (contextFiles.heartbeat) sources.push('HEARTBEAT.md');
+        if (contextFiles.soul) sources.push('SOUL.md');
+        if (contextFiles.skill) sources.push('SKILL.md');
+        if (contextFiles.memory) sources.push('memory/*.md');
+        if (contextFiles.skills) sources.push('installed skills');
+        if (contextFiles.claude) sources.push('CLAUDE.md');
+        console.log(`   Sources: ${sources.length > 0 ? sources.join(', ') : '(none found - using defaults)'}`);
+
+        conf.completeOnboarding();
+        console.log('   \u2705 Disclosure manifest generated and onboarding marked complete.\n');
+      }
+    } catch (e) {
+      // Non-fatal, continue with quickstart
+    }
+
+    const http = require('http');
+    const { splitHostPort } = require('../src/lib/invite-host');
+    const resolveHostPromise = resolveInviteHostname();
     const name = args.flags.name || args.flags.n || 'My Agent';
     const owner = args.flags.owner || args.flags.o || null;
-    
+
     console.log(`\n🚀 A2A Quickstart\n${'═'.repeat(50)}\n`);
     
     // Step 1: Check server
     console.log('1️⃣  Checking server status...');
-    const http = require('http');
-    const serverHost = hostname.split(':')[0];
-    const serverPort = hostname.split(':')[1] || 3001;
-    
-    const checkServer = () => new Promise((resolve) => {
+    const checkServer = (port) => new Promise((resolve) => {
       const req = http.request({
-        hostname: serverHost === 'localhost' ? '127.0.0.1' : serverHost,
-        port: serverPort,
+        hostname: '127.0.0.1',
+        port,
         path: '/api/a2a/ping',
         timeout: 2000
       }, (res) => {
@@ -756,10 +828,15 @@ https://github.com/onthegonow/a2a_calling`;
       req.end();
     });
 
-    checkServer().then(serverOk => {
+    resolveHostPromise.then(resolved => {
+      const parsed = splitHostPort(resolved.host);
+      const serverPort = parsed.port || 3001;
+      return checkServer(serverPort).then(serverOk => ({ serverOk, resolved, serverPort }));
+    }).then(({ serverOk, resolved, serverPort }) => {
+      const hostname = resolved.host;
       if (!serverOk) {
         console.log('   ⚠️  Server not running!');
-        console.log(`   Run: A2A_HOSTNAME="${hostname}" a2a server\n`);
+        console.log(`   Run: A2A_HOSTNAME="${hostname}" a2a server --port ${serverPort}\n`);
       } else {
         console.log('   ✅ Server running\n');
       }
@@ -778,6 +855,13 @@ https://github.com/onthegonow/a2a_calling`;
       const expiresText = new Date(record.expires_at).toLocaleDateString('en-US', { 
         month: 'short', day: 'numeric', year: 'numeric' 
       });
+
+      if (resolved.warnings && resolved.warnings.length) {
+        for (const w of resolved.warnings) {
+          console.warn(`\n⚠️  ${w}`);
+        }
+        console.warn('');
+      }
 
       // Step 3: Show the invite
       const ownerText = owner ? `${owner}` : 'Someone';
@@ -811,6 +895,157 @@ https://github.com/onthegonow/a2a_calling
 
   setup: () => {
     require('../scripts/install-openclaw.js');
+  },
+
+  update: async (args) => {
+    const { execSync } = require('child_process');
+    const path = require('path');
+    const pkg = require('../package.json');
+    const currentVersion = pkg.version;
+    const checkOnly = args.flags.check || args.flags.c;
+
+    console.log(`\n📦 A2A Update\n${'─'.repeat(50)}\n`);
+    console.log(`   Installed: v${currentVersion}`);
+
+    // Detect install method
+    const pkgRoot = path.resolve(__dirname, '..');
+    const isGitRepo = require('fs').existsSync(path.join(pkgRoot, '.git'));
+
+    if (isGitRepo) {
+      // Git clone — use git pull
+      console.log(`   Source:    git (${pkgRoot})\n`);
+
+      if (checkOnly) {
+        try {
+          execSync('git fetch --quiet', { cwd: pkgRoot, stdio: 'pipe' });
+          const behind = execSync('git rev-list HEAD..@{u} --count', { cwd: pkgRoot, encoding: 'utf8' }).trim();
+          if (behind === '0') {
+            console.log('   \u2705 Already up to date.\n');
+          } else {
+            console.log(`   \u2b06\ufe0f  ${behind} commit(s) behind. Run "a2a update" to pull.\n`);
+          }
+        } catch (e) {
+          console.log('   \u26a0\ufe0f  Could not check remote (no upstream or network error).\n');
+        }
+        return;
+      }
+
+      console.log('   Pulling latest...');
+      try {
+        const output = execSync('git pull --ff-only 2>&1', { cwd: pkgRoot, encoding: 'utf8' });
+        console.log(`   ${output.trim()}\n`);
+      } catch (e) {
+        const stderr = e.stderr ? e.stderr.toString() : e.message;
+        console.error(`   \u274c Git pull failed: ${stderr.trim()}`);
+        console.error('   Try: cd ' + pkgRoot + ' && git pull manually.\n');
+        process.exit(1);
+      }
+
+      // Re-install deps if package.json changed
+      console.log('   Installing dependencies...');
+      try {
+        execSync('npm install --production 2>&1', { cwd: pkgRoot, encoding: 'utf8', timeout: 120000 });
+      } catch (e) {
+        console.warn('   \u26a0\ufe0f  npm install had warnings (non-fatal).');
+      }
+    } else {
+      // npm global install — use npm update
+      console.log('   Source:    npm global\n');
+
+      // Check latest version on npm
+      let latestVersion;
+      try {
+        latestVersion = execSync('npm view a2acalling version 2>/dev/null', { encoding: 'utf8', timeout: 15000 }).trim();
+        console.log(`   Latest:    v${latestVersion}`);
+      } catch (e) {
+        console.error('   \u274c Could not check npm registry. Check your network.\n');
+        process.exit(1);
+      }
+
+      if (latestVersion === currentVersion) {
+        console.log('\n   \u2705 Already up to date.\n');
+        return;
+      }
+
+      if (checkOnly) {
+        console.log(`\n   \u2b06\ufe0f  Update available: v${currentVersion} \u2192 v${latestVersion}`);
+        console.log('   Run "a2a update" to install.\n');
+        return;
+      }
+
+      console.log(`\n   Updating v${currentVersion} \u2192 v${latestVersion}...`);
+      try {
+        execSync('npm install -g a2acalling@latest 2>&1', { encoding: 'utf8', timeout: 120000 });
+        console.log('   \u2705 npm package updated.\n');
+      } catch (e) {
+        const stderr = e.stderr ? e.stderr.toString() : e.message;
+        console.error(`   \u274c npm update failed: ${stderr.trim()}`);
+        console.error('   Try: npm install -g a2acalling@latest manually.\n');
+        process.exit(1);
+      }
+    }
+
+    // Re-run install to sync SKILL.md and config
+    console.log('   Syncing SKILL.md and config...');
+    try {
+      const installScript = path.join(pkgRoot, 'scripts', 'install-openclaw.js');
+      execSync(`node "${installScript}" install 2>&1`, { encoding: 'utf8', timeout: 30000 });
+    } catch (e) {
+      console.warn('   \u26a0\ufe0f  Post-update install sync had warnings (non-fatal).');
+    }
+
+    // Show new version
+    try {
+      delete require.cache[require.resolve('../package.json')];
+      const newPkg = require('../package.json');
+      console.log(`\n   \u2705 Updated to v${newPkg.version}\n`);
+    } catch (e) {
+      console.log('\n   \u2705 Update complete.\n');
+    }
+  },
+
+  onboard: (args) => {
+    const { A2AConfig } = require('../src/lib/config');
+    const { readContextFiles, generateDefaultManifest, saveManifest, MANIFEST_FILE } = require('../src/lib/disclosure');
+    const config = new A2AConfig();
+
+    if (config.isOnboarded() && !args.flags.force) {
+      console.log('\u2705 Onboarding already complete. Use --force to re-run.');
+      return;
+    }
+
+    const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
+    console.log('\n\ud83d\ude80 A2A Onboarding\n' + '\u2550'.repeat(50) + '\n');
+    console.log('Scanning workspace for context...\n');
+
+    const contextFiles = readContextFiles(workspaceDir);
+    // Print what was found
+    const sources = {
+      'USER.md': contextFiles.user,
+      'HEARTBEAT.md': contextFiles.heartbeat,
+      'SOUL.md': contextFiles.soul,
+      'SKILL.md': contextFiles.skill,
+      'CLAUDE.md': contextFiles.claude,
+      'memory/*.md': contextFiles.memory,
+      'Installed skills': contextFiles.skills
+    };
+    for (const [name, content] of Object.entries(sources)) {
+      console.log(`   ${content ? '\u2705' : '\u274c'} ${name}`);
+    }
+
+    const manifest = generateDefaultManifest(contextFiles);
+    saveManifest(manifest);
+
+    const agentName = args.flags.name || config.getAgent().name || process.env.A2A_AGENT_NAME || '';
+    const hostname = args.flags.hostname || config.getAgent().hostname || process.env.A2A_HOSTNAME || '';
+    if (agentName) config.setAgent({ name: agentName });
+    if (hostname) config.setAgent({ hostname });
+
+    config.completeOnboarding();
+
+    console.log(`\n\u2705 Onboarding complete!`);
+    console.log(`   Manifest: ${MANIFEST_FILE}`);
+    console.log(`   Next: a2a quickstart  or  a2a server\n`);
   },
 
   help: () => {
@@ -871,9 +1106,17 @@ Server:
     --name, -n        Agent name for the invite
     --owner, -o       Owner name (human behind the agent)
   
+  onboard             Generate disclosure manifest from workspace context
+    --force           Re-run even if already onboarded
+    --name            Agent name
+    --hostname        Agent hostname
+
+  update              Update A2A to latest version (npm or git pull)
+    --check, -c       Check for updates without installing
+
   install             Install A2A for OpenClaw
   setup               Auto setup (gateway-aware dashboard install)
-  
+
 Examples:
   a2a create --name "bappybot" --owner "Benjamin Pollack" --expires 7d
   a2a create --name "custom" --topics "chat,calendar.read,email.read"

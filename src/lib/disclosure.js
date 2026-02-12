@@ -135,7 +135,8 @@ function generateDefaultManifest(contextFiles = {}) {
   const heartbeatContent = contextFiles.heartbeat || '';
   const soulContent = contextFiles.soul || '';
 
-  const hasContent = userContent || heartbeatContent || soulContent;
+  const hasContent = userContent || heartbeatContent || soulContent ||
+    contextFiles.skill || contextFiles.memory || contextFiles.skills || contextFiles.claude;
 
   if (!hasContent) {
     // Minimal starter manifest
@@ -252,6 +253,52 @@ function generateDefaultManifest(contextFiles = {}) {
     }
   }
 
+  // Extract capability keywords from SKILL.md and installed skills
+  const skillContent = (contextFiles.skill || '') + '\n' + (contextFiles.skills || '');
+  if (skillContent.trim()) {
+    const capabilityLines = skillContent
+      .split('\n')
+      .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
+      .map(l => l.replace(/^[\s\-\*]+/, '').trim())
+      .filter(l => l.length > 5 && l.length < 120)
+      .slice(0, 6);
+
+    capabilityLines.forEach(cap => {
+      manifest.topics.public.discuss_freely.push({ topic: cap.slice(0, 60), detail: cap });
+    });
+  }
+
+  // Extract topic keywords from memory files
+  if (contextFiles.memory) {
+    const memoryLines = contextFiles.memory
+      .split('\n')
+      .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
+      .map(l => l.replace(/^[\s\-\*]+/, '').trim())
+      .filter(l => l.length > 5 && l.length < 120)
+      .slice(0, 4);
+
+    memoryLines.forEach(item => {
+      manifest.topics.friends.discuss_freely.push({ topic: item.slice(0, 60), detail: item });
+    });
+  }
+
+  // Extract project context from CLAUDE.md
+  if (contextFiles.claude) {
+    const claudeMatch = contextFiles.claude.match(/##\s*(?:What|Quick|About|Context)[^\n]*\n([\s\S]*?)(?=\n##|$)/i);
+    if (claudeMatch) {
+      const contextLines = claudeMatch[1]
+        .split('\n')
+        .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*') || (l.trim().length > 10 && !l.startsWith('#')))
+        .map(l => l.replace(/^[\s\-\*]+/, '').trim())
+        .filter(Boolean)
+        .slice(0, 3);
+
+      contextLines.forEach(item => {
+        manifest.topics.public.discuss_freely.push({ topic: item.slice(0, 60), detail: item });
+      });
+    }
+  }
+
   // Ensure at least something in each public category
   if (manifest.topics.public.lead_with.length === 0) {
     manifest.topics.public.lead_with.push(
@@ -274,7 +321,7 @@ function generateDefaultManifest(contextFiles = {}) {
 
 /**
  * Read context files from an OpenClaw workspace directory.
- * Returns { user, heartbeat, soul } with file contents or empty strings.
+ * Returns { user, heartbeat, soul, skill, claude, memory, skills } with file contents or empty strings.
  */
 function readContextFiles(workspaceDir) {
   const read = (filename) => {
@@ -287,11 +334,55 @@ function readContextFiles(workspaceDir) {
     return '';
   };
 
-  return {
+  // Read primary files
+  const result = {
     user: read('USER.md'),
     heartbeat: read('HEARTBEAT.md'),
-    soul: read('SOUL.md')
+    soul: read('SOUL.md'),
+    skill: read('SKILL.md'),
+    claude: read('CLAUDE.md')
   };
+
+  // Scan memory/*.md
+  const memoryDir = path.join(workspaceDir, 'memory');
+  result.memory = '';
+  if (fs.existsSync(memoryDir)) {
+    try {
+      const files = fs.readdirSync(memoryDir).filter(f => f.endsWith('.md'));
+      result.memory = files.map(f => {
+        try { return fs.readFileSync(path.join(memoryDir, f), 'utf8'); }
+        catch (e) { return ''; }
+      }).filter(Boolean).join('\n---\n');
+    } catch (e) {}
+  }
+
+  // Scan installed skills from both OpenClaw and standalone paths
+  const homeDir = process.env.HOME || '/tmp';
+  const skillsDirs = [
+    process.env.OPENCLAW_SKILLS || path.join(homeDir, '.openclaw', 'skills'),
+    path.join(CONFIG_DIR, 'skills')
+  ];
+  const skillFragments = [];
+  const seenSkillDirs = new Set();
+  for (const skillsDir of skillsDirs) {
+    if (!fs.existsSync(skillsDir) || seenSkillDirs.has(skillsDir)) continue;
+    seenSkillDirs.add(skillsDir);
+    try {
+      const dirs = fs.readdirSync(skillsDir).filter(d => {
+        try { return fs.statSync(path.join(skillsDir, d)).isDirectory(); }
+        catch (e) { return false; }
+      });
+      for (const d of dirs) {
+        try {
+          const content = fs.readFileSync(path.join(skillsDir, d, 'SKILL.md'), 'utf8');
+          if (content) skillFragments.push(content);
+        } catch (e) {}
+      }
+    } catch (e) {}
+  }
+  result.skills = skillFragments.join('\n---\n');
+
+  return result;
 }
 
 module.exports = {

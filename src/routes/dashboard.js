@@ -15,6 +15,7 @@ const { TokenStore } = require('../lib/tokens');
 const { ConversationStore } = require('../lib/conversations');
 const { A2AConfig } = require('../lib/config');
 const { loadManifest, saveManifest } = require('../lib/disclosure');
+const { resolveInviteHost } = require('../lib/invite-host');
 
 const DASHBOARD_STATIC_DIR = path.join(__dirname, '..', 'dashboard', 'public');
 
@@ -473,7 +474,7 @@ function createDashboardApiRouter(options = {}) {
     return res.json({ success: true, invites: tokens });
   });
 
-  router.post('/invites', (req, res) => {
+  router.post('/invites', async (req, res) => {
     const body = req.body || {};
     const cfg = context.config.getAll();
     const tierId = normalizeTierId(body.tier || body.permissions || 'public') || 'public';
@@ -506,7 +507,11 @@ function createDashboardApiRouter(options = {}) {
       }
     });
 
-    const host = process.env.A2A_HOSTNAME || req.get('host') || 'localhost:3001';
+    const resolvedHost = await resolveInviteHost({
+      config: context.config,
+      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001
+    });
+    const host = resolvedHost.host;
     const inviteUrl = `a2a://${host}/${token}`;
     const expiresText = record.expires_at || 'never';
     const message = formatInviteMessage({
@@ -522,6 +527,7 @@ function createDashboardApiRouter(options = {}) {
       success: true,
       invite_url: inviteUrl,
       invite_message: message,
+      warnings: resolvedHost.warnings || [],
       token: record
     });
   });

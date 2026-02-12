@@ -213,6 +213,9 @@ Prefers deep technical discussions over small talk.
     assert.equal(result.user, '');
     assert.equal(result.heartbeat, '');
     assert.equal(result.soul, '');
+    assert.equal(result.skill, '');
+    assert.equal(result.claude, '');
+    assert.equal(result.memory, '');
     tmp.cleanup();
   });
 
@@ -228,6 +231,93 @@ Prefers deep technical discussions over small talk.
     assert.equal(result.user, '# Test User');
     assert.equal(result.soul, '# Test Soul');
     assert.equal(result.heartbeat, '');
+    tmp.cleanup();
+  });
+
+  test('readContextFiles reads SKILL.md and CLAUDE.md', () => {
+    const disc = freshDisclosure();
+    const fs = require('fs');
+    const path = require('path');
+
+    fs.writeFileSync(path.join(tmp.dir, 'SKILL.md'), '# My Skill');
+    fs.writeFileSync(path.join(tmp.dir, 'CLAUDE.md'), '# Project Config');
+
+    const result = disc.readContextFiles(tmp.dir);
+    assert.equal(result.skill, '# My Skill');
+    assert.equal(result.claude, '# Project Config');
+    tmp.cleanup();
+  });
+
+  test('readContextFiles reads memory/*.md files', () => {
+    const disc = freshDisclosure();
+    const fs = require('fs');
+    const path = require('path');
+
+    const memDir = path.join(tmp.dir, 'memory');
+    fs.mkdirSync(memDir, { recursive: true });
+    fs.writeFileSync(path.join(memDir, 'notes.md'), '- Important note');
+    fs.writeFileSync(path.join(memDir, 'context.md'), '- Another note');
+
+    const result = disc.readContextFiles(tmp.dir);
+    assert.ok(result.memory.includes('Important note'));
+    assert.ok(result.memory.includes('Another note'));
+    tmp.cleanup();
+  });
+
+  // ── Expanded Manifest Generation ───────────────────────────────
+
+  test('generateDefaultManifest uses skill content to add topics', () => {
+    const disc = freshDisclosure();
+    const manifest = disc.generateDefaultManifest({
+      skill: `# My Skill
+- Handle API authentication
+- Process payment webhooks
+- Generate PDF reports
+`
+    });
+
+    const publicDiscuss = manifest.topics.public.discuss_freely.map(t => t.detail);
+    assert.ok(publicDiscuss.some(t => t.includes('API authentication')));
+    tmp.cleanup();
+  });
+
+  test('generateDefaultManifest uses memory content to add topics', () => {
+    const disc = freshDisclosure();
+    const manifest = disc.generateDefaultManifest({
+      memory: `- Working on distributed systems architecture
+- Interested in real-time collaboration tools
+`
+    });
+
+    const friendsDiscuss = manifest.topics.friends.discuss_freely.map(t => t.detail);
+    assert.ok(friendsDiscuss.some(t => t.includes('distributed systems')));
+    tmp.cleanup();
+  });
+
+  test('generateDefaultManifest uses CLAUDE.md context', () => {
+    const disc = freshDisclosure();
+    const manifest = disc.generateDefaultManifest({
+      claude: `# Project
+## Quick Context
+- A2A enables agent-to-agent communication
+- Token management for scoped permissions
+`
+    });
+
+    const publicDiscuss = manifest.topics.public.discuss_freely.map(t => t.detail);
+    assert.ok(publicDiscuss.some(t => t.includes('agent-to-agent')));
+    tmp.cleanup();
+  });
+
+  test('generateDefaultManifest with only new context fields returns non-starter', () => {
+    const disc = freshDisclosure();
+    const manifest = disc.generateDefaultManifest({
+      skill: '- Handle webhooks\n- Process data pipelines'
+    });
+
+    // Should not be the minimal starter (which only has generic topics)
+    const publicDiscuss = manifest.topics.public.discuss_freely.map(t => t.detail);
+    assert.ok(publicDiscuss.some(t => t.includes('webhooks') || t.includes('pipelines')));
     tmp.cleanup();
   });
 };

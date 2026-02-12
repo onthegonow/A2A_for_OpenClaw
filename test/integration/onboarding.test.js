@@ -196,6 +196,53 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
+  test('checkOnboarding returns false before onboarding, true after', () => {
+    tmp = helpers.tmpConfigDir('onboard-check');
+    delete require.cache[require.resolve('../../src/lib/config')];
+    const { A2AConfig } = require('../../src/lib/config');
+
+    const config = new A2AConfig();
+    assert.equal(config.isOnboarded(), false);
+
+    config.completeOnboarding();
+    assert.equal(config.isOnboarded(), true);
+
+    // Reset and verify
+    config.resetOnboarding();
+    assert.equal(config.isOnboarded(), false);
+
+    tmp.cleanup();
+  });
+
+  test('quickstart auto-completes onboarding when not done', () => {
+    tmp = helpers.tmpConfigDir('onboard-quickstart');
+    delete require.cache[require.resolve('../../src/lib/config')];
+    delete require.cache[require.resolve('../../src/lib/disclosure')];
+    const { A2AConfig } = require('../../src/lib/config');
+    const { readContextFiles, generateDefaultManifest, saveManifest, loadManifest } = require('../../src/lib/disclosure');
+
+    const config = new A2AConfig();
+    assert.equal(config.isOnboarded(), false);
+
+    // Simulate what quickstart does
+    const workspaceDir = tmp.dir;
+    const fs = require('fs');
+    const path = require('path');
+    fs.writeFileSync(path.join(workspaceDir, 'USER.md'), '## Goals\n- Build cool tools\n');
+
+    const contextFiles = readContextFiles(workspaceDir);
+    const manifest = generateDefaultManifest(contextFiles);
+    saveManifest(manifest);
+    config.completeOnboarding();
+
+    assert.equal(config.isOnboarded(), true);
+    const loaded = loadManifest();
+    assert.ok(loaded.version);
+    assert.ok(loaded.topics);
+
+    tmp.cleanup();
+  });
+
   test('Golda profile exercises all tier levels correctly', () => {
     tmp = helpers.tmpConfigDir('onboard-tiers');
     delete require.cache[require.resolve('../../src/lib/disclosure')];

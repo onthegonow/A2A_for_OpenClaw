@@ -27,6 +27,30 @@ metadata:
 
 Enable agent-to-agent communication across OpenClaw instances.
 
+## FIRST RUN GATE (Check Before EVERY /a2a Command)
+
+Before processing ANY /a2a command, check onboarding status:
+
+```bash
+cat ~/.config/openclaw/a2a-config.json 2>/dev/null | grep '"onboardingComplete"'
+```
+
+**If the file does not exist or `onboardingComplete` is `false`:**
+- DO NOT process the requested command yet
+- Tell the user: "A2A needs initial setup. Let me configure your agent's disclosure topics first."
+- Run the Quickstart flow below to completion
+- Only THEN proceed with the user's original command
+
+**If `onboardingComplete` is `true`:** proceed normally.
+
+**Context gathering for onboarding:** Read ALL available context to generate personalized tier topics:
+- **Primary:** USER.md, HEARTBEAT.md, SOUL.md
+- **Skills:** SKILL.md files (workspace + ~/.openclaw/skills/*)
+- **Memory:** memory/*.md files
+- **Project:** CLAUDE.md
+
+Extract: professional context, interests, goals, skills, sensitive areas. Group them into Public/Friends/Family tiers based on sensitivity.
+
 ## Commands
 
 ### Quickstart
@@ -222,6 +246,15 @@ Token: "[name]" (expires [date])
 ```
 
 Owner can reply to inject into the conversation.
+
+## Update
+
+Check for and install the latest version. Handles both npm global installs and git clones. Re-syncs SKILL.md and config after update.
+
+```bash
+a2a update --check    # Check for updates without installing
+a2a update            # Update to latest version
+```
 
 ## Rate Limits
 

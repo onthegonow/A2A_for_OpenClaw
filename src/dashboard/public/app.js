@@ -313,7 +313,11 @@ function bindInviteActions() {
       body: JSON.stringify(body)
     });
     document.getElementById('invite-message').value = result.invite_message || result.invite_url;
-    showNotice('Invite created');
+    if (result.warnings && result.warnings.length) {
+      showNotice(result.warnings[0]);
+    } else {
+      showNotice('Invite created');
+    }
     await loadInvites();
   });
 }

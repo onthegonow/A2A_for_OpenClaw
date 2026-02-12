@@ -136,16 +136,17 @@ function writeExecutableFile(filePath, content) {
   }
 }
 
-function ensureStandaloneBootstrap(hostname, port) {
+/**
+ * Ensure config and disclosure manifest exist.
+ * Called from both OpenClaw and standalone install paths.
+ */
+function ensureConfigAndManifest(hostname, port) {
   const configDir = resolveA2AConfigDir();
   ensureDir(configDir);
 
-  const configFile = path.join(configDir, 'a2a-config.json');
-  const manifestFile = path.join(configDir, 'a2a-disclosure.json');
-
   try {
     const { A2AConfig } = require('../src/lib/config');
-    const { loadManifest, saveManifest, generateDefaultManifest } = require('../src/lib/disclosure');
+    const { loadManifest, saveManifest, generateDefaultManifest, readContextFiles } = require('../src/lib/disclosure');
 
     const config = new A2AConfig();
     const defaults = config.getDefaults() || {};
@@ -153,24 +154,29 @@ function ensureStandaloneBootstrap(hostname, port) {
 
     const agent = config.getAgent() || {};
     if (!agent.hostname) {
-      config.setAgent({
-        hostname: `${hostname}:${port}`
-      });
+      config.setAgent({ hostname: `${hostname}:${port}` });
     }
 
     const manifest = loadManifest();
     if (!manifest || Object.keys(manifest).length === 0) {
-      const generated = generateDefaultManifest({
-        user: safeRead(path.join(process.cwd(), 'USER.md')),
-        heartbeat: safeRead(path.join(process.cwd(), 'HEARTBEAT.md')),
-        soul: safeRead(path.join(process.cwd(), 'SOUL.md'))
-      });
+      const contextFiles = readContextFiles(process.cwd());
+      const generated = generateDefaultManifest(contextFiles);
       saveManifest(generated);
+      const manifestFile = path.join(configDir, 'a2a-disclosure.json');
       log(`Generated default disclosure manifest: ${manifestFile}`);
     }
   } catch (err) {
-    warn(`Standalone config bootstrap failed: ${err.message}`);
+    warn(`Config/manifest bootstrap failed: ${err.message}`);
   }
+
+  return configDir;
+}
+
+function ensureStandaloneBootstrap(hostname, port) {
+  const configDir = ensureConfigAndManifest(hostname, port);
+
+  const configFile = path.join(configDir, 'a2a-config.json');
+  const manifestFile = path.join(configDir, 'a2a-disclosure.json');
 
   const bridgeDir = path.join(configDir, 'runtime-bridge');
   ensureDir(bridgeDir);
@@ -202,6 +208,15 @@ echo "a2a notify: $payload" >&2
 `);
   }
 
+  // Install SKILL.md so standalone agents can discover it
+  const skillsDir = path.join(configDir, 'skills', SKILL_NAME);
+  ensureDir(skillsDir);
+  const skillContent = loadSkillMd();
+  if (skillContent) {
+    fs.writeFileSync(path.join(skillsDir, 'SKILL.md'), skillContent);
+    log(`Installed skill to: ${skillsDir}`);
+  }
+
   let generatedAdminToken = null;
   if (!process.env.A2A_ADMIN_TOKEN) {
     generatedAdminToken = crypto.randomBytes(24).toString('base64url');
@@ -211,6 +226,7 @@ echo "a2a notify: $payload" >&2
     configDir,
     configFile,
     manifestFile,
+    skillsDir,
     bridgeDir,
     turnScript,
     summaryScript,
@@ -388,108 +404,44 @@ function installDashboardProxyPlugin(backendUrl) {
   return pluginDir;
 }
 
-// Skill content
-const SKILL_MD = `---
-name: a2a
-description: "Agent-to-Agent a2a. Handle /a2a commands to create tokens, manage connections, and call remote agents. Triggers on: /a2a, a2a, agent token, a2a invite."
----
+// Skill content — read from the canonical SKILL.md that ships with the package.
+// No embedded copy to drift out of sync.
+const SKILL_MD_PATH = path.resolve(__dirname, '..', 'SKILL.md');
 
-# A2A
+function loadSkillMd() {
+  if (fs.existsSync(SKILL_MD_PATH)) {
+    return fs.readFileSync(SKILL_MD_PATH, 'utf8');
+  }
+  warn(`SKILL.md not found at ${SKILL_MD_PATH}`);
+  warn('The a2acalling package may be incomplete. Run: a2a update');
+  return null;
+}
 
-Handle agent-to-agent communication with Telegram inline buttons + \`a2a\` CLI.
-
-## CRITICAL: Forum Topic Threading
-
-When sending messages with buttons in Telegram forum groups, **ALWAYS include threadId**:
-
-1. Extract topic ID from message header (e.g., \`topic:567\`)
-2. Include \`threadId: "TOPIC_ID"\` in ALL message tool calls
-
-## Onboarding (First Run)
-
-**BEFORE showing tiers, ALWAYS read and analyze user context:**
-- HEARTBEAT.md - current tasks/interests
-- USER.md - professional context, shareable bio
-- SOUL.md - agent personality
-- memory/*.md - stored context
-
-**Extract:** Topics of interest, goals, professional context (job seeking?), sensitive areas.
-
-**Personalize tiers based on findings** - not generic examples!
-
-**Step 1:** Show analyzed topics grouped into Public/Friends/Private tiers
-**Step 2:** Confirm default settings (expiration, rate limits)
-**Step 3:** Confirm agent identity
-**Step 4:** Complete - save config, show next steps
-
-Settings saved to ~/.config/openclaw/a2a-config.json
-
-## First-Call Requirement
-
-Before any agent uses \`/a2a call\`, the human owner must complete onboarding and approve tier permissions.
-If onboarding has not been completed yet, route them to \`/a2a quickstart\` first.
-
-## Main Menu (Post-Onboarding)
-
-\`\`\`javascript
-message({
-  action: "send",
-  channel: "telegram",
-  target: "CHAT_ID",
-  threadId: "TOPIC_ID",  // REQUIRED for forum topics!
-  message: "🤝 **A2A**\\n\\nWhat would you like to do?",
-  buttons: [
-    [{ text: "📝 Create Invite", callback_data: "/a2a invite" }, { text: "📋 List Tokens", callback_data: "/a2a list" }],
-    [{ text: "🗑 Revoke Token", callback_data: "/a2a revoke" }, { text: "📡 Add Remote", callback_data: "/a2a add" }]
-  ]
-})
-\`\`\`
-
-## Commands
-
-### /a2a invite
-\`\`\`bash
-a2a create --name "NAME" --expires "DURATION"
-\`\`\`
-Reply with full shareable invite block.
-
-### /a2a list
-\`\`\`bash
-a2a list
-\`\`\`
-
-### /a2a revoke <id>
-\`\`\`bash
-a2a revoke TOKEN_ID
-\`\`\`
-
-### /a2a add <url> [name]
-\`\`\`bash
-a2a add "URL" "NAME"
-\`\`\`
-
-### /a2a call <url> <msg>
-\`\`\`bash
-a2a call "URL" "MESSAGE"
-\`\`\`
-
-## Server
-
-\`\`\`bash
-a2a server --port 3001
-\`\`\`
-
-## Defaults
-- Expiration: 1 day
-- Max calls: 100
-- Rate limit: 10/min
-`;
-
-function install() {
+async function install() {
   log('Installing A2A Calling...\n');
 
   const hostname = flags.hostname || process.env.HOSTNAME || 'localhost';
-  const port = String(flags.port || process.env.A2A_PORT || '3001');
+
+  // Port scanning: use explicit port or scan for available one
+  let port;
+  if (flags.port) {
+    port = String(flags.port);
+  } else if (process.env.A2A_PORT) {
+    port = String(process.env.A2A_PORT);
+  } else {
+    try {
+      const { findAvailablePort } = require('../src/lib/port-scanner');
+      const available = await findAvailablePort([80, 3001, 8080, 8443, 9001]);
+      port = available ? String(available) : '3001';
+      if (available === 80) {
+        log(`Port 80 is available (recommended for inbound A2A connections)`);
+      } else if (available) {
+        log(`Auto-detected available port: ${available}`);
+      }
+    } catch (e) {
+      port = '3001';
+    }
+  }
   const backendUrl = flags['dashboard-backend'] || `http://127.0.0.1:${port}`;
   const forceStandalone = Boolean(flags.standalone) || String(process.env.A2A_FORCE_STANDALONE || '').toLowerCase() === 'true';
   const hasOpenClawBinary = commandExists('openclaw');
@@ -504,8 +456,16 @@ function install() {
     // 2. Install skill
     const skillDir = path.join(OPENCLAW_SKILLS, SKILL_NAME);
     ensureDir(skillDir);
-    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), SKILL_MD);
+    const skillContent = loadSkillMd();
+    if (skillContent) {
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillContent);
+    } else {
+      warn('Skipped SKILL.md install — source file not found in package.');
+    }
     log(`Installed skill to: ${skillDir}`);
+
+    // Ensure config and manifest exist even in OpenClaw path
+    ensureConfigAndManifest(hostname, port);
   } else {
     warn('OpenClaw not detected. Enabling standalone A2A bootstrap.');
     standaloneBootstrap = ensureStandaloneBootstrap(hostname, port);
@@ -676,7 +636,10 @@ Examples:
 switch (command) {
   case 'install':
   case 'setup':
-    install();
+    install().catch(err => {
+      error(`Install failed: ${err.message}`);
+      process.exit(1);
+    });
     break;
   case 'uninstall':
     uninstall();
