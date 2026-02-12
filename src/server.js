@@ -113,24 +113,24 @@ Respond to this federated agent call. Be yourself - collaborative but protect pr
   const sessionId = `a2a-${federationContext.conversation_id || Date.now()}`;
   
   try {
-    // Write prompt to temp file to avoid shell escaping issues
-    const tmpFile = `/tmp/a2a-${Date.now()}.txt`;
-    fs.writeFileSync(tmpFile, prompt);
+    // Escape the prompt for shell (replace quotes and newlines)
+    const escapedPrompt = prompt
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '');
     
     // Call openclaw agent to spawn a sub-agent
     const result = execSync(
-      `cat "${tmpFile}" | openclaw agent --session-id "${sessionId}" --timeout 55 2>/dev/null`,
+      `openclaw agent --session-id "${sessionId}" --message "${escapedPrompt}" --timeout 55 2>&1`,
       {
         encoding: 'utf8',
-        timeout: 60000,
+        timeout: 65000,
         maxBuffer: 1024 * 1024,
         cwd: process.env.OPENCLAW_WORKSPACE || '/root/clawd',
         env: { ...process.env, FORCE_COLOR: '0' }
       }
     );
-    
-    // Clean up temp file
-    try { fs.unlinkSync(tmpFile); } catch (e) {}
     
     // Filter out plugin registration messages and return clean response
     const lines = result.split('\n').filter(line => 
@@ -139,12 +139,19 @@ Respond to this federated agent call. Be yourself - collaborative but protect pr
       line.trim()
     );
     
-    return lines.join('\n').trim() || '[No response]';
+    const response = lines.join('\n').trim();
+    
+    if (!response || response.includes('error') || response.includes('failed')) {
+      console.error('[a2a] Sub-agent returned error, using fallback');
+      return await callAgentDirect(message, federationContext);
+    }
+    
+    return response;
     
   } catch (err) {
     console.error('[a2a] Sub-agent spawn failed:', err.message);
     
-    // Fallback to direct API call
+    // Fallback to direct API call only if sub-agent completely fails
     return await callAgentDirect(message, federationContext);
   }
 }
