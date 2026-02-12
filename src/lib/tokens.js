@@ -104,15 +104,29 @@ class TokenStore {
     const durationMs = TokenStore.parseDuration(expires);
     const expiresAt = durationMs ? new Date(Date.now() + durationMs).toISOString() : null;
 
+    // Load tier definitions from config (if available)
+    let configTiers = {};
+    try {
+      const configPath = path.join(this.configDir, 'a2a-config.json');
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        if (config.tiers) {
+          configTiers = config.tiers;
+        }
+      }
+    } catch (e) {
+      // Config not available, use defaults
+    }
+
     // Default topics based on permissions tier (snapshot at creation)
-    // Aliases: public=chat-only, friends=tools-read, family=tools-write
+    // User config overrides these defaults
     const defaultTopics = {
       'chat-only': ['chat'],
-      'public': ['chat'],
+      'public': configTiers.public?.topics || ['chat'],
       'tools-read': ['chat', 'calendar.read', 'email.read', 'search'],
-      'friends': ['chat', 'calendar.read', 'email.read', 'search'],
+      'friends': configTiers.friends?.topics || ['chat', 'calendar.read', 'email.read', 'search'],
       'tools-write': ['chat', 'calendar', 'email', 'search', 'tools'],
-      'family': ['chat', 'calendar', 'email', 'search', 'tools']
+      'family': configTiers.family?.topics || ['chat', 'calendar', 'email', 'search', 'tools']
     };
     
     // Normalize tier name
