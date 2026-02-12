@@ -15,7 +15,8 @@ class A2AClient {
    * Parse an a2a:// URL
    */
   static parseInvite(inviteUrl) {
-    const match = inviteUrl.match(/^oclaw:\/\/([^/]+)\/(.+)$/);
+    // Support both a2a:// and legacy oclaw:// schemes
+    const match = inviteUrl.match(/^(?:a2a|oclaw):\/\/([^/]+)\/(.+)$/);
     if (!match) {
       throw new Error(`Invalid invite URL: ${inviteUrl}`);
     }
@@ -50,8 +51,11 @@ class A2AClient {
     });
 
     const isLocalhost = host === 'localhost' || host.startsWith('localhost:') || host.startsWith('127.');
-    const protocol = isLocalhost ? http : https;
-    const port = host.includes(':') ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
+    const hasExplicitPort = host.includes(':');
+    const port = hasExplicitPort ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
+    // Use HTTP for localhost or explicit non-443 ports, HTTPS otherwise
+    const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
+    const protocol = useHttp ? http : https;
     const hostname = host.split(':')[0];
 
     return new Promise((resolve, reject) => {
@@ -110,8 +114,10 @@ class A2AClient {
     }
 
     const isLocalhost = host === 'localhost' || host.startsWith('localhost:') || host.startsWith('127.');
-    const protocol = isLocalhost ? http : https;
-    const port = host.includes(':') ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
+    const hasExplicitPort = host.includes(':');
+    const port = hasExplicitPort ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
+    const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
+    const protocol = useHttp ? http : https;
     const hostname = host.split(':')[0];
 
     return new Promise((resolve, reject) => {
@@ -155,8 +161,10 @@ class A2AClient {
     }
 
     const isLocalhost = host === 'localhost' || host.startsWith('localhost:') || host.startsWith('127.');
-    const protocol = isLocalhost ? http : https;
-    const port = host.includes(':') ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
+    const hasExplicitPort = host.includes(':');
+    const port = hasExplicitPort ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
+    const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
+    const protocol = useHttp ? http : https;
     const hostname = host.split(':')[0];
 
     return new Promise((resolve, reject) => {
