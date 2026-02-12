@@ -8,7 +8,7 @@ GitHub token is stored in `.env` (gitignored). Load it before git operations:
 
 ```bash
 export GH_TOKEN=$(grep GH_TOKEN .env | cut -d= -f2)
-git remote set-url origin https://${GH_TOKEN}@github.com/onthegonow/A2A_for_OpenClaw.git
+git remote set-url origin https://${GH_TOKEN}@github.com/onthegonow/a2a_calling.git
 ```
 
 Or use `gh` CLI which reads `GH_TOKEN` automatically.

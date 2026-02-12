@@ -63,8 +63,8 @@ npm install a2acalling
 npx a2acalling install
 
 # Or clone and install
-git clone https://github.com/onthegonow/A2A_for_OpenClaw.git
-cd A2A_for_OpenClaw
+git clone https://github.com/onthegonow/a2a_calling.git
+cd a2a_calling
 npm install
 node scripts/install-openclaw.js
 ```

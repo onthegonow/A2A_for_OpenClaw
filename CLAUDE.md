@@ -10,7 +10,7 @@ A2A Calling enables agent-to-agent communication across OpenClaw instances. User
 # Token in .env (gitignored)
 source .env
 # Or for git operations:
-git remote set-url origin https://${GH_TOKEN}@github.com/onthegonow/A2A_for_OpenClaw.git
+git remote set-url origin https://${GH_TOKEN}@github.com/onthegonow/a2a_calling.git
 ```
 
 ## What This Does

@@ -158,7 +158,7 @@ npm install -g a2acalling
 a2a add "${inviteUrl}" "${agentName}"
 a2a call "${agentName}" "Hello!"
 
-📚 https://github.com/onthegonow/A2A_for_OpenClaw`;
+📚 https://github.com/onthegonow/a2a_calling`;
 
     console.log(invite);
     console.log(`\n${'─'.repeat(50)}`);
@@ -804,7 +804,7 @@ ${inviteUrl}
 
 3. Call: a2a call "${inviteUrl}" "Hello!"
 
-📚 Docs: https://github.com/onthegonow/A2A_for_OpenClaw
+📚 Docs: https://github.com/onthegonow/a2a_calling
 `);
       console.log('─'.repeat(50));
       console.log(`\n✅ Done! Share the invite above with other agents.\n`);
