@@ -2,7 +2,10 @@ const state = {
   settings: null,
   contacts: [],
   calls: [],
-  invites: []
+  invites: [],
+  logs: [],
+  logStats: null,
+  trace: null
 };
 
 function showNotice(message) {
@@ -46,16 +49,46 @@ function fmtDate(value) {
   }
 }
 
+function esc(text) {
+  return String(text ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 function bindTabs() {
+  const activateTab = (tab, options = {}) => {
+    const target = String(tab || '').replace(/^#/, '').trim();
+    if (!target) return false;
+    const btn = Array.from(document.querySelectorAll('.tab')).find(b => b.dataset.tab === target);
+    const panel = document.getElementById(`tab-${target}`);
+    if (!btn || !panel) return false;
+
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('is-active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('is-active'));
+    btn.classList.add('is-active');
+    panel.classList.add('is-active');
+
+    if (options.updateHash) {
+      try { window.location.hash = target; } catch (err) {}
+    }
+    return true;
+  };
+
   document.querySelectorAll('.tab').forEach(btn => {
     btn.addEventListener('click', () => {
-      const tab = btn.dataset.tab;
-      document.querySelectorAll('.tab').forEach(b => b.classList.remove('is-active'));
-      document.querySelectorAll('.panel').forEach(p => p.classList.remove('is-active'));
-      btn.classList.add('is-active');
-      document.getElementById(`tab-${tab}`).classList.add('is-active');
+      activateTab(btn.dataset.tab, { updateHash: true });
     });
   });
+
+  window.addEventListener('hashchange', () => {
+    activateTab(window.location.hash);
+  });
+
+  // Deep-link into a tab with /dashboard/#logs, etc.
+  activateTab(window.location.hash);
 }
 
 function renderContacts() {
@@ -142,6 +175,137 @@ async function loadCallsForContact(contactId, contactName) {
       <tbody>${rows || '<tr><td colspan="4">No calls found.</td></tr>'}</tbody>
     </table>
   `;
+}
+
+function readLogFilters() {
+  const level = document.getElementById('logs-level').value.trim();
+  const component = document.getElementById('logs-component').value.trim();
+  const event = document.getElementById('logs-event').value.trim();
+  const traceId = document.getElementById('logs-trace').value.trim();
+  const conversationId = document.getElementById('logs-conversation').value.trim();
+  const tokenId = document.getElementById('logs-token').value.trim();
+  const search = document.getElementById('logs-search').value.trim();
+  const limit = Number.parseInt(document.getElementById('logs-limit').value, 10) || 200;
+
+  const params = new URLSearchParams();
+  params.set('limit', String(Math.min(1000, Math.max(1, limit))));
+  if (level) params.set('level', level);
+  if (component) params.set('component', component);
+  if (event) params.set('event', event);
+  if (traceId) params.set('trace_id', traceId);
+  if (conversationId) params.set('conversation_id', conversationId);
+  if (tokenId) params.set('token_id', tokenId);
+  if (search) params.set('search', search);
+
+  return params;
+}
+
+function renderLogStats() {
+  const el = document.getElementById('log-stats');
+  if (!state.logStats) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+  const stats = state.logStats;
+  const levels = Object.entries(stats.by_level || {}).sort((a, b) => a[0].localeCompare(b[0]));
+  const components = Object.entries(stats.by_component || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12);
+
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div class="row">
+      <strong>Total:</strong> ${stats.total || 0}
+    </div>
+    <div class="row">
+      <strong>By level:</strong> ${levels.map(([k, v]) => `${esc(k)}=${v}`).join(' · ') || '(none)'}
+    </div>
+    <div class="row">
+      <strong>Top components:</strong> ${components.map(([k, v]) => `${esc(k)}=${v}`).join(' · ') || '(none)'}
+    </div>
+  `;
+}
+
+function renderTraceDetail() {
+  const el = document.getElementById('trace-detail');
+  if (!state.trace || !Array.isArray(state.trace.logs)) {
+    el.textContent = '';
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  const logs = state.trace.logs || [];
+  const lines = logs.map(row => {
+    const msg = row.message || '';
+    const meta = [
+      row.component ? row.component : null,
+      row.event ? row.event : null,
+      row.error_code ? `code=${row.error_code}` : null,
+      row.status_code ? `status=${row.status_code}` : null
+    ].filter(Boolean).join(' ');
+    return `[${fmtDate(row.timestamp)}] ${row.level?.toUpperCase() || ''} ${meta}\n${msg}${row.hint ? `\nHint: ${row.hint}` : ''}`;
+  }).join('\n\n');
+
+  el.innerHTML = `
+    <div class="row">
+      <h3 style="margin:0;">Trace: <span class="mono">${esc(state.trace.trace_id || '')}</span></h3>
+      <button id="clear-trace">Clear</button>
+    </div>
+    <pre class="summary mono">${esc(lines || 'No trace logs.')}</pre>
+  `;
+  const clearBtn = document.getElementById('clear-trace');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      state.trace = null;
+      renderTraceDetail();
+    });
+  }
+}
+
+function renderLogs() {
+  const tbody = document.querySelector('#logs-table tbody');
+  tbody.innerHTML = '';
+
+  state.logs.forEach(row => {
+    const tr = document.createElement('tr');
+    const trace = row.trace_id || '';
+    tr.innerHTML = `
+      <td>${esc(fmtDate(row.timestamp))}</td>
+      <td>${esc(row.level || '-')}</td>
+      <td>${esc(row.component || '-')}</td>
+      <td>${esc(row.event || '-')}</td>
+      <td title="${esc(row.message || '')}">${esc(String(row.message || '').slice(0, 120) || '-')}</td>
+      <td class="mono">${esc(trace ? trace.slice(0, 14) + '…' : '-')}</td>
+      <td class="mono">${esc(row.conversation_id ? row.conversation_id.slice(0, 14) + '…' : '-')}</td>
+      <td class="mono">${esc(row.token_id || '-')}</td>
+      <td>${esc(row.error_code || '-')}</td>
+      <td>${esc(row.status_code ?? '-')}</td>
+    `;
+    if (trace) {
+      tr.addEventListener('click', () => loadTrace(trace).catch(err => showNotice(err.message)));
+    }
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadLogs() {
+  const qs = readLogFilters().toString();
+  const payload = await request(`/logs?${qs}`);
+  state.logs = payload.logs || [];
+  renderLogs();
+}
+
+async function loadLogStats() {
+  const payload = await request('/logs/stats');
+  state.logStats = payload.stats || null;
+  renderLogStats();
+}
+
+async function loadTrace(traceId) {
+  const payload = await request(`/logs/trace/${encodeURIComponent(traceId)}?limit=500`);
+  state.trace = payload;
+  renderTraceDetail();
 }
 
 function fillTierSelects() {
@@ -326,6 +490,30 @@ function bindRefreshButtons() {
   document.getElementById('refresh-contacts').addEventListener('click', () => loadContacts().catch(err => showNotice(err.message)));
   document.getElementById('refresh-calls').addEventListener('click', () => loadCalls().catch(err => showNotice(err.message)));
   document.getElementById('refresh-invites').addEventListener('click', () => loadInvites().catch(err => showNotice(err.message)));
+  document.getElementById('refresh-logs').addEventListener('click', () => loadLogs().catch(err => showNotice(err.message)));
+  document.getElementById('refresh-log-stats').addEventListener('click', () => loadLogStats().catch(err => showNotice(err.message)));
+
+  // Auto-refresh logs as filters change (debounced).
+  let debounce = null;
+  const schedule = () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => loadLogs().catch(err => showNotice(err.message)), 250);
+  };
+  [
+    'logs-level',
+    'logs-component',
+    'logs-event',
+    'logs-trace',
+    'logs-conversation',
+    'logs-token',
+    'logs-search',
+    'logs-limit'
+  ].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('input', schedule);
+    el.addEventListener('change', schedule);
+  });
 }
 
 async function bootstrap() {
@@ -335,7 +523,7 @@ async function bootstrap() {
   bindRefreshButtons();
 
   try {
-    await Promise.all([loadSettings(), loadContacts(), loadCalls(), loadInvites()]);
+    await Promise.all([loadSettings(), loadContacts(), loadCalls(), loadInvites(), loadLogStats(), loadLogs()]);
     showNotice('Dashboard loaded');
   } catch (err) {
     showNotice(err.message);

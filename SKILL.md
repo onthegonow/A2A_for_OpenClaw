@@ -106,6 +106,24 @@ done                         — Save manifest and finish
 
 4. Manifest saved to `~/.config/openclaw/a2a-disclosure.json`
 
+### Open GUI (Dashboard)
+
+User says: `/a2a gui`, `/a2a dashboard`, "open the GUI", "open the dashboard", "show me A2A logs"
+
+This opens the local dashboard UI in the default browser (or prints the URL if auto-open is not possible).
+
+Notes:
+- This command is safe and **does not require onboarding**.
+- Optional: open a specific tab via `--tab`.
+
+Examples:
+
+```bash
+a2a gui
+a2a gui --tab logs
+a2a dashboard --tab calls
+```
+
 ### Invite (Create & Share Token)
 
 User says: `/a2a invite`, `/a2a invite public`, `/a2a invite friends`, `/a2a invite family`, "create an invite", "generate an A2A invite"

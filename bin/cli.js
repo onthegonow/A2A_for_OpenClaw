@@ -10,6 +10,7 @@
  *   a2a remotes              List remote agents
  *   a2a call <url> <msg>     Call a remote agent
  *   a2a ping <url>           Ping a remote agent
+ *   a2a gui                  Open the local dashboard GUI in a browser
  *   a2a setup                Auto setup (gateway-aware dashboard install)
  */
 
@@ -67,6 +68,77 @@ function formatTimeAgo(date) {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
   return date.toLocaleDateString();
+}
+
+function openInBrowser(url) {
+  const { spawn } = require('child_process');
+
+  const platform = process.platform;
+  let cmd = null;
+  let args = [];
+
+  if (platform === 'darwin') {
+    cmd = 'open';
+    args = [url];
+  } else if (platform === 'win32') {
+    cmd = 'cmd';
+    args = ['/c', 'start', '', url];
+  } else {
+    cmd = 'xdg-open';
+    args = [url];
+  }
+
+  try {
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+    child.unref();
+    return { attempted: true, command: [cmd, ...args].join(' ') };
+  } catch (err) {
+    return { attempted: false, error: err.message };
+  }
+}
+
+async function findLocalServerPort(preferredPorts = []) {
+  const http = require('http');
+
+  const candidates = [];
+  const seen = new Set();
+  for (const port of preferredPorts) {
+    const n = Number.parseInt(String(port), 10);
+    if (!Number.isFinite(n) || n <= 0 || n > 65535) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    candidates.push(n);
+  }
+
+  const defaultPorts = [3001, 80, 8080, 8443, 9001];
+  for (const port of defaultPorts) {
+    if (seen.has(port)) continue;
+    seen.add(port);
+    candidates.push(port);
+  }
+
+  const probe = (port) => new Promise(resolve => {
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port,
+      path: '/api/a2a/ping',
+      method: 'GET',
+      timeout: 800
+    }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+    req.end();
+  });
+
+  for (const port of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await probe(port);
+    if (ok) return port;
+  }
+  return null;
 }
 
 // Parse arguments
@@ -747,6 +819,55 @@ https://github.com/onthegonow/a2a_calling`;
     }
   },
 
+  gui: async (args) => {
+    // GUI is always safe to open even before onboarding.
+    const tab = (args.flags.tab || args.flags.t || '').trim().toLowerCase();
+    const allowedTabs = new Set(['contacts', 'calls', 'logs', 'settings', 'invites']);
+    const hash = allowedTabs.has(tab) ? `#${tab}` : '';
+
+    const urlFlag = args.flags.url;
+    if (urlFlag) {
+      const url = String(urlFlag);
+      console.log(`Dashboard URL: ${url}`);
+      const opened = openInBrowser(url);
+      if (opened.attempted) {
+        console.log(`Opening browser via: ${opened.command}`);
+      } else {
+        console.log('Could not auto-open browser.');
+      }
+      return;
+    }
+
+    const preferred = [];
+    if (args.flags.port || args.flags.p) preferred.push(args.flags.port || args.flags.p);
+    if (process.env.A2A_PORT) preferred.push(process.env.A2A_PORT);
+    if (process.env.PORT) preferred.push(process.env.PORT);
+
+    const port = await findLocalServerPort(preferred);
+    if (!port) {
+      console.log('Dashboard is not reachable on common ports.');
+      console.log('Start the server (example):');
+      console.log('  A2A_HOSTNAME="localhost:3001" a2a server --port 3001');
+      console.log('Then open:');
+      console.log('  http://127.0.0.1:3001/dashboard/');
+      return;
+    }
+
+    const url = `http://127.0.0.1:${port}/dashboard/${hash}`;
+    console.log(`Dashboard URL: ${url}`);
+    const opened = openInBrowser(url);
+    if (opened.attempted) {
+      console.log(`Opening browser via: ${opened.command}`);
+    } else {
+      console.log('Could not auto-open browser; open the URL above manually.');
+    }
+  },
+
+  dashboard: (args) => {
+    // Alias for gui
+    return commands.gui(args);
+  },
+
   status: async (args) => {
     const url = args._[1];
     if (!url) {
@@ -1099,6 +1220,8 @@ Calling:
   call <contact|url> <msg>  Call a remote agent
   ping <url>          Check if agent is reachable
   status <url>        Get A2A status
+  gui                 Open the local dashboard GUI in a browser
+    --tab, -t         Optional: contacts|calls|logs|settings|invites
 
 Server:
   server              Start the A2A server
