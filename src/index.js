@@ -19,6 +19,7 @@ const { A2AClient, A2AError } = require('./lib/client');
 const { createRoutes } = require('./routes/a2a');
 const { createDashboardApiRouter, createDashboardUiRouter } = require('./routes/dashboard');
 const { createRuntimeAdapter, resolveRuntimeMode } = require('./lib/runtime-adapter');
+const { createLogger, createTraceId } = require('./lib/logger');
 
 // Lazy load optional dependencies
 let ConversationStore = null;
@@ -53,6 +54,10 @@ module.exports = {
   // Runtime adapter
   createRuntimeAdapter,
   resolveRuntimeMode,
+
+  // Structured logging
+  createLogger,
+  createTraceId,
   
   // Conversation storage (requires better-sqlite3)
   ConversationStore,

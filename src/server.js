@@ -20,12 +20,14 @@ const {
   extractCollaborationState
 } = require('./lib/prompt-template');
 const { findAvailablePort } = require('./lib/port-scanner');
+const { createLogger } = require('./lib/logger');
 
 const DEFAULT_PORTS = [80, 3001, 8080, 8443, 9001];
 const requestedPort = process.env.PORT ? parseInt(process.env.PORT, 10)
   : process.argv[2] ? parseInt(process.argv[2], 10)
   : null;
 const workspaceDir = process.env.A2A_WORKSPACE || process.env.OPENCLAW_WORKSPACE || process.cwd();
+const logger = createLogger({ component: 'a2a.server' });
 
 // Load workspace context for agent identity
 function loadAgentContext() {
@@ -59,17 +61,30 @@ const agentContext = loadAgentContext();
 const tokenStore = new TokenStore();
 const runtime = createRuntimeAdapter({
   workspaceDir,
-  agentContext
+  agentContext,
+  logger: logger.child({ component: 'a2a.runtime' })
 });
 const VALID_PHASES = new Set(['handshake', 'explore', 'deep_dive', 'synthesize', 'close']);
 const collaborationSessions = new Map();
 const COLLAB_STATE_TTL_MS = readPositiveIntEnv('A2A_COLLAB_STATE_TTL_MS', 6 * 60 * 60 * 1000);
 const MAX_COLLAB_SESSIONS = readPositiveIntEnv('A2A_COLLAB_MAX_SESSIONS', 500);
 
-console.log(`[a2a] Agent: ${agentContext.name} (${agentContext.owner}'s agent)`);
-console.log(`[a2a] Runtime: ${runtime.mode} (${runtime.reason})`);
+logger.info('A2A server bootstrapping', {
+  event: 'server_bootstrap',
+  data: {
+    agent_name: agentContext.name,
+    owner_name: agentContext.owner,
+    runtime_mode: runtime.mode,
+    runtime_reason: runtime.reason
+  }
+});
 if (runtime.warning) {
-  console.warn(`[a2a] Runtime warning: ${runtime.warning}`);
+  logger.warn('Runtime warning', {
+    event: 'runtime_warning',
+    data: {
+      warning: runtime.warning
+    }
+  });
 }
 
 function readPositiveIntEnv(name, fallback) {
@@ -405,11 +420,24 @@ function ensureContact(caller, tokenId) {
   try {
     const contact = tokenStore.ensureInboundContact(caller, tokenId);
     if (contact) {
-      console.log(`[a2a] 📇 Contact ensured: ${caller.name}${caller.owner ? ` (${caller.owner})` : ''}`);
+      logger.info('Contact ensured from inbound call', {
+        event: 'contact_ensured',
+        tokenId,
+        data: {
+          caller_name: caller.name,
+          caller_owner: caller.owner || null
+        }
+      });
     }
     return contact;
   } catch (err) {
-    console.error('[a2a] Failed to ensure contact:', err.message);
+    logger.error('Failed to ensure contact', {
+      event: 'contact_ensure_failed',
+      tokenId,
+      data: {
+        error: err.message
+      }
+    });
     return null;
   }
 }
@@ -422,6 +450,12 @@ async function callAgent(message, a2aContext) {
   const callerOwner = a2aContext.caller?.owner || '';
   const tierInfo = a2aContext.tier || 'public';
   const conversationId = a2aContext.conversation_id || `conv_${Date.now()}`;
+  const traceId = a2aContext.trace_id || null;
+  const callLogger = logger.child({
+    traceId,
+    conversationId,
+    tokenId: a2aContext.token_id
+  });
   const collabMode = resolveCollabMode();
   const collabState = getOrCreateCollaborationState(conversationId, {
     callerName,
@@ -481,6 +515,16 @@ async function callAgent(message, a2aContext) {
   const sessionId = `a2a-${conversationId}`;
   
   try {
+    callLogger.info('Handling inbound call turn', {
+      event: 'call_turn_start',
+      data: {
+        caller_name: callerName,
+        caller_owner: callerOwner || null,
+        tier: tierInfo,
+        collab_mode: collabMode
+      }
+    });
+
     const rawResponse = await runtime.runTurn({
       sessionId,
       prompt,
@@ -491,7 +535,8 @@ async function callAgent(message, a2aContext) {
         conversationId,
         tier: tierInfo,
         ownerName: agentContext.owner,
-        allowedTopics: a2aContext.allowed_topics || []
+        allowedTopics: a2aContext.allowed_topics || [],
+        traceId
       }
     });
 
@@ -507,10 +552,17 @@ async function callAgent(message, a2aContext) {
     if (parsed.hasState && parsed.statePatch) {
       usedMetadata = applyCollaborationPatch(collabState, parsed.statePatch);
       if (!usedMetadata) {
-        console.warn(`[a2a] Invalid collaboration patch for ${conversationId}; using fallback heuristics`);
+        callLogger.warn('Invalid collaboration patch; applying fallback heuristics', {
+          event: 'collaboration_patch_invalid'
+        });
       }
     } else if (parsed.parseError) {
-      console.warn(`[a2a] Could not parse collaboration metadata for ${conversationId}: ${parsed.parseError}`);
+      callLogger.warn('Could not parse collaboration metadata; applying fallback heuristics', {
+        event: 'collaboration_metadata_parse_failed',
+        data: {
+          parse_error: parsed.parseError
+        }
+      });
     }
 
     if (!usedMetadata) {
@@ -527,10 +579,24 @@ async function callAgent(message, a2aContext) {
     collabState.updatedAt = Date.now();
     collaborationSessions.set(conversationId, collabState);
 
+    callLogger.info('Call turn completed', {
+      event: 'call_turn_complete',
+      data: {
+        phase: collabState.phase,
+        overlap_score: collabState.overlapScore,
+        turn_count: collabState.turnCount
+      }
+    });
+
     return cleanResponse || '[Sub-agent returned empty response]';
     
   } catch (err) {
-    console.error('[a2a] Runtime turn handling failed:', err.message);
+    callLogger.error('Runtime turn handling failed; using fallback response', {
+      event: 'call_turn_failed_fallback',
+      data: {
+        error: err.message
+      }
+    });
     return runtime.buildFallbackResponse(message, {
       caller: a2aContext.caller,
       ownerName: agentContext.owner,
@@ -573,10 +639,19 @@ Be concise but specific. No filler.`;
       sessionId: `summary-${Date.now()}`,
       prompt,
       messages,
-      callerInfo
+      callerInfo,
+      traceId: callerInfo?.trace_id || callerInfo?.traceId,
+      conversationId: callerInfo?.conversation_id || callerInfo?.conversationId
     });
   } catch (err) {
-    console.error('[a2a] Summary generation failed:', err.message);
+    logger.error('Summary generation failed', {
+      event: 'summary_generation_failed',
+      traceId: callerInfo?.trace_id || callerInfo?.traceId,
+      conversationId: callerInfo?.conversation_id || callerInfo?.conversationId,
+      data: {
+        error: err.message
+      }
+    });
     return null;
   }
 }
@@ -584,23 +659,30 @@ Be concise but specific. No filler.`;
 /**
  * Notify owner via Telegram
  */
-async function notifyOwner({ level, token, caller, message, conversation_id }) {
+async function notifyOwner({ level, token, caller, message, conversation_id, trace_id }) {
   const callerName = caller?.name || 'Unknown';
   const callerOwner = caller?.owner ? ` (${caller.owner})` : '';
   const messageText = String(message || '');
   
-  console.log(`[a2a] 📞 Call from ${callerName}${callerOwner}`);
-  console.log(`[a2a]    Token: ${token?.name || 'unknown'}`);
-  if (messageText) {
-    console.log(`[a2a]    Message: ${messageText.slice(0, 100)}...`);
-  }
+  logger.info('Owner notification requested', {
+    event: 'owner_notify_requested',
+    conversationId: conversation_id,
+    tokenId: token?.id,
+    data: {
+      caller_name: callerName,
+      caller_owner: caller?.owner || null,
+      token_name: token?.name || 'unknown',
+      level
+    }
+  });
 
   await runtime.notify({
     level,
     token,
     caller,
     message: messageText,
-    conversationId: conversation_id
+    conversationId: conversation_id,
+    traceId: trace_id || null
   });
 }
 
@@ -609,21 +691,40 @@ app.use(express.json());
 
 // Minimal owner dashboard (local by default unless A2A_ADMIN_TOKEN is provided)
 app.use('/api/a2a/dashboard', createDashboardApiRouter({
-  tokenStore
+  tokenStore,
+  logger: logger.child({ component: 'a2a.dashboard' })
 }));
 app.use('/dashboard', createDashboardUiRouter({
-  tokenStore
+  tokenStore,
+  logger: logger.child({ component: 'a2a.dashboard' })
 }));
 
 app.use('/api/a2a', createRoutes({
   tokenStore,
+  logger: logger.child({ component: 'a2a.routes' }),
   
   async handleMessage(message, context, options) {
-    console.log(`[a2a] 📞 Incoming from ${context.caller?.name || 'unknown'}`);
+    const traceId = context.trace_id || null;
+    const requestLogger = logger.child({
+      traceId,
+      conversationId: context.conversation_id,
+      tokenId: context.token_id
+    });
+    requestLogger.info('Inbound message accepted for handling', {
+      event: 'handle_message_start',
+      data: {
+        caller_name: context.caller?.name || 'unknown'
+      }
+    });
     
     const response = await callAgent(message, context);
     
-    console.log(`[a2a] 📤 Response: ${response.slice(0, 100)}...`);
+    requestLogger.info('Outbound response generated', {
+      event: 'handle_message_complete',
+      data: {
+        response_length: String(response || '').length
+      }
+    });
     
     return { text: response, canContinue: true };
   },
@@ -645,7 +746,12 @@ async function startServer() {
     if (await isPortAvailable(requestedPort)) {
       port = requestedPort;
     } else {
-      console.warn(`[a2a] Requested port ${requestedPort} is in use, scanning for alternatives...`);
+      logger.warn('Requested port is in use, scanning for alternatives', {
+        event: 'requested_port_in_use',
+        data: {
+          requested_port: requestedPort
+        }
+      });
       port = await findAvailablePort(DEFAULT_PORTS);
     }
   } else {
@@ -653,22 +759,40 @@ async function startServer() {
   }
 
   if (!port) {
-    console.error(`[a2a] No available port found. Tried: ${requestedPort ? requestedPort + ', ' : ''}${DEFAULT_PORTS.join(', ')}`);
-    console.error('[a2a] Set PORT env or free one of the default ports.');
+    logger.error('No available port found', {
+      event: 'port_unavailable',
+      data: {
+        tried_ports: requestedPort ? [requestedPort, ...DEFAULT_PORTS] : DEFAULT_PORTS
+      }
+    });
+    logger.error('Set PORT env or free one of the default ports.', {
+      event: 'port_unavailable_hint'
+    });
     process.exit(1);
   }
 
   const server = app.listen(port, () => {
-    console.log(`[a2a] A2A server listening on port ${port}`);
-    console.log(`[a2a] Agent: ${agentContext.name} - LIVE`);
-    console.log(`[a2a] Runtime mode: ${runtime.mode}${runtime.failoverEnabled ? ' (failover enabled)' : ''}`);
-    console.log(`[a2a] Collaboration mode: ${resolveCollabMode()}`);
-    console.log(`[a2a] Features: adaptive collaboration, auto-contacts, summaries, dashboard`);
+    logger.info('A2A server listening', {
+      event: 'server_started',
+      data: {
+        port,
+        agent_name: agentContext.name,
+        runtime_mode: runtime.mode,
+        failover_enabled: runtime.failoverEnabled,
+        collaboration_mode: resolveCollabMode(),
+        features: ['adaptive collaboration', 'auto-contacts', 'summaries', 'dashboard']
+      }
+    });
   });
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`[a2a] Port ${port} became unavailable (EADDRINUSE). Exiting.`);
+      logger.error('Bound port became unavailable (EADDRINUSE)', {
+        event: 'server_port_lost',
+        data: {
+          port
+        }
+      });
       process.exit(1);
     }
     throw err;

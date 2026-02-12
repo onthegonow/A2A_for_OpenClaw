@@ -16,6 +16,7 @@
  */
 
 const { execSync, spawnSync } = require('child_process');
+const { createLogger } = require('./logger');
 
 function commandExists(command) {
   try {
@@ -241,10 +242,22 @@ function createRuntimeAdapter(options = {}) {
   const workspaceDir = options.workspaceDir || process.cwd();
   const modeInfo = resolveRuntimeMode();
   const failoverEnabled = toBool(process.env.A2A_RUNTIME_FAILOVER, true);
+  const logger = options.logger || createLogger({ component: 'a2a.runtime' });
 
   const genericAgentCommand = process.env.A2A_AGENT_COMMAND || '';
   const genericSummaryCommand = process.env.A2A_SUMMARY_COMMAND || '';
   const genericNotifyCommand = process.env.A2A_NOTIFY_COMMAND || '';
+
+  logger.info('Runtime adapter initialized', {
+    event: 'runtime_initialized',
+    data: {
+      mode: modeInfo.mode,
+      requested_mode: modeInfo.requested,
+      reason: modeInfo.reason,
+      has_openclaw: modeInfo.hasOpenClaw,
+      failover_enabled: failoverEnabled
+    }
+  });
 
   async function runOpenClawTurn({ sessionId, prompt, timeoutMs }) {
     const timeoutSeconds = Math.max(5, Math.min(300, Math.round((timeoutMs || 65000) / 1000)));
@@ -325,7 +338,14 @@ function createRuntimeAdapter(options = {}) {
         }
       } catch (err) {
         runtimeError = err.message;
-        console.error(`[a2a] Generic agent command failed: ${err.message}`);
+        logger.error('Generic agent command failed', {
+          event: 'generic_agent_command_failed',
+          traceId: context?.traceId,
+          conversationId: context?.conversationId,
+          data: {
+            error: err.message
+          }
+        });
       }
     }
 
@@ -353,7 +373,14 @@ function createRuntimeAdapter(options = {}) {
         }
       } catch (err) {
         reason = err.message;
-        console.error(`[a2a] Generic summary command failed: ${err.message}`);
+        logger.error('Generic summary command failed', {
+          event: 'generic_summary_command_failed',
+          traceId: callerInfo?.trace_id || callerInfo?.traceId,
+          conversationId: callerInfo?.conversation_id || callerInfo?.conversationId,
+          data: {
+            error: err.message
+          }
+        });
       }
     }
 
@@ -367,11 +394,20 @@ function createRuntimeAdapter(options = {}) {
     try {
       runCommand(genericNotifyCommand, payload, { timeoutMs: 10000 });
     } catch (err) {
-      console.error(`[a2a] Generic notify command failed: ${err.message}`);
+      logger.error('Generic notify command failed', {
+        event: 'generic_notify_command_failed',
+        traceId: payload?.trace_id || payload?.traceId,
+        conversationId: payload?.conversationId,
+        tokenId: payload?.token?.id,
+        data: {
+          error: err.message
+        }
+      });
     }
   }
 
   async function runTurn({ sessionId, prompt, message, caller, context = {}, timeoutMs }) {
+    const traceId = context?.traceId || context?.trace_id;
     if (modeInfo.mode !== 'openclaw') {
       return runGenericTurn({ message, caller, context });
     }
@@ -382,7 +418,14 @@ function createRuntimeAdapter(options = {}) {
       if (!failoverEnabled) {
         throw err;
       }
-      console.error(`[a2a] OpenClaw runtime failed, switching to generic fallback: ${err.message}`);
+      logger.warn('OpenClaw runtime failed, switching to generic fallback', {
+        event: 'openclaw_turn_failed_fallback',
+        traceId,
+        conversationId: context?.conversationId,
+        data: {
+          error: err.message
+        }
+      });
       return runGenericTurn({
         message,
         caller,
@@ -392,7 +435,7 @@ function createRuntimeAdapter(options = {}) {
     }
   }
 
-  async function summarize({ sessionId, prompt, messages, callerInfo }) {
+  async function summarize({ sessionId, prompt, messages, callerInfo, traceId, conversationId }) {
     if (modeInfo.mode !== 'openclaw') {
       return runGenericSummary({ messages, callerInfo });
     }
@@ -415,7 +458,14 @@ function createRuntimeAdapter(options = {}) {
       if (!failoverEnabled) {
         throw err;
       }
-      console.error(`[a2a] OpenClaw summary failed, using generic fallback: ${err.message}`);
+      logger.warn('OpenClaw summary failed, using generic fallback', {
+        event: 'openclaw_summary_failed_fallback',
+        traceId: traceId || callerInfo?.trace_id || callerInfo?.traceId,
+        conversationId: conversationId || callerInfo?.conversation_id || callerInfo?.conversationId,
+        data: {
+          error: err.message
+        }
+      });
       return runGenericSummary({
         messages,
         callerInfo,
@@ -424,14 +474,15 @@ function createRuntimeAdapter(options = {}) {
     }
   }
 
-  async function notify({ level, token, caller, message, conversationId }) {
+  async function notify({ level, token, caller, message, conversationId, traceId }) {
     const payload = {
       mode: 'a2a-notify',
       level,
       token: token || null,
       caller: caller || null,
       message,
-      conversationId
+      conversationId,
+      traceId
     };
 
     if (modeInfo.mode !== 'openclaw') {
@@ -451,7 +502,15 @@ function createRuntimeAdapter(options = {}) {
       if (!failoverEnabled) {
         throw err;
       }
-      console.error(`[a2a] OpenClaw notify failed, running generic notifier: ${err.message}`);
+      logger.warn('OpenClaw notify failed, running generic notifier', {
+        event: 'openclaw_notify_failed_fallback',
+        traceId,
+        conversationId,
+        tokenId: token?.id,
+        data: {
+          error: err.message
+        }
+      });
       await runGenericNotify(payload);
     }
   }

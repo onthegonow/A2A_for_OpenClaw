@@ -16,6 +16,7 @@ const { ConversationStore } = require('../lib/conversations');
 const { A2AConfig } = require('../lib/config');
 const { loadManifest, saveManifest } = require('../lib/disclosure');
 const { resolveInviteHost } = require('../lib/invite-host');
+const { createLogger } = require('../lib/logger');
 
 const DASHBOARD_STATIC_DIR = path.join(__dirname, '..', 'dashboard', 'public');
 
@@ -106,6 +107,7 @@ https://github.com/onthegonow/a2a_calling`;
 function buildContext(options = {}) {
   const tokenStore = options.tokenStore || new TokenStore();
   const config = options.config || new A2AConfig();
+  const logger = options.logger || createLogger({ component: 'a2a.dashboard' });
   let convStore = options.convStore || null;
   if (!convStore) {
     try {
@@ -122,6 +124,7 @@ function buildContext(options = {}) {
     tokenStore,
     config,
     convStore,
+    logger,
     staticDir: DASHBOARD_STATIC_DIR
   };
 }
@@ -189,6 +192,7 @@ function createDashboardApiRouter(options = {}) {
   router.use(ensureDashboardAccess);
 
   router.get('/status', (req, res) => {
+    context.logger.debug('Dashboard status requested', { event: 'dashboard_status' });
     res.json({
       success: true,
       dashboard: true,
@@ -196,6 +200,41 @@ function createDashboardApiRouter(options = {}) {
       config_file: require('../lib/config').CONFIG_FILE,
       manifest_file: require('../lib/disclosure').MANIFEST_FILE
     });
+  });
+
+  router.get('/logs', (req, res) => {
+    const limit = Math.min(1000, Math.max(1, Number.parseInt(req.query.limit || '200', 10) || 200));
+    const logs = context.logger.list({
+      limit,
+      level: req.query.level || null,
+      component: req.query.component || null,
+      event: req.query.event || null,
+      traceId: req.query.trace_id || req.query.traceId || null,
+      conversationId: req.query.conversation_id || req.query.conversationId || null,
+      tokenId: req.query.token_id || req.query.tokenId || null,
+      search: req.query.search || null,
+      from: req.query.from || null,
+      to: req.query.to || null
+    });
+    return res.json({ success: true, logs });
+  });
+
+  router.get('/logs/trace/:traceId', (req, res) => {
+    const traceId = sanitizeString(req.params.traceId, 120);
+    if (!traceId) {
+      return res.status(400).json({ success: false, error: 'trace_id_required' });
+    }
+    const limit = Math.min(1000, Math.max(1, Number.parseInt(req.query.limit || '500', 10) || 500));
+    const logs = context.logger.getTrace(traceId, { limit });
+    return res.json({ success: true, trace_id: traceId, logs });
+  });
+
+  router.get('/logs/stats', (req, res) => {
+    const stats = context.logger.stats({
+      from: req.query.from || null,
+      to: req.query.to || null
+    });
+    return res.json({ success: true, stats });
   });
 
   router.get('/contacts', (req, res) => {

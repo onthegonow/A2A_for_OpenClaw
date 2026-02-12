@@ -10,6 +10,7 @@
 
 const { TokenStore } = require('../lib/tokens');
 const crypto = require('crypto');
+const { createLogger, createTraceId } = require('../lib/logger');
 
 // Lazy-load conversation store (optional dependency)
 let ConversationStore = null;
@@ -63,6 +64,14 @@ function isLoopbackAddress(ip) {
     return true;
   }
   return ip.startsWith('::ffff:127.');
+}
+
+function resolveTraceId(req) {
+  const headerTrace = req.headers['x-trace-id'];
+  if (typeof headerTrace === 'string' && headerTrace.trim()) {
+    return headerTrace.trim().slice(0, 120);
+  }
+  return createTraceId('a2a');
 }
 
 function checkRateLimit(tokenId, limits = { minute: 10, hour: 100, day: 1000 }) {
@@ -126,6 +135,7 @@ function createRoutes(options = {}) {
   const handleMessage = options.handleMessage || defaultMessageHandler;
   const notifyOwner = options.notifyOwner || (() => Promise.resolve());
   const limits = options.rateLimits || { minute: 10, hour: 100, day: 1000 };
+  const logger = options.logger || createLogger({ component: 'a2a.routes' });
 
   // Initialize conversation store and call monitor
   const convStore = getConversationStore();
@@ -135,7 +145,8 @@ function createRoutes(options = {}) {
     notifyOwner,
     ownerContext: options.ownerContext || {},
     idleTimeoutMs: options.idleTimeoutMs || 60000,
-    maxDurationMs: options.maxDurationMs || 300000
+    maxDurationMs: options.maxDurationMs || 300000,
+    logger: logger.child({ component: 'a2a.call-monitor' })
   });
 
   /**
@@ -164,9 +175,21 @@ function createRoutes(options = {}) {
    * Call the agent
    */
   router.post('/invoke', async (req, res) => {
+    const startedAt = Date.now();
+    const traceId = resolveTraceId(req);
+    const reqLogger = logger.child({ traceId, event: 'invoke' });
+    res.set('x-trace-id', traceId);
+    reqLogger.info('Received invoke request', {
+      data: {
+        ip: req.ip,
+        has_auth_header: Boolean(req.headers.authorization)
+      }
+    });
+
     // Extract token
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      reqLogger.warn('Invoke request missing bearer token');
       return res.status(401).json({ 
         success: false, 
         error: 'missing_token', 
@@ -181,6 +204,7 @@ function createRoutes(options = {}) {
     if (!validation.valid) {
       // Use generic error to prevent token enumeration
       // All invalid token states return same response
+      reqLogger.warn('Invoke token validation failed');
       return res.status(401).json({ 
         success: false, 
         error: 'unauthorized', 
@@ -191,6 +215,12 @@ function createRoutes(options = {}) {
     // Check rate limit
     const rateCheck = checkRateLimit(validation.id, limits);
     if (rateCheck.limited) {
+      reqLogger.warn('Invoke request rate limited', {
+        tokenId: validation.id,
+        data: {
+          retry_after: rateCheck.retryAfter
+        }
+      });
       res.set('Retry-After', rateCheck.retryAfter);
       return res.status(429).json({ 
         success: false, 
@@ -203,6 +233,9 @@ function createRoutes(options = {}) {
     const { message, conversation_id, caller, context, timeout_seconds = 60 } = req.body;
 
     if (!message) {
+      reqLogger.warn('Invoke request missing message', {
+        tokenId: validation.id
+      });
       return res.status(400).json({ 
         success: false, 
         error: 'missing_message', 
@@ -212,6 +245,13 @@ function createRoutes(options = {}) {
 
     // Validate message length
     if (typeof message !== 'string' || message.length > MAX_MESSAGE_LENGTH) {
+      reqLogger.warn('Invoke request has invalid message payload', {
+        tokenId: validation.id,
+        data: {
+          message_type: typeof message,
+          message_length: typeof message === 'string' ? message.length : null
+        }
+      });
       return res.status(400).json({
         success: false,
         error: 'invalid_message',
@@ -241,7 +281,8 @@ function createRoutes(options = {}) {
       allowed_topics: validation.allowed_topics,
       disclosure: validation.disclosure,
       caller: sanitizedCaller,
-      conversation_id: conversation_id || `conv_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`
+      conversation_id: conversation_id || `conv_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`,
+      trace_id: traceId
     };
 
     // Track conversation if store available
@@ -257,7 +298,10 @@ function createRoutes(options = {}) {
         
         // Track activity for auto-conclude
         if (monitor) {
-          monitor.trackActivity(a2aContext.conversation_id, sanitizedCaller);
+          monitor.trackActivity(a2aContext.conversation_id, {
+            ...sanitizedCaller,
+            trace_id: traceId
+          });
         }
         
         // Store incoming message
@@ -267,7 +311,13 @@ function createRoutes(options = {}) {
           content: message
         });
       } catch (err) {
-        console.error('[a2a] Conversation tracking error:', err.message);
+        reqLogger.error('Conversation tracking error', {
+          conversationId: a2aContext.conversation_id,
+          tokenId: validation.id,
+          data: {
+            error: err.message
+          }
+        });
       }
     }
 
@@ -284,7 +334,13 @@ function createRoutes(options = {}) {
             content: response.text
           });
         } catch (err) {
-          console.error('[a2a] Message storage error:', err.message);
+          reqLogger.error('Message storage error', {
+            conversationId: a2aContext.conversation_id,
+            tokenId: validation.id,
+            data: {
+              error: err.message
+            }
+          });
         }
       }
 
@@ -297,11 +353,28 @@ function createRoutes(options = {}) {
           context,
           message,
           response: response.text,
-          conversation_id: a2aContext.conversation_id
+          conversation_id: a2aContext.conversation_id,
+          trace_id: traceId
         }).catch(err => {
-          console.error('[a2a] Failed to notify owner:', err.message);
+          reqLogger.error('Failed to notify owner', {
+            conversationId: a2aContext.conversation_id,
+            tokenId: validation.id,
+            data: {
+              error: err.message
+            }
+          });
         });
       }
+
+      reqLogger.info('Invoke request completed', {
+        conversationId: a2aContext.conversation_id,
+        tokenId: validation.id,
+        data: {
+          duration_ms: Date.now() - startedAt,
+          message_length: message.length,
+          is_new_conversation: isNewConversation
+        }
+      });
 
       res.json({
         success: true,
@@ -312,7 +385,14 @@ function createRoutes(options = {}) {
       });
 
     } catch (err) {
-      console.error('[a2a] Message handling error:', err);
+      reqLogger.error('Message handling error', {
+        conversationId: a2aContext.conversation_id,
+        tokenId: validation.id,
+        data: {
+          duration_ms: Date.now() - startedAt,
+          error: err.message
+        }
+      });
       res.status(500).json({
         success: false,
         error: 'internal_error',
@@ -326,9 +406,15 @@ function createRoutes(options = {}) {
    * End a conversation and trigger summary generation
    */
   router.post('/end', async (req, res) => {
+    const startedAt = Date.now();
+    const traceId = resolveTraceId(req);
+    const reqLogger = logger.child({ traceId, event: 'end' });
+    res.set('x-trace-id', traceId);
+
     // Extract token
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      reqLogger.warn('End request missing bearer token');
       return res.status(401).json({ 
         success: false, 
         error: 'unauthorized', 
@@ -339,6 +425,7 @@ function createRoutes(options = {}) {
     const token = authHeader.slice(7);
     const validation = tokenStore.validate(token);
     if (!validation.valid) {
+      reqLogger.warn('End request token validation failed');
       return res.status(401).json({ 
         success: false, 
         error: 'unauthorized', 
@@ -348,6 +435,9 @@ function createRoutes(options = {}) {
 
     const { conversation_id } = req.body;
     if (!conversation_id) {
+      reqLogger.warn('End request missing conversation_id', {
+        tokenId: validation.id
+      });
       return res.status(400).json({
         success: false,
         error: 'missing_conversation_id',
@@ -377,11 +467,27 @@ function createRoutes(options = {}) {
           level: validation.notify,
           type: 'conversation_concluded',
           token: validation,
-          conversation: conv
+          conversation: conv,
+          trace_id: traceId
         }).catch(err => {
-          console.error('[a2a] Failed to notify owner:', err.message);
+          reqLogger.error('Failed to notify owner after conversation end', {
+            conversationId: conversation_id,
+            tokenId: validation.id,
+            data: {
+              error: err.message
+            }
+          });
         });
       }
+
+      reqLogger.info('End request completed', {
+        conversationId: conversation_id,
+        tokenId: validation.id,
+        data: {
+          duration_ms: Date.now() - startedAt,
+          status: result.success ? 'concluded' : 'unchanged'
+        }
+      });
 
       res.json({
         success: true,
@@ -390,7 +496,14 @@ function createRoutes(options = {}) {
         summary: result.summary
       });
     } catch (err) {
-      console.error('[a2a] End conversation error:', err);
+      reqLogger.error('End conversation error', {
+        conversationId: conversation_id,
+        tokenId: validation.id,
+        data: {
+          duration_ms: Date.now() - startedAt,
+          error: err.message
+        }
+      });
       res.status(500).json({
         success: false,
         error: 'internal_error',

@@ -7,12 +7,15 @@
  * - Max duration exceeded
  */
 
+const { createLogger } = require('./logger');
+
 class CallMonitor {
   constructor(options = {}) {
     this.convStore = options.convStore;
     this.summarizer = options.summarizer;
     this.notifyOwner = options.notifyOwner || (() => {});
     this.ownerContext = options.ownerContext || {};
+    this.logger = options.logger || createLogger({ component: 'a2a.call-monitor' });
     
     // Timing config
     this.idleTimeoutMs = options.idleTimeoutMs || 60000;      // 60s idle
@@ -33,7 +36,14 @@ class CallMonitor {
       this._checkIdleConversations();
     }, this.checkIntervalMs);
     
-    console.log('[a2a] Call monitor started');
+    this.logger.info('Call monitor started', {
+      event: 'call_monitor_started',
+      data: {
+        idle_timeout_ms: this.idleTimeoutMs,
+        max_duration_ms: this.maxDurationMs,
+        check_interval_ms: this.checkIntervalMs
+      }
+    });
   }
 
   /**
@@ -43,7 +53,7 @@ class CallMonitor {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
-      console.log('[a2a] Call monitor stopped');
+      this.logger.info('Call monitor stopped', { event: 'call_monitor_stopped' });
     }
   }
 
@@ -62,6 +72,14 @@ class CallMonitor {
         lastActivity: now,
         callerInfo
       });
+      this.logger.debug('Tracking new conversation activity', {
+        event: 'call_monitor_track_new',
+        conversationId,
+        traceId: callerInfo?.trace_id || callerInfo?.traceId,
+        data: {
+          caller_name: callerInfo?.name || null
+        }
+      });
     }
   }
 
@@ -75,6 +93,14 @@ class CallMonitor {
     if (!this.convStore) return { success: false, error: 'no_store' };
     
     try {
+      this.logger.info('Concluding conversation', {
+        event: 'call_monitor_end_conversation',
+        conversationId,
+        traceId: convData?.callerInfo?.trace_id || convData?.callerInfo?.traceId,
+        data: {
+          reason
+        }
+      });
       const result = await this.convStore.concludeConversation(conversationId, {
         summarizer: this.summarizer,
         ownerContext: this.ownerContext
@@ -89,13 +115,29 @@ class CallMonitor {
           conversation: context,
           callerInfo: convData?.callerInfo
         }).catch(err => {
-          console.error('[a2a] Failed to notify owner:', err.message);
+          this.logger.error('Failed to notify owner after conversation conclusion', {
+            event: 'call_monitor_owner_notify_failed',
+            conversationId,
+            traceId: convData?.callerInfo?.trace_id || convData?.callerInfo?.traceId,
+            data: {
+              reason,
+              error: err.message
+            }
+          });
         });
       }
       
       return result;
     } catch (err) {
-      console.error('[a2a] Failed to conclude conversation:', err.message);
+      this.logger.error('Failed to conclude conversation', {
+        event: 'call_monitor_conclude_failed',
+        conversationId,
+        traceId: convData?.callerInfo?.trace_id || convData?.callerInfo?.traceId,
+        data: {
+          reason,
+          error: err.message
+        }
+      });
       return { success: false, error: err.message };
     }
   }
@@ -112,14 +154,30 @@ class CallMonitor {
       
       // Check max duration
       if (duration > this.maxDurationMs) {
-        console.log(`[a2a] Conversation ${convId} exceeded max duration, concluding...`);
+        this.logger.info('Conversation exceeded max duration; concluding', {
+          event: 'call_monitor_max_duration',
+          conversationId: convId,
+          traceId: data?.callerInfo?.trace_id || data?.callerInfo?.traceId,
+          data: {
+            duration_ms: duration,
+            max_duration_ms: this.maxDurationMs
+          }
+        });
         await this.endConversation(convId, 'max_duration');
         continue;
       }
       
       // Check idle timeout
       if (idleTime > this.idleTimeoutMs) {
-        console.log(`[a2a] Conversation ${convId} idle for ${Math.round(idleTime / 1000)}s, concluding...`);
+        this.logger.info('Conversation idle timeout reached; concluding', {
+          event: 'call_monitor_idle_timeout',
+          conversationId: convId,
+          traceId: data?.callerInfo?.trace_id || data?.callerInfo?.traceId,
+          data: {
+            idle_ms: idleTime,
+            idle_timeout_ms: this.idleTimeoutMs
+          }
+        });
         await this.endConversation(convId, 'idle_timeout');
       }
     }
