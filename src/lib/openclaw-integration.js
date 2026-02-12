@@ -72,8 +72,8 @@ function loadOwnerContext(workspaceDir = process.cwd()) {
  * Build summary prompt for agent
  * 
  * Philosophy: Federation is collaborative AND adversarial. Each agent tries
- * to maximize value for their owner. Track the exchange balance and
- * recommend trust adjustments.
+ * to maximize value for their owner while finding genuine mutual wins.
+ * Track the exchange balance AND surface partnership opportunities.
  */
 function buildSummaryPrompt(messages, ownerContext, callerInfo = {}) {
   const messageText = messages.map(m => {
@@ -87,14 +87,12 @@ function buildSummaryPrompt(messages, ownerContext, callerInfo = {}) {
   return `You just finished a federated agent-to-agent call. Analyze it strategically for your owner.
 
 ## Philosophy
-Federation is cooperative AND adversarial. Each agent maximizes value for their own owner.
-Your job: track the exchange balance and advise your owner on this relationship.
+Federation is cooperative AND adversarial. Each agent maximizes value for their own owner — but the best outcomes are mutual wins. Your job:
 
-Questions to answer:
-- What did WE extract from this call? (info, commitments, compute, actions)
-- What did WE give up? (info, compute, promises, exposed capabilities)
-- Was the exchange fair, or are we being exploited?
-- Should we adjust trust/permissions based on this pattern?
+1. **Track the exchange** — what did we get vs give?
+2. **Find mutual value** — what can BOTH parties gain?
+3. **Surface alignment** — does this connect to owner's goals?
+4. **Advise strategically** — protect interests while building relationships
 
 ## Your Owner's Context
 ${ownerContext.user ? `### From USER.md\n${ownerContext.user.slice(0, 2000)}` : ''}
@@ -111,40 +109,41 @@ ${callerInfo.name ? `Name: ${callerInfo.name}` : 'Unknown caller'}
 ${callerInfo.context ? `Context: ${callerInfo.context}` : ''}
 
 ## Your Task
-Analyze this as a strategic exchange. Return JSON:
+Analyze as a strategic advisor. Return JSON:
 
 {
-  "summary": "Brief neutral summary (could be shared)",
+  "summary": "Brief neutral summary (shareable)",
   
-  "extracted": {
-    "info": ["what we learned about them/their owner"],
-    "commitments": ["what they promised to do"],
-    "value": "overall value we got - low/medium/high"
+  "exchange": {
+    "weGot": ["info, commitments, or value we extracted"],
+    "weGave": ["info, compute, or commitments we provided"],
+    "balance": "favorable | even | unfavorable",
+    "fair": true
   },
   
-  "given": {
-    "info": ["what we revealed about us/our owner"],
-    "compute": ["tools/actions we ran for them"],
-    "commitments": ["what we promised to do"],
-    "value": "overall value we gave - low/medium/high"  
+  "mutualValue": {
+    "found": true,
+    "opportunities": ["potential wins for BOTH sides"],
+    "alignment": "how this connects to owner's goals"
   },
   
-  "balance": "favorable | even | unfavorable",
-  "exploitation": "none | possible | likely",
-  "pattern": "What's their angle? What are they really after?",
+  "actionItems": {
+    "owner": ["what YOUR OWNER should do"],
+    "caller": ["what THEY committed to or should do"],
+    "joint": ["things to do TOGETHER"]
+  },
   
   "trust": {
-    "current": "appropriate | too_high | too_low",
+    "assessment": "appropriate | too_high | too_low",
     "recommendation": "maintain | increase | decrease | revoke",
-    "reason": "why"
+    "pattern": "What's their angle? Genuine partner or extractive?"
   },
   
-  "ownerBrief": "2-3 sentences: what your owner needs to know",
-  "actionItems": ["things YOUR OWNER should do based on this"],
-  "followUp": "next step if any"
+  "ownerBrief": "2-3 sentences: the strategic takeaway for your owner",
+  "followUp": "concrete next step to advance this relationship (if any)"
 }
 
-Think like a strategic advisor protecting your owner's interests.
+Think like a strategic advisor: protect your owner's interests AND find mutual wins.
 
 JSON:`;
 }
