@@ -18,6 +18,7 @@ const { TokenStore } = require('./lib/tokens');
 const { A2AClient, A2AError } = require('./lib/client');
 const { createRoutes } = require('./routes/a2a');
 const { createDashboardApiRouter, createDashboardUiRouter } = require('./routes/dashboard');
+const { createRuntimeAdapter, resolveRuntimeMode } = require('./lib/runtime-adapter');
 
 // Lazy load optional dependencies
 let ConversationStore = null;
@@ -48,6 +49,10 @@ module.exports = {
   // Dashboard routes
   createDashboardApiRouter,
   createDashboardUiRouter,
+
+  // Runtime adapter
+  createRuntimeAdapter,
+  resolveRuntimeMode,
   
   // Conversation storage (requires better-sqlite3)
   ConversationStore,

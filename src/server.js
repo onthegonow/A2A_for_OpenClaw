@@ -2,17 +2,17 @@
 /**
  * A2A Server
  * 
- * Routes A2A calls to OpenClaw sub-agents.
+ * Routes A2A calls through a runtime adapter (OpenClaw or generic fallback).
  * Auto-adds contacts, generates summaries, notifies owner.
  */
 
 const express = require('express');
-const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { createRoutes } = require('./routes/a2a');
 const { createDashboardApiRouter, createDashboardUiRouter } = require('./routes/dashboard');
 const { TokenStore } = require('./lib/tokens');
+const { createRuntimeAdapter } = require('./lib/runtime-adapter');
 const { getTopicsForTier, formatTopicsForPrompt, loadManifest } = require('./lib/disclosure');
 const {
   buildConnectionPrompt,
@@ -21,16 +21,23 @@ const {
 } = require('./lib/prompt-template');
 
 const port = process.env.PORT || parseInt(process.argv[2]) || 3001;
-const workspaceDir = process.env.OPENCLAW_WORKSPACE || '/root/clawd';
+const workspaceDir = process.env.A2A_WORKSPACE || process.env.OPENCLAW_WORKSPACE || process.cwd();
 
 // Load workspace context for agent identity
 function loadAgentContext() {
-  let context = { name: 'bappybot', owner: 'Ben Pollack' };
+  let context = {
+    name: process.env.A2A_AGENT_NAME || process.env.AGENT_NAME || 'a2a-agent',
+    owner: process.env.A2A_OWNER_NAME || process.env.USER || 'Agent Owner'
+  };
   
   try {
     const userPath = path.join(workspaceDir, 'USER.md');
     if (fs.existsSync(userPath)) {
       const content = fs.readFileSync(userPath, 'utf8');
+      const agentMatch = content.match(/\*\*Agent:\*\*\s*([^\n]+)/i);
+      if (agentMatch && agentMatch[1]) {
+        context.name = agentMatch[1].trim().slice(0, 80) || context.name;
+      }
       const nameMatch = content.match(/\*\*Name:\*\*\s*([^\n]+)/);
       if (nameMatch) {
         const name = nameMatch[1].trim();
@@ -46,12 +53,20 @@ function loadAgentContext() {
 
 const agentContext = loadAgentContext();
 const tokenStore = new TokenStore();
+const runtime = createRuntimeAdapter({
+  workspaceDir,
+  agentContext
+});
 const VALID_PHASES = new Set(['handshake', 'explore', 'deep_dive', 'synthesize', 'close']);
 const collaborationSessions = new Map();
 const COLLAB_STATE_TTL_MS = readPositiveIntEnv('A2A_COLLAB_STATE_TTL_MS', 6 * 60 * 60 * 1000);
 const MAX_COLLAB_SESSIONS = readPositiveIntEnv('A2A_COLLAB_MAX_SESSIONS', 500);
 
 console.log(`[a2a] Agent: ${agentContext.name} (${agentContext.owner}'s agent)`);
+console.log(`[a2a] Runtime: ${runtime.mode} (${runtime.reason})`);
+if (runtime.warning) {
+  console.warn(`[a2a] Runtime warning: ${runtime.warning}`);
+}
 
 function readPositiveIntEnv(name, fallback) {
   const parsed = Number.parseInt(process.env[name] || '', 10);
@@ -489,30 +504,19 @@ async function callAgent(message, a2aContext) {
   const sessionId = `a2a-${conversationId}`;
   
   try {
-    const escapedPrompt = prompt
-      .replace(/\\/g, '\\\\')
-      .replace(/"/g, '\\"')
-      .replace(/\n/g, '\\n')
-      .replace(/\r/g, '');
-    
-    const result = execSync(
-      `openclaw agent --session-id "${sessionId}" --message "${escapedPrompt}" --timeout 55 2>&1`,
-      {
-        encoding: 'utf8',
-        timeout: 65000,
-        maxBuffer: 1024 * 1024,
-        cwd: workspaceDir,
-        env: { ...process.env, FORCE_COLOR: '0' }
+    const rawResponse = await runtime.runTurn({
+      sessionId,
+      prompt,
+      message,
+      caller: a2aContext.caller || {},
+      timeoutMs: 65000,
+      context: {
+        conversationId,
+        tier: tierInfo,
+        ownerName: agentContext.owner,
+        allowedTopics: a2aContext.allowed_topics || []
       }
-    );
-    
-    const lines = result.split('\n').filter(line => 
-      !line.includes('[telegram-topic-tracker]') && 
-      !line.includes('Plugin registered') &&
-      line.trim()
-    );
-    
-    const rawResponse = lines.join('\n').trim() || '[Sub-agent returned empty response]';
+    });
 
     if (collabMode !== 'adaptive') {
       return rawResponse;
@@ -549,8 +553,12 @@ async function callAgent(message, a2aContext) {
     return cleanResponse || '[Sub-agent returned empty response]';
     
   } catch (err) {
-    console.error('[a2a] Sub-agent spawn failed:', err.message);
-    return `[Sub-agent error: ${err.message}]`;
+    console.error('[a2a] Runtime turn handling failed:', err.message);
+    return runtime.buildFallbackResponse(message, {
+      caller: a2aContext.caller,
+      ownerName: agentContext.owner,
+      allowedTopics: a2aContext.allowed_topics || []
+    }, err.message);
   }
 }
 
@@ -584,25 +592,12 @@ Structure your summary with these sections:
 Be concise but specific. No filler.`;
 
   try {
-    const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');
-    const result = execSync(
-      `openclaw agent --session-id "summary-${Date.now()}" --message "${escapedPrompt}" --timeout 30 2>&1`,
-      { encoding: 'utf8', timeout: 35000, cwd: workspaceDir, env: { ...process.env, FORCE_COLOR: '0' } }
-    );
-    
-    // Filter out noise and get the summary
-    const lines = result.split('\n').filter(line => 
-      !line.includes('[telegram-topic-tracker]') && 
-      !line.includes('Plugin registered') &&
-      line.trim()
-    );
-    
-    const summaryText = lines.join(' ').trim().slice(0, 1000);
-    
-    return {
-      summary: summaryText,
-      ownerSummary: summaryText
-    };
+    return await runtime.summarize({
+      sessionId: `summary-${Date.now()}`,
+      prompt,
+      messages,
+      callerInfo
+    });
   } catch (err) {
     console.error('[a2a] Summary generation failed:', err.message);
     return null;
@@ -615,22 +610,21 @@ Be concise but specific. No filler.`;
 async function notifyOwner({ level, token, caller, message, conversation_id }) {
   const callerName = caller?.name || 'Unknown';
   const callerOwner = caller?.owner ? ` (${caller.owner})` : '';
+  const messageText = String(message || '');
   
   console.log(`[a2a] 📞 Call from ${callerName}${callerOwner}`);
   console.log(`[a2a]    Token: ${token?.name || 'unknown'}`);
-  console.log(`[a2a]    Message: ${message.slice(0, 100)}...`);
-  
-  // Try to notify via Telegram
-  if (level === 'all') {
-    try {
-      const notification = `🤝 **A2A Call**\nFrom: ${callerName}${callerOwner}\n> ${message.slice(0, 150)}...`;
-      execSync(`openclaw message send --channel telegram --message "${notification.replace(/"/g, '\\"')}"`, {
-        timeout: 10000, stdio: 'pipe'
-      });
-    } catch (e) {
-      // Notification failed, continue anyway
-    }
+  if (messageText) {
+    console.log(`[a2a]    Message: ${messageText.slice(0, 100)}...`);
   }
+
+  await runtime.notify({
+    level,
+    token,
+    caller,
+    message: messageText,
+    conversationId: conversation_id
+  });
 }
 
 const app = express();
@@ -668,6 +662,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`[a2a] A2A server listening on port ${port}`);
   console.log(`[a2a] Agent: ${agentContext.name} - LIVE`);
+  console.log(`[a2a] Runtime mode: ${runtime.mode}${runtime.failoverEnabled ? ' (failover enabled)' : ''}`);
   console.log(`[a2a] Collaboration mode: ${resolveCollabMode()}`);
-  console.log(`[a2a] Features: sub-agents, auto-contacts, summaries`);
+  console.log(`[a2a] Features: adaptive collaboration, auto-contacts, summaries, dashboard`);
 });

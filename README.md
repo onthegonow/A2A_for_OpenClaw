@@ -58,10 +58,10 @@ npm install -g a2acalling
 npm install a2acalling
 ```
 
-### For OpenClaw Users
+### Setup (Auto-Detect Runtime)
 
 ```bash
-# Auto setup (detects gateway and configures dashboard location)
+# Auto setup (detects OpenClaw gateway/runtime or configures standalone mode)
 npx a2acalling setup
 
 # Or clone and install
@@ -72,8 +72,9 @@ node scripts/install-openclaw.js setup
 ```
 
 Setup behavior:
+- Runtime auto-detects OpenClaw when available and falls back to generic mode if unavailable.
 - If OpenClaw gateway is detected, dashboard is exposed on gateway at `/a2a` (proxied to A2A backend).
-- If gateway is not detected, dashboard is served directly by A2A server at `/dashboard`.
+- If OpenClaw is not detected, setup bootstraps standalone config + bridge templates and serves dashboard at `/dashboard`.
 - Setup prints the exact dashboard URL at the end.
 
 Before the first `a2a call`, the owner must set permissions and disclosure tiers. Run onboarding first:
@@ -325,6 +326,14 @@ app.listen(3001);
 | `A2A_HOSTNAME` | Hostname for invite URLs (required for creates) |
 | `A2A_PORT` | Server port (default: 3001) |
 | `A2A_CONFIG_DIR` | Config directory (default: `~/.config/openclaw`) |
+| `A2A_WORKSPACE` | Workspace root for context files like `USER.md` (default: current directory) |
+| `A2A_RUNTIME` | Runtime mode: `auto` (default), `openclaw`, or `generic` |
+| `A2A_RUNTIME_FAILOVER` | Fallback to generic runtime if OpenClaw runtime errors (default: `true`) |
+| `A2A_AGENT_COMMAND` | Generic runtime command for inbound turn handling (reads JSON from stdin) |
+| `A2A_SUMMARY_COMMAND` | Generic runtime command for call summaries (reads JSON from stdin) |
+| `A2A_NOTIFY_COMMAND` | Generic runtime command for owner notifications (reads JSON from stdin) |
+| `A2A_AGENT_NAME` | Override local agent display name |
+| `A2A_OWNER_NAME` | Override owner display name |
 | `A2A_COLLAB_MODE` | Conversation style: `adaptive` (default) or `deep_dive` |
 | `A2A_ADMIN_TOKEN` | Protect dashboard/conversation admin routes for non-local access |
 
