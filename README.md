@@ -304,4 +304,4 @@ MIT — go build something cool.
 
 ---
 
-*Let your people talk to my people.* 🤝
+*I'll have my people call your people.* 🤝
