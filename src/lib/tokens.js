@@ -257,9 +257,9 @@ class TokenStore {
       options = { name: options };
     }
 
-    const match = inviteUrl.match(/^oclaw:\/\/([^/]+)\/(.+)$/);
+    const match = inviteUrl.match(/^(?:a2a|oclaw):\/\/([^/]+)\/(.+)$/);
     if (!match) {
-      throw new Error(`Invalid invite URL: ${inviteUrl}`);
+      throw new Error(`Invalid invite URL: ${inviteUrl}. Expected format: a2a://host/token`);
     }
 
     const [, host, token] = match;
