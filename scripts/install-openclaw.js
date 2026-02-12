@@ -278,12 +278,25 @@ function sendHtml(res: ServerResponse, status: number, html: string) {
 
 function resolveBackendUrl(api: OpenClawPluginApi): URL {
   const fallback = process.env.A2A_DASHBOARD_BACKEND_URL || "http://127.0.0.1:3001";
+  const pluginConfigRaw = (api as OpenClawPluginApi & { pluginConfig?: unknown }).pluginConfig;
+  const pluginConfig = (pluginConfigRaw && typeof pluginConfigRaw === "object")
+    ? (pluginConfigRaw as Record<string, unknown>)
+    : {};
+  const configuredUrl = typeof pluginConfig.backendUrl === "string" && pluginConfig.backendUrl
+    ? pluginConfig.backendUrl
+    : "";
+  if (configuredUrl) {
+    return new URL(configuredUrl);
+  }
   try {
     const cfg = api.runtime.config.loadConfig() as Record<string, unknown>;
     const plugins = (cfg.plugins || {}) as Record<string, unknown>;
     const entries = (plugins.entries || {}) as Record<string, unknown>;
     const pluginEntry = (entries[PLUGIN_ID] || {}) as Record<string, unknown>;
-    const candidate = typeof pluginEntry.backendUrl === "string" && pluginEntry.backendUrl
+    const entryConfig = (pluginEntry.config || {}) as Record<string, unknown>;
+    const candidate = typeof entryConfig.backendUrl === "string" && entryConfig.backendUrl
+      ? entryConfig.backendUrl
+      : typeof pluginEntry.backendUrl === "string" && pluginEntry.backendUrl
       ? pluginEntry.backendUrl
       : fallback;
     return new URL(candidate);
@@ -559,11 +572,20 @@ async function install() {
 
       config.plugins = config.plugins || {};
       config.plugins.entries = config.plugins.entries || {};
-      const existingEntry = config.plugins.entries[DASHBOARD_PLUGIN_ID] || {};
+      const rawEntry = config.plugins.entries[DASHBOARD_PLUGIN_ID];
+      const existingEntry = (rawEntry && typeof rawEntry === 'object') ? rawEntry : {};
+      const existingConfig = (existingEntry.config && typeof existingEntry.config === 'object')
+        ? existingEntry.config
+        : {};
+      if (typeof existingEntry.backendUrl === 'string' && existingEntry.backendUrl) {
+        log(`Migrated legacy plugin key plugins.entries.${DASHBOARD_PLUGIN_ID}.backendUrl -> plugins.entries.${DASHBOARD_PLUGIN_ID}.config.backendUrl`);
+      }
       config.plugins.entries[DASHBOARD_PLUGIN_ID] = {
-        ...existingEntry,
         enabled: true,
-        backendUrl
+        config: {
+          ...existingConfig,
+          backendUrl
+        }
       };
       configUpdated = true;
       log(`Configured gateway plugin entry: ${DASHBOARD_PLUGIN_ID}`);
