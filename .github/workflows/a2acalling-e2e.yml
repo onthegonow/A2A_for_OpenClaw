@@ -1,0 +1,50 @@
+name: A2A Calling E2E
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: "Lane to run"
+        required: true
+        default: "smoke"
+        type: choice
+        options:
+          - smoke
+          - internet
+          - nightly-real
+  schedule:
+    - cron: "23 3 * * *"
+
+jobs:
+  smoke:
+    if: github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.lane == 'smoke')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run smoke lane
+        run: ./a2atesting/a2acalling/run-lane.sh smoke
+
+  nightly-real:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'nightly-real')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run nightly-real lane
+        env:
+          A2A_REAL_INVITE_URL: ${{ secrets.A2A_REAL_INVITE_URL }}
+          A2A_REAL_MESSAGE: ${{ secrets.A2A_REAL_MESSAGE }}
+          A2A_REAL_TIMEOUT_MS: ${{ secrets.A2A_REAL_TIMEOUT_MS }}
+          A2A_REAL_REQUIRED: ${{ secrets.A2A_REAL_REQUIRED }}
+        run: ./a2atesting/a2acalling/run-lane.sh nightly-real
+
+  internet:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'internet'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run internet lane
+        run: ./a2atesting/a2acalling/run-lane.sh internet
