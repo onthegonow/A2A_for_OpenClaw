@@ -52,71 +52,69 @@ description: "Agent-to-Agent federation. Handle /a2a commands to create tokens, 
 
 # A2A Federation
 
-Handle agent-to-agent communication commands.
+Handle agent-to-agent communication with Telegram inline buttons + \`a2a\` CLI.
+
+## CRITICAL: Forum Topic Threading
+
+When sending messages with buttons in Telegram forum groups, **ALWAYS include threadId**:
+
+1. Extract topic ID from message header (e.g., \`topic:567\`)
+2. Include \`threadId: "TOPIC_ID"\` in ALL message tool calls
+
+## Main Menu (/a2a)
+
+\`\`\`javascript
+message({
+  action: "send",
+  channel: "telegram",
+  target: "CHAT_ID",
+  threadId: "TOPIC_ID",  // REQUIRED for forum topics!
+  message: "🤝 **A2A Federation**\\n\\nWhat would you like to do?",
+  buttons: [
+    [{ text: "📝 Create Invite", callback_data: "/a2a invite" }, { text: "📋 List Tokens", callback_data: "/a2a list" }],
+    [{ text: "🗑 Revoke Token", callback_data: "/a2a revoke" }, { text: "📡 Add Remote", callback_data: "/a2a add" }]
+  ]
+})
+\`\`\`
 
 ## Commands
 
-### /a2a invite [name] [--expires X] [--permissions Y]
-
-Create a federation token. Run:
-
+### /a2a invite
 \`\`\`bash
-a2a create --name "NAME" --expires "DURATION" --permissions "LEVEL"
+a2a create --name "NAME" --expires "DURATION"
 \`\`\`
-
-Defaults: expires=1d, permissions=chat-only, max-calls=100
-
-Reply with the full shareable invite block.
+Reply with full shareable invite block.
 
 ### /a2a list
-
-List active tokens:
-
 \`\`\`bash
 a2a list
 \`\`\`
 
 ### /a2a revoke <id>
-
-Revoke a token:
-
 \`\`\`bash
 a2a revoke TOKEN_ID
 \`\`\`
 
-### /a2a add <invite_url> [name]
-
-Add a remote agent:
-
+### /a2a add <url> [name]
 \`\`\`bash
-a2a add "INVITE_URL" "NAME"
+a2a add "URL" "NAME"
 \`\`\`
 
-### /a2a remotes
-
-List remote agents:
-
+### /a2a call <url> <msg>
 \`\`\`bash
-a2a remotes
-\`\`\`
-
-### /a2a call <name_or_url> <message>
-
-Call a remote agent:
-
-\`\`\`bash
-a2a call "URL_OR_NAME" "MESSAGE"
+a2a call "URL" "MESSAGE"
 \`\`\`
 
 ## Server
-
-The a2a server must be running to receive incoming calls:
 
 \`\`\`bash
 a2a server --port 3001
 \`\`\`
 
-Or as a service: \`systemctl start a2a\`
+## Defaults
+- Expiration: 1 day
+- Max calls: 100
+- Rate limit: 10/min
 `;
 
 function install() {
