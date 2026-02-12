@@ -18,14 +18,19 @@ const { TokenStore } = require('./lib/tokens');
 const { A2AClient, A2AError } = require('./lib/client');
 const { createRoutes } = require('./routes/federation');
 
-// Lazy load conversation store (optional dependency)
+// Lazy load optional dependencies
 let ConversationStore = null;
 let summarizers = null;
+let CallMonitor = null;
+let openclawIntegration = null;
+
 try {
   ConversationStore = require('./lib/conversations').ConversationStore;
   summarizers = require('./lib/summarizer');
+  CallMonitor = require('./lib/call-monitor').CallMonitor;
+  openclawIntegration = require('./lib/openclaw-integration');
 } catch (err) {
-  // better-sqlite3 not installed, conversation storage not available
+  // Optional dependencies not installed
 }
 
 module.exports = {
@@ -42,8 +47,14 @@ module.exports = {
   // Conversation storage (requires better-sqlite3)
   ConversationStore,
   
+  // Call monitoring for auto-conclude
+  CallMonitor,
+  
   // Summarizers for conversation conclusion
   ...(summarizers || {}),
+  
+  // OpenClaw integration helpers
+  ...(openclawIntegration || {}),
   
   // Version
   version: require('../package.json').version

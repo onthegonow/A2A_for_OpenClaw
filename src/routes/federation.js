@@ -19,12 +19,33 @@ function getConversationStore() {
     try {
       ConversationStore = require('../lib/conversations').ConversationStore;
       conversationStore = new ConversationStore();
+      if (!conversationStore.isAvailable()) {
+        conversationStore = null;
+      }
     } catch (err) {
       // Conversation storage not available
       return null;
     }
   }
   return conversationStore;
+}
+
+// Lazy-load call monitor
+let CallMonitor = null;
+let callMonitor = null;
+function getCallMonitor(options = {}) {
+  if (!CallMonitor) {
+    try {
+      CallMonitor = require('../lib/call-monitor').CallMonitor;
+    } catch (err) {
+      return null;
+    }
+  }
+  if (!callMonitor && options.convStore) {
+    callMonitor = new CallMonitor(options);
+    callMonitor.start();
+  }
+  return callMonitor;
 }
 
 // Rate limiting state (in-memory - resets on restart)
@@ -84,6 +105,10 @@ function checkRateLimit(tokenId, limits = { minute: 10, hour: 100, day: 1000 }) 
  * @param {function} options.handleMessage - Async function to handle incoming messages
  * @param {function} options.notifyOwner - Async function to notify owner of calls
  * @param {object} options.rateLimits - Custom rate limits { minute, hour, day }
+ * @param {function} options.summarizer - Async function to summarize conversations
+ * @param {object} options.ownerContext - Owner context for summaries
+ * @param {number} options.idleTimeoutMs - Idle timeout for auto-conclude (default: 60000)
+ * @param {number} options.maxDurationMs - Max call duration (default: 300000)
  */
 function createRoutes(options = {}) {
   const express = require('express');
@@ -91,8 +116,19 @@ function createRoutes(options = {}) {
 
   const tokenStore = options.tokenStore || new TokenStore();
   const handleMessage = options.handleMessage || defaultMessageHandler;
-  const notifyOwner = options.notifyOwner || (() => {});
+  const notifyOwner = options.notifyOwner || (() => Promise.resolve());
   const limits = options.rateLimits || { minute: 10, hour: 100, day: 1000 };
+
+  // Initialize conversation store and call monitor
+  const convStore = getConversationStore();
+  const monitor = getCallMonitor({
+    convStore,
+    summarizer: options.summarizer,
+    notifyOwner,
+    ownerContext: options.ownerContext || {},
+    idleTimeoutMs: options.idleTimeoutMs || 60000,
+    maxDurationMs: options.maxDurationMs || 300000
+  });
 
   /**
    * GET /status
@@ -199,7 +235,6 @@ function createRoutes(options = {}) {
     };
 
     // Track conversation if store available
-    const convStore = getConversationStore();
     if (convStore) {
       try {
         convStore.startConversation({
@@ -209,6 +244,11 @@ function createRoutes(options = {}) {
           tokenId: validation.id,
           direction: 'inbound'
         });
+        
+        // Track activity for auto-conclude
+        if (monitor) {
+          monitor.trackActivity(federationContext.conversation_id, sanitizedCaller);
+        }
         
         // Store incoming message
         convStore.addMessage(federationContext.conversation_id, {
