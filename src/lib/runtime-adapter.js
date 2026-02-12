@@ -15,7 +15,7 @@
  * - A2A_NOTIFY_COMMAND  command that receives JSON payload on stdin for owner notifications
  */
 
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 
 function commandExists(command) {
   try {
@@ -171,10 +171,13 @@ function runCommand(command, payload, options = {}) {
 
 function escapeCliValue(value) {
   return String(value || '')
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '');
+    .replace(/\\/g, '\\\\')     // Backslashes first
+    .replace(/"/g, '\\"')       // Double quotes
+    .replace(/\$/g, '\\$')      // Dollar signs (variable expansion)
+    .replace(/`/g, '\\`')       // Backticks (command substitution)
+    .replace(/!/g, '\\!')       // History expansion in some shells
+    .replace(/\n/g, '\\n')      // Newlines
+    .replace(/\r/g, '');        // Carriage returns
 }
 
 function buildFallbackResponse(message, context = {}, reason = null) {
@@ -245,32 +248,44 @@ function createRuntimeAdapter(options = {}) {
 
   async function runOpenClawTurn({ sessionId, prompt, timeoutMs }) {
     const timeoutSeconds = Math.max(5, Math.min(300, Math.round((timeoutMs || 65000) / 1000)));
-    const escapedPrompt = escapeCliValue(prompt);
-    const output = execSync(
-      `openclaw agent --session-id "${sessionId}" --message "${escapedPrompt}" --timeout ${timeoutSeconds} 2>&1`,
-      {
-        encoding: 'utf8',
-        timeout: (timeoutMs || 65000) + 5000,
-        maxBuffer: 1024 * 1024,
-        cwd: workspaceDir,
-        env: { ...process.env, FORCE_COLOR: '0' }
-      }
-    );
+    // Use spawnSync with stdin to avoid shell escaping issues with complex prompts
+    const result = spawnSync('openclaw', [
+      'agent',
+      '--session-id', sessionId,
+      '--message', prompt,
+      '--timeout', String(timeoutSeconds)
+    ], {
+      encoding: 'utf8',
+      timeout: (timeoutMs || 65000) + 5000,
+      maxBuffer: 1024 * 1024,
+      cwd: workspaceDir,
+      env: { ...process.env, FORCE_COLOR: '0' }
+    });
+    const output = (result.stdout || '') + (result.stderr || '');
+    if (result.error) {
+      throw result.error;
+    }
     return normalizeOpenClawOutput(output) || '[Sub-agent returned empty response]';
   }
 
   async function runOpenClawSummary({ sessionId, prompt, timeoutMs }) {
     const timeoutSeconds = Math.max(5, Math.min(120, Math.round((timeoutMs || 35000) / 1000)));
-    const escapedPrompt = escapeCliValue(prompt);
-    const output = execSync(
-      `openclaw agent --session-id "${sessionId}" --message "${escapedPrompt}" --timeout ${timeoutSeconds} 2>&1`,
-      {
-        encoding: 'utf8',
-        timeout: (timeoutMs || 35000) + 5000,
-        cwd: workspaceDir,
-        env: { ...process.env, FORCE_COLOR: '0' }
-      }
-    );
+    // Use spawnSync with stdin to avoid shell escaping issues with complex prompts
+    const result = spawnSync('openclaw', [
+      'agent',
+      '--session-id', sessionId,
+      '--message', prompt,
+      '--timeout', String(timeoutSeconds)
+    ], {
+      encoding: 'utf8',
+      timeout: (timeoutMs || 35000) + 5000,
+      cwd: workspaceDir,
+      env: { ...process.env, FORCE_COLOR: '0' }
+    });
+    const output = (result.stdout || '') + (result.stderr || '');
+    if (result.error) {
+      throw result.error;
+    }
     const summaryText = cleanText(normalizeOpenClawOutput(output), 1500);
     if (!summaryText) {
       return null;
@@ -283,10 +298,12 @@ function createRuntimeAdapter(options = {}) {
 
   async function runOpenClawNotify({ callerName, callerOwner, message }) {
     const notification = `🤝 **A2A Call**\nFrom: ${callerName}${callerOwner}\n> ${message.slice(0, 150)}...`;
-    execSync(
-      `openclaw message send --channel telegram --message "${escapeCliValue(notification)}"`,
-      { timeout: 10000, stdio: 'pipe' }
-    );
+    // Use spawnSync to avoid shell escaping issues
+    spawnSync('openclaw', [
+      'message', 'send',
+      '--channel', 'telegram',
+      '--message', notification
+    ], { timeout: 10000, stdio: 'pipe' });
   }
 
   async function runGenericTurn({ message, caller, context, runtimeError }) {
