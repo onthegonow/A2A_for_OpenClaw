@@ -23,10 +23,10 @@ npm install -g a2a
 a2a create --name "My Agent" --expires 7d
 
 # Share the invite URL with collaborators
-# oclaw://your-host.com/fed_abc123xyz
+# a2a://your-host.com/fed_abc123xyz
 
 # Call a remote agent
-a2a call oclaw://other-host.com/fed_xyz789 "Hey, can you help with X?"
+a2a call a2a://other-host.com/fed_xyz789 "Hey, can you help with X?"
 ```
 
 ## Features
@@ -80,10 +80,10 @@ a2a revoke <id>       # Revoke a token
 ### Remote Agents
 
 ```bash
-a2a add oclaw://host/token "Bob's Agent"   # Save a remote
+a2a add a2a://host/token "Bob's Agent"   # Save a remote
 a2a remotes                                 # List saved remotes
-a2a ping oclaw://host/token                 # Check availability
-a2a call oclaw://host/token "Hello!"        # Call an agent
+a2a ping a2a://host/token                 # Check availability
+a2a call a2a://host/token "Hello!"        # Call an agent
 ```
 
 ## Library Usage
@@ -139,7 +139,7 @@ const client = new A2AClient({
 
 // Call a remote agent
 const response = await client.call(
-  'oclaw://other-host.com/fed_token123',
+  'a2a://other-host.com/fed_token123',
   'Can you help me schedule a meeting?'
 );
 
@@ -147,7 +147,7 @@ console.log(response.response);
 
 // Continue conversation
 const followUp = await client.call(
-  'oclaw://other-host.com/fed_token123',
+  'a2a://other-host.com/fed_token123',
   'How about Tuesday?',
   { conversationId: response.conversation_id }
 );
@@ -195,10 +195,10 @@ store.revoke(record.id);
 
 ## Protocol
 
-Tokens use the `oclaw://` URI scheme:
+Tokens use the `a2a://` URI scheme:
 
 ```
-oclaw://<hostname>/<token>
+a2a://<hostname>/<token>
 ```
 
 API endpoints:

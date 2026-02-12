@@ -12,7 +12,7 @@ class A2AClient {
   }
 
   /**
-   * Parse an oclaw:// URL
+   * Parse an a2a:// URL
    */
   static parseInvite(inviteUrl) {
     const match = inviteUrl.match(/^oclaw:\/\/([^/]+)\/(.+)$/);
@@ -25,7 +25,7 @@ class A2AClient {
   /**
    * Call a remote agent
    * 
-   * @param {string} endpoint - oclaw:// URL or {host, token}
+   * @param {string} endpoint - a2a:// URL or {host, token}
    * @param {string} message - Message to send
    * @param {object} options - Additional options
    * @returns {Promise<object>} Response from remote agent

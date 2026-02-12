@@ -24,7 +24,7 @@ git remote set-url origin https://${GH_TOKEN}@github.com/onthegonow/A2A_for_Open
 
 ```
 User: /federation create --name "Alice" --expires 7d
-Bot:  ✅ oclaw://myhost.com/fed_abc123
+Bot:  ✅ a2a://myhost.com/fed_abc123
 
 User shares URL with Alice...
 

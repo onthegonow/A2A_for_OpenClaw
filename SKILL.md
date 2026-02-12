@@ -44,7 +44,7 @@ Options:
 - `--disclosure, -d` — `public`, `minimal`, `none` (default: `minimal`)
 - `--notify` — `all`, `summary`, `none` (default: `all`)
 
-Reply with the invite URL: `oclaw://hostname/fed_xxxxx`
+Reply with the invite URL: `a2a://hostname/fed_xxxxx`
 
 ### List Tokens
 
@@ -63,7 +63,7 @@ a2a revoke TOKEN_ID
 When user shares an invite URL:
 
 ```bash
-a2a add "oclaw://host/token" "Agent Name"
+a2a add "a2a://host/token" "Agent Name"
 ```
 
 ## Calling Remote Agents
@@ -73,7 +73,7 @@ When task delegation to a known remote agent would help, or user asks to contact
 ```javascript
 // Use federation_call tool
 federation_call({
-  endpoint: "oclaw://host/token",
+  endpoint: "a2a://host/token",
   message: "Your question here",
   conversation_id: "optional-for-continuity"
 })

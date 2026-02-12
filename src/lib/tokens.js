@@ -229,7 +229,7 @@ class TokenStore {
    * Add a remote agent endpoint (contact)
    * Note: Token is encrypted at rest using a derived key
    * 
-   * @param {string} inviteUrl - oclaw://host/token format
+   * @param {string} inviteUrl - a2a://host/token format
    * @param {object} options - Contact metadata
    * @param {string} options.name - Agent name
    * @param {string} options.owner - Human owner name

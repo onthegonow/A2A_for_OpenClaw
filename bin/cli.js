@@ -106,7 +106,7 @@ const commands = {
     });
 
     const hostname = getHostname();
-    const inviteUrl = `oclaw://${hostname}/${token}`;
+    const inviteUrl = `a2a://${hostname}/${token}`;
 
     const expiresText = record.expires_at 
       ? new Date(record.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -456,7 +456,7 @@ a2a call "${agentName}" "Hello!"
     }
 
     const client = new A2AClient({});
-    const url = `oclaw://${remote.host}/${remote.token}`;
+    const url = `a2a://${remote.host}/${remote.token}`;
 
     console.log(`🔍 Pinging ${remote.name}...`);
 
@@ -648,10 +648,10 @@ a2a call "${agentName}" "Hello!"
     // Check if target is a contact name (not a URL)
     let url = target;
     let contactName = null;
-    if (!target.startsWith('oclaw://')) {
+    if (!target.startsWith('a2a://')) {
       const remote = store.getRemote(target);
       if (remote) {
-        url = `oclaw://${remote.host}/${remote.token}`;
+        url = `a2a://${remote.host}/${remote.token}`;
         contactName = remote.name;
       }
     }
@@ -775,7 +775,7 @@ a2a call "${agentName}" "Hello!"
         maxCalls: 100
       });
 
-      const inviteUrl = `oclaw://${hostname}/${token}`;
+      const inviteUrl = `a2a://${hostname}/${token}`;
       const expiresText = new Date(record.expires_at).toLocaleDateString('en-US', { 
         month: 'short', day: 'numeric', year: 'numeric' 
       });
@@ -879,7 +879,7 @@ Server:
 Examples:
   a2a create --name "bappybot" --owner "Benjamin Pollack" --expires 7d
   a2a create --name "custom" --topics "chat,calendar.read,email.read"
-  a2a contacts add oclaw://host/fed_xxx --name "Alice" --owner "Alice Chen"
+  a2a contacts add a2a://host/fed_xxx --name "Alice" --owner "Alice Chen"
   a2a contacts link Alice tok_abc123
   a2a call Alice "Hello!"
   a2a conversations show conv_abc123

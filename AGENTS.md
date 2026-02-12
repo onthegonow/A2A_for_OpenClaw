@@ -43,7 +43,7 @@ node -e "const a2a = require('./src'); console.log(a2a.version)"
 
 ## Key Design Decisions
 
-1. **Token format**: `oclaw://<host>/<token>` - simple, copy-pasteable
+1. **Token format**: `a2a://<host>/<token>` - simple, copy-pasteable
 2. **Permission presets**: `chat-only` (default), `tools-read`, `tools-write`  
 3. **Disclosure levels**: `public`, `minimal` (default), `none`
 4. **Rate limits**: 10/min, 100/hr, 1000/day per token

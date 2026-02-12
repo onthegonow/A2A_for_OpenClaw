@@ -11,7 +11,7 @@
  * // Client side - call remote agent
  * const { A2AClient } = require('a2acalling');
  * const client = new A2AClient({ caller: { name: 'My Agent' } });
- * const response = await client.call('oclaw://host/token', 'Hello!');
+ * const response = await client.call('a2a://host/token', 'Hello!');
  */
 
 const { TokenStore } = require('./lib/tokens');

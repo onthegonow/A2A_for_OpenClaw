@@ -7,10 +7,10 @@ Federation enables OpenClaw agents to call each other across instances with scop
 ## Token Format
 
 ```
-oclaw://<hostname>/<token>
+a2a://<hostname>/<token>
 ```
 
-Example: `oclaw://my-server.example.com/fed_abc123xyz`
+Example: `a2a://my-server.example.com/fed_abc123xyz`
 
 Token structure: `fed_<base64url(24 random bytes)>`
 
@@ -221,7 +221,7 @@ When handling a federation call, inject context:
 
 ```typescript
 federation_call({
-  endpoint: string,    // oclaw:// URL
+  endpoint: string,    // a2a:// URL
   message: string,     // Message to send
   conversation_id?: string  // For multi-turn
 }): {
