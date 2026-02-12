@@ -105,11 +105,23 @@ class TokenStore {
     const expiresAt = durationMs ? new Date(Date.now() + durationMs).toISOString() : null;
 
     // Default topics based on permissions tier (snapshot at creation)
+    // Aliases: public=chat-only, friends=tools-read, family=tools-write
     const defaultTopics = {
       'chat-only': ['chat'],
+      'public': ['chat'],
       'tools-read': ['chat', 'calendar.read', 'email.read', 'search'],
-      'tools-write': ['chat', 'calendar', 'email', 'search', 'tools']
+      'friends': ['chat', 'calendar.read', 'email.read', 'search'],
+      'tools-write': ['chat', 'calendar', 'email', 'search', 'tools'],
+      'family': ['chat', 'calendar', 'email', 'search', 'tools']
     };
+    
+    // Normalize tier name
+    const tierAliases = {
+      'public': 'chat-only',
+      'friends': 'tools-read', 
+      'family': 'tools-write'
+    };
+    const normalizedTier = tierAliases[permissions] || permissions;
 
     // Use separate random ID (not derived from token) to prevent prefix attacks
     const record = {
@@ -117,7 +129,8 @@ class TokenStore {
       token_hash: tokenHash,
       name,
       owner,
-      tier: permissions,  // Keep tier label for display
+      tier: normalizedTier,  // Normalized tier (chat-only, tools-read, tools-write)
+      tier_label: permissions,  // Original label (public, friends, family)
       allowed_topics: allowedTopics || defaultTopics[permissions] || ['chat'],
       tier_settings: tierSettings || {},  // Snapshot of settings at creation
       disclosure,
