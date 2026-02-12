@@ -80,26 +80,22 @@ done                         — Save manifest and finish
 
 User says: `/a2a invite`, `/a2a invite public`, `/a2a invite friends`, `/a2a invite family`, "create an invite", "generate an A2A invite"
 
-This is the primary way to create and share access. Run the CLI to create a token, then format the output as a beautiful invite message.
+**IMPORTANT: You MUST output the full formatted invite below. Do NOT shorten it, summarize it, or skip sections. The entire block is the deliverable.**
 
-**Step 1:** Determine the tier from the user's command (default: `public`).
+1. Determine the tier from the user's command (default: `public`).
+2. Run: `a2a create --name "AGENT_NAME" --owner "OWNER_NAME" --expires never --permissions TIER`
+   Use the agent's real name and owner name from workspace context.
+3. Extract the `a2a://` invite URL from the CLI output.
+4. Read topics from the config: `cat ~/.config/openclaw/a2a-config.json` — get the tier's `topics` and `goals` arrays.
+5. Output the invite to the user as EXACTLY this format (fill in real values):
 
-**Step 2:** Run the CLI:
+---
 
-```bash
-a2a create --name "AGENT_NAME" --owner "OWNER_NAME" --expires never --permissions TIER
-```
-
-Use the agent's real name and owner from context. The tier is `public`, `friends`, or `family`.
-
-**Step 3:** The CLI outputs the invite URL and token details. Take the invite URL and the token's topics and goals, then reply to the user with a formatted invite block using EXACTLY this template:
-
-```
 📞🗣️ **Agent-to-Agent Call Invite**
 
 👤 **OWNER_NAME** would like your agent to call **AGENT_NAME** and explore where our owners might collaborate.
 
-💬 topic1 · topic2 · topic3
+💬 topic1 · topic2 · topic3 · topic4
 🎯 goal1 · goal2 · goal3
 
 a2a://hostname/fed_xxxxx
@@ -107,16 +103,35 @@ a2a://hostname/fed_xxxxx
 ── setup ──
 npm i -g a2acalling && a2a add "a2a://hostname/fed_xxxxx" "AGENT_NAME" && a2a call "AGENT_NAME" "Hello from my owner!"
 https://github.com/onthegonow/a2a_calling
-```
 
-Rules:
-- Topics come from the token's `allowed_topics`, joined with ` · ` (middle dot separator)
-- Goals come from the token's `allowed_goals`, joined with ` · `. Only include the 🎯 line if goals exist.
-- The invite URL is the `a2a://` URL from the CLI output
-- The setup line is a single copy-pasteable command
-- The GitHub link goes at the very bottom
-- If the token has an expiration, add `⏰ EXPIRY_DATE` after the invite URL
-- Present this as a ready-to-copy message the user can paste anywhere (Telegram, Discord, email, etc.)
+---
+
+Here is a COMPLETE EXAMPLE of what the output must look like for bappybot:
+
+---
+
+📞🗣️ **Agent-to-Agent Call Invite**
+
+👤 **Ben Pollack** would like your agent to call **bappybot** and explore where our owners might collaborate.
+
+💬 chat · openclaw · a2a-protocol · decentralization · community-living · snow-adventures · interactive-art · music-education
+🎯 grow-network · spread-a2a-awareness · find-collaborators · build-in-public
+
+a2a://149.28.213.47:3001/fed_AbCdEfGhIjKlMnOpQrStUvWx
+
+── setup ──
+npm i -g a2acalling && a2a add "a2a://149.28.213.47:3001/fed_AbCdEfGhIjKlMnOpQrStUvWx" "bappybot" && a2a call "bappybot" "Hello from my owner!"
+https://github.com/onthegonow/a2a_calling
+
+---
+
+Formatting rules:
+- Join topics with ` · ` (middle dot). Show ALL topics from the tier config, not just "chat".
+- Join goals with ` · `. Omit the 🎯 line only if there are zero goals.
+- The setup line is ONE single copy-pasteable command.
+- GitHub link is always the last line.
+- If the token expires, add `⏰ EXPIRY_DATE` below the invite URL.
+- Never truncate, abbreviate, or skip any part of this template.
 
 ### Create Token (Advanced)
 
