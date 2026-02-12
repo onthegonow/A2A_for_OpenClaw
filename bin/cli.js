@@ -15,6 +15,27 @@
 const { TokenStore } = require('../src/lib/tokens');
 const { A2AClient } = require('../src/lib/client');
 
+// Lazy load conversation store (requires better-sqlite3)
+let convStore = null;
+function getConvStore() {
+  if (convStore === false) return null; // Already tried and failed
+  if (!convStore) {
+    try {
+      const { ConversationStore } = require('../src/lib/conversations');
+      convStore = new ConversationStore();
+      if (!convStore.isAvailable()) {
+        console.error(`[a2a] ${convStore.getError()}`);
+        convStore = false;
+        return null;
+      }
+    } catch (err) {
+      convStore = false;
+      return null;
+    }
+  }
+  return convStore;
+}
+
 const store = new TokenStore();
 
 // Format relative time
@@ -480,6 +501,153 @@ Or in code:
     console.log(`✅ Contact removed: ${result.remote.name}`);
   },
 
+  // ========== CONVERSATIONS ==========
+
+  conversations: (args) => {
+    const subcommand = args._[1];
+    
+    if (subcommand === 'show') return commands['conversations:show'](args);
+    if (subcommand === 'end') return commands['conversations:end'](args);
+
+    // Default: list conversations
+    const cs = getConvStore();
+    if (!cs) {
+      console.log('💬 Conversation storage not available.');
+      console.log('Install: npm install better-sqlite3');
+      return;
+    }
+
+    const { contact, status, limit = 20 } = args.flags;
+    const conversations = cs.listConversations({
+      contactId: contact,
+      status,
+      limit: parseInt(limit),
+      includeMessages: true,
+      messageLimit: 1
+    });
+
+    if (conversations.length === 0) {
+      console.log('💬 No conversations yet.');
+      return;
+    }
+
+    console.log(`💬 Conversations (${conversations.length})\n`);
+    for (const conv of conversations) {
+      const statusIcon = conv.status === 'concluded' ? '✅' : conv.status === 'timeout' ? '⏱️' : '💬';
+      const timeAgo = formatTimeAgo(new Date(conv.last_message_at));
+      const preview = conv.messages?.[0]?.content?.slice(0, 50) || '';
+      
+      console.log(`${statusIcon} ${conv.id}`);
+      console.log(`   Contact: ${conv.contact_name || conv.contact_id || 'unknown'}`);
+      console.log(`   Messages: ${conv.message_count} | ${timeAgo}`);
+      if (conv.summary) {
+        console.log(`   Summary: ${conv.summary.slice(0, 80)}...`);
+      } else if (preview) {
+        console.log(`   Preview: "${preview}..."`);
+      }
+      if (conv.owner_relevance) {
+        console.log(`   Relevance: ${conv.owner_relevance}`);
+      }
+      console.log();
+    }
+  },
+
+  'conversations:show': (args) => {
+    const convId = args._[2];
+    if (!convId) {
+      console.error('Usage: a2a conversations show <conversation_id>');
+      process.exit(1);
+    }
+
+    const cs = getConvStore();
+    if (!cs) {
+      console.error('Conversation storage not available. Install: npm install better-sqlite3');
+      process.exit(1);
+    }
+
+    const context = cs.getConversationContext(convId, args.flags.messages || 20);
+    if (!context) {
+      console.error(`Conversation not found: ${convId}`);
+      process.exit(1);
+    }
+
+    console.log(`\n${'═'.repeat(60)}`);
+    console.log(`💬 ${context.id}`);
+    console.log(`${'═'.repeat(60)}\n`);
+
+    console.log(`👤 Contact: ${context.contact || 'unknown'}`);
+    console.log(`📊 Status: ${context.status}`);
+    console.log(`📝 Messages: ${context.messageCount}`);
+    console.log(`📅 Started: ${new Date(context.startedAt).toLocaleString()}`);
+    if (context.endedAt) {
+      console.log(`🏁 Ended: ${new Date(context.endedAt).toLocaleString()}`);
+    }
+
+    if (context.summary) {
+      console.log(`\n${'─'.repeat(60)}`);
+      console.log(`📋 Summary:\n${context.summary}`);
+    }
+
+    if (context.ownerContext) {
+      console.log(`\n${'─'.repeat(60)}`);
+      console.log(`🔒 Owner Context (private):`);
+      console.log(`   Relevance: ${context.ownerContext.relevance || 'unknown'}`);
+      if (context.ownerContext.summary) {
+        console.log(`   Summary: ${context.ownerContext.summary}`);
+      }
+      if (context.ownerContext.goalsTouched?.length) {
+        console.log(`   Goals: ${context.ownerContext.goalsTouched.join(', ')}`);
+      }
+      if (context.ownerContext.actionItems?.length) {
+        console.log(`   Actions: ${context.ownerContext.actionItems.join(', ')}`);
+      }
+      if (context.ownerContext.followUp) {
+        console.log(`   Follow-up: ${context.ownerContext.followUp}`);
+      }
+      if (context.ownerContext.notes) {
+        console.log(`   Notes: ${context.ownerContext.notes}`);
+      }
+    }
+
+    console.log(`\n${'─'.repeat(60)}`);
+    console.log(`Recent messages:`);
+    console.log(`${'─'.repeat(60)}`);
+    for (const msg of context.recentMessages) {
+      const role = msg.direction === 'inbound' ? '← In' : '→ Out';
+      const time = new Date(msg.timestamp).toLocaleTimeString();
+      console.log(`\n[${time}] ${role}:`);
+      console.log(msg.content);
+    }
+    console.log(`\n${'═'.repeat(60)}\n`);
+  },
+
+  'conversations:end': async (args) => {
+    const convId = args._[2];
+    if (!convId) {
+      console.error('Usage: a2a conversations end <conversation_id>');
+      process.exit(1);
+    }
+
+    const cs = getConvStore();
+    if (!cs) {
+      console.error('Conversation storage not available');
+      process.exit(1);
+    }
+
+    // For now, conclude without LLM summarizer
+    const result = await cs.concludeConversation(convId, {});
+    
+    if (!result.success) {
+      console.error(`Failed to end conversation: ${result.error}`);
+      process.exit(1);
+    }
+
+    console.log(`✅ Conversation concluded: ${convId}`);
+    if (result.summary) {
+      console.log(`📋 Summary: ${result.summary}`);
+    }
+  },
+
   call: async (args) => {
     let target = args._[1];
     const message = args._.slice(2).join(' ') || args.flags.message || args.flags.m;
@@ -696,14 +864,21 @@ Contacts:
 
 Permission badges: 🌐 chat-only  🔧 tools-read  ⚡ tools-write
 
-Legacy:
-  add <url> [name]    Add a remote (use 'contacts add')
-  remotes             List remotes (use 'contacts')
-  
-  call <url> <msg>    Call a remote agent
+Conversations:
+  conversations       List all conversations
+    --contact         Filter by contact
+    --status          Filter by status (active, concluded, timeout)
+    --limit           Max results (default: 20)
+  conversations show <id>  Show conversation with messages
+    --messages        Number of recent messages (default: 20)
+  conversations end <id>   End and summarize conversation
+
+Calling:
+  call <contact|url> <msg>  Call a remote agent
   ping <url>          Check if agent is reachable
   status <url>        Get federation status
 
+Server:
   server              Start the federation server
     --port, -p        Port to listen on (default: 3001)
   
@@ -719,6 +894,7 @@ Examples:
   a2a contacts add oclaw://host/fed_xxx --name "Alice" --owner "Alice Chen"
   a2a contacts link Alice tok_abc123
   a2a call Alice "Hello!"
+  a2a conversations show conv_abc123
   a2a server --port 3001
 `);
   }

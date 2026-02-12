@@ -1,0 +1,452 @@
+/**
+ * Conversation storage and summarization for A2A federation
+ * 
+ * Uses SQLite for local storage with auto-summarization on call conclusion.
+ */
+
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+
+// Default config path
+const DEFAULT_CONFIG_DIR = process.env.A2A_CONFIG_DIR || 
+  process.env.OPENCLAW_CONFIG_DIR || 
+  path.join(process.env.HOME || '/tmp', '.config', 'openclaw');
+
+const DB_FILENAME = 'a2a-conversations.db';
+
+class ConversationStore {
+  constructor(configDir = DEFAULT_CONFIG_DIR) {
+    this.configDir = configDir;
+    this.dbPath = path.join(configDir, DB_FILENAME);
+    this.db = null;
+    this._ensureDir();
+  }
+
+  _ensureDir() {
+    if (!fs.existsSync(this.configDir)) {
+      fs.mkdirSync(this.configDir, { recursive: true });
+    }
+  }
+
+  /**
+   * Initialize SQLite database (lazy load better-sqlite3)
+   */
+  _initDb() {
+    if (this.db) return this.db;
+    if (this._dbError) return null;
+    
+    try {
+      const Database = require('better-sqlite3');
+      this.db = new Database(this.dbPath);
+      this._migrate();
+      return this.db;
+    } catch (err) {
+      if (err.code === 'MODULE_NOT_FOUND') {
+        this._dbError = 'better-sqlite3 not installed. Run: npm install better-sqlite3';
+      } else {
+        this._dbError = err.message;
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Check if storage is available
+   */
+  isAvailable() {
+    return this._initDb() !== null;
+  }
+
+  /**
+   * Get error message if storage unavailable
+   */
+  getError() {
+    this._initDb();
+    return this._dbError || null;
+  }
+
+  /**
+   * Run database migrations
+   */
+  _migrate() {
+    this.db.exec(`
+      -- Conversations with remote agents
+      CREATE TABLE IF NOT EXISTS conversations (
+        id TEXT PRIMARY KEY,
+        contact_id TEXT,
+        contact_name TEXT,
+        token_id TEXT,
+        direction TEXT NOT NULL, -- 'inbound' or 'outbound'
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        last_message_at TEXT,
+        message_count INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'active', -- 'active', 'concluded', 'timeout'
+        
+        -- Raw summary (neutral, could be shared)
+        summary TEXT,
+        summary_at TEXT,
+        
+        -- Owner-context summary (private, never shared)
+        owner_summary TEXT,
+        owner_relevance TEXT,
+        owner_goals_touched TEXT, -- JSON array
+        owner_action_items TEXT, -- JSON array
+        owner_follow_up TEXT,
+        owner_notes TEXT
+      );
+
+      -- Individual messages
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL,
+        direction TEXT NOT NULL, -- 'inbound' or 'outbound'
+        role TEXT NOT NULL, -- 'user' or 'assistant'
+        content TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        compressed INTEGER DEFAULT 0,
+        metadata TEXT, -- JSON for extra data
+        FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+      );
+
+      -- Indexes
+      CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_conversations_contact ON conversations(contact_id);
+      CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
+    `);
+  }
+
+  /**
+   * Generate a conversation ID (shared between both agents)
+   */
+  static generateConversationId() {
+    return 'conv_' + crypto.randomBytes(12).toString('base64url');
+  }
+
+  /**
+   * Start or resume a conversation
+   */
+  startConversation(options = {}) {
+    const db = this._initDb();
+    if (!db) return { success: false, error: this._dbError };
+    const {
+      id = ConversationStore.generateConversationId(),
+      contactId = null,
+      contactName = null,
+      tokenId = null,
+      direction = 'inbound'
+    } = options;
+
+    const existing = db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
+    if (existing) {
+      // Resume existing conversation
+      db.prepare(`
+        UPDATE conversations 
+        SET status = 'active', last_message_at = ?
+        WHERE id = ?
+      `).run(new Date().toISOString(), id);
+      return { id, resumed: true, conversation: existing };
+    }
+
+    // Create new conversation
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO conversations (id, contact_id, contact_name, token_id, direction, started_at, last_message_at, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active')
+    `).run(id, contactId, contactName, tokenId, direction, now, now);
+
+    return { id, resumed: false };
+  }
+
+  /**
+   * Add a message to a conversation
+   */
+  addMessage(conversationId, message) {
+    const db = this._initDb();
+    if (!db) return { success: false, error: this._dbError };
+    const {
+      direction,
+      role,
+      content,
+      metadata = null
+    } = message;
+
+    const id = 'msg_' + crypto.randomBytes(8).toString('hex');
+    const now = new Date().toISOString();
+
+    db.prepare(`
+      INSERT INTO messages (id, conversation_id, direction, role, content, timestamp, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, conversationId, direction, role, content, now, metadata ? JSON.stringify(metadata) : null);
+
+    // Update conversation
+    db.prepare(`
+      UPDATE conversations 
+      SET last_message_at = ?, message_count = message_count + 1
+      WHERE id = ?
+    `).run(now, conversationId);
+
+    return { id, timestamp: now };
+  }
+
+  /**
+   * Get conversation with messages
+   */
+  getConversation(conversationId, options = {}) {
+    const db = this._initDb();
+    if (!db) return null;
+    const { includeMessages = true, messageLimit = 50 } = options;
+
+    const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversationId);
+    if (!conversation) return null;
+
+    if (includeMessages) {
+      conversation.messages = db.prepare(`
+        SELECT * FROM messages 
+        WHERE conversation_id = ? 
+        ORDER BY timestamp DESC 
+        LIMIT ?
+      `).all(conversationId, messageLimit).reverse();
+    }
+
+    // Parse JSON fields
+    if (conversation.owner_goals_touched) {
+      conversation.owner_goals_touched = JSON.parse(conversation.owner_goals_touched);
+    }
+    if (conversation.owner_action_items) {
+      conversation.owner_action_items = JSON.parse(conversation.owner_action_items);
+    }
+
+    return conversation;
+  }
+
+  /**
+   * List conversations with optional filters
+   */
+  listConversations(options = {}) {
+    const db = this._initDb();
+    if (!db) return [];
+    const { 
+      contactId = null, 
+      status = null, 
+      limit = 20,
+      includeMessages = false,
+      messageLimit = 5
+    } = options;
+
+    let query = 'SELECT * FROM conversations WHERE 1=1';
+    const params = [];
+
+    if (contactId) {
+      query += ' AND contact_id = ?';
+      params.push(contactId);
+    }
+    if (status) {
+      query += ' AND status = ?';
+      params.push(status);
+    }
+
+    query += ' ORDER BY last_message_at DESC LIMIT ?';
+    params.push(limit);
+
+    const conversations = db.prepare(query).all(...params);
+
+    if (includeMessages) {
+      for (const conv of conversations) {
+        conv.messages = db.prepare(`
+          SELECT * FROM messages 
+          WHERE conversation_id = ? 
+          ORDER BY timestamp DESC 
+          LIMIT ?
+        `).all(conv.id, messageLimit).reverse();
+      }
+    }
+
+    return conversations;
+  }
+
+  /**
+   * Conclude a conversation and generate owner-context summary
+   * 
+   * @param {string} conversationId 
+   * @param {object} options
+   * @param {function} options.summarizer - async function(messages, ownerContext) => summary
+   * @param {object} options.ownerContext - owner's goals, preferences, etc.
+   */
+  async concludeConversation(conversationId, options = {}) {
+    const db = this._initDb();
+    if (!db) return { success: false, error: this._dbError };
+    const { summarizer = null, ownerContext = {} } = options;
+
+    const conversation = this.getConversation(conversationId, { includeMessages: true });
+    if (!conversation) {
+      return { success: false, error: 'conversation_not_found' };
+    }
+
+    const now = new Date().toISOString();
+    let summary = null;
+    let ownerSummary = null;
+
+    // Generate summaries if summarizer provided
+    if (summarizer && conversation.messages.length > 0) {
+      try {
+        const result = await summarizer(conversation.messages, ownerContext);
+        summary = result.summary || null;
+        ownerSummary = result.ownerSummary || null;
+
+        // Store owner-context fields
+        db.prepare(`
+          UPDATE conversations SET
+            ended_at = ?,
+            status = 'concluded',
+            summary = ?,
+            summary_at = ?,
+            owner_summary = ?,
+            owner_relevance = ?,
+            owner_goals_touched = ?,
+            owner_action_items = ?,
+            owner_follow_up = ?,
+            owner_notes = ?
+          WHERE id = ?
+        `).run(
+          now,
+          summary,
+          now,
+          result.ownerSummary || null,
+          result.relevance || null,
+          result.goalsTouched ? JSON.stringify(result.goalsTouched) : null,
+          result.actionItems ? JSON.stringify(result.actionItems) : null,
+          result.followUp || null,
+          result.notes || null,
+          conversationId
+        );
+      } catch (err) {
+        console.error('[a2a] Summary generation failed:', err.message);
+        // Still conclude, just without summary
+        db.prepare(`
+          UPDATE conversations SET ended_at = ?, status = 'concluded'
+          WHERE id = ?
+        `).run(now, conversationId);
+      }
+    } else {
+      // No summarizer, just mark concluded
+      db.prepare(`
+        UPDATE conversations SET ended_at = ?, status = 'concluded'
+        WHERE id = ?
+      `).run(now, conversationId);
+    }
+
+    return { 
+      success: true, 
+      conversationId,
+      summary,
+      ownerSummary,
+      endedAt: now
+    };
+  }
+
+  /**
+   * Mark conversation as timed out
+   */
+  timeoutConversation(conversationId) {
+    const db = this._initDb();
+    if (!db) return { success: false, error: this._dbError };
+    const now = new Date().toISOString();
+    
+    db.prepare(`
+      UPDATE conversations SET ended_at = ?, status = 'timeout'
+      WHERE id = ?
+    `).run(now, conversationId);
+
+    return { success: true };
+  }
+
+  /**
+   * Get active conversations (for timeout checking)
+   */
+  getActiveConversations(idleThresholdMs = 60000) {
+    const db = this._initDb();
+    if (!db) return [];
+    const threshold = new Date(Date.now() - idleThresholdMs).toISOString();
+    
+    return db.prepare(`
+      SELECT * FROM conversations 
+      WHERE status = 'active' AND last_message_at < ?
+    `).all(threshold);
+  }
+
+  /**
+   * Compress old messages to save space
+   */
+  compressOldMessages(olderThanDays = 7) {
+    const db = this._initDb();
+    if (!db) return { compressed: 0, total: 0, error: this._dbError };
+    const zlib = require('zlib');
+    const threshold = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+
+    const messages = db.prepare(`
+      SELECT id, content FROM messages 
+      WHERE timestamp < ? AND compressed = 0
+    `).all(threshold);
+
+    let compressed = 0;
+    const update = db.prepare('UPDATE messages SET content = ?, compressed = 1 WHERE id = ?');
+
+    for (const msg of messages) {
+      try {
+        const compressedContent = zlib.gzipSync(msg.content).toString('base64');
+        update.run(compressedContent, msg.id);
+        compressed++;
+      } catch (err) {
+        // Skip if compression fails
+      }
+    }
+
+    return { compressed, total: messages.length };
+  }
+
+  /**
+   * Get conversation context for retrieval (summary + recent messages)
+   */
+  getConversationContext(conversationId, recentMessageCount = 5) {
+    const conversation = this.getConversation(conversationId, { 
+      includeMessages: true, 
+      messageLimit: recentMessageCount 
+    });
+
+    if (!conversation) return null;
+
+    return {
+      id: conversation.id,
+      contact: conversation.contact_name,
+      summary: conversation.summary,
+      ownerContext: conversation.owner_summary ? {
+        summary: conversation.owner_summary,
+        relevance: conversation.owner_relevance,
+        goalsTouched: conversation.owner_goals_touched,
+        actionItems: conversation.owner_action_items,
+        followUp: conversation.owner_follow_up,
+        notes: conversation.owner_notes
+      } : null,
+      recentMessages: conversation.messages,
+      messageCount: conversation.message_count,
+      startedAt: conversation.started_at,
+      endedAt: conversation.ended_at,
+      status: conversation.status
+    };
+  }
+
+  /**
+   * Close database connection
+   */
+  close() {
+    if (this.db) {
+      this.db.close();
+      this.db = null;
+    }
+  }
+}
+
+module.exports = { ConversationStore };

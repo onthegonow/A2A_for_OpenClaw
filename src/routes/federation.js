@@ -11,6 +11,22 @@
 const { TokenStore } = require('../lib/tokens');
 const crypto = require('crypto');
 
+// Lazy-load conversation store (optional dependency)
+let ConversationStore = null;
+let conversationStore = null;
+function getConversationStore() {
+  if (!ConversationStore) {
+    try {
+      ConversationStore = require('../lib/conversations').ConversationStore;
+      conversationStore = new ConversationStore();
+    } catch (err) {
+      // Conversation storage not available
+      return null;
+    }
+  }
+  return conversationStore;
+}
+
 // Rate limiting state (in-memory - resets on restart)
 // For production: use Redis or persistent store
 const rateLimits = new Map();
@@ -170,19 +186,57 @@ function createRoutes(options = {}) {
     } : {};
 
     // Build federation context with secure conversation ID
+    const isNewConversation = !conversation_id;
     const federationContext = {
       mode: 'federation',
       token_id: validation.id,
       token_name: validation.name,
-      permissions: validation.permissions,
+      tier: validation.tier,
+      allowed_topics: validation.allowed_topics,
       disclosure: validation.disclosure,
       caller: sanitizedCaller,
       conversation_id: conversation_id || `conv_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`
     };
 
+    // Track conversation if store available
+    const convStore = getConversationStore();
+    if (convStore) {
+      try {
+        convStore.startConversation({
+          id: federationContext.conversation_id,
+          contactId: validation.id,
+          contactName: sanitizedCaller.name || validation.name,
+          tokenId: validation.id,
+          direction: 'inbound'
+        });
+        
+        // Store incoming message
+        convStore.addMessage(federationContext.conversation_id, {
+          direction: 'inbound',
+          role: 'user',
+          content: message
+        });
+      } catch (err) {
+        console.error('[a2a] Conversation tracking error:', err.message);
+      }
+    }
+
     try {
       // Handle the message
       const response = await handleMessage(message, federationContext, { timeout: boundedTimeout * 1000 });
+      
+      // Store outgoing response
+      if (convStore) {
+        try {
+          convStore.addMessage(federationContext.conversation_id, {
+            direction: 'outbound',
+            role: 'assistant',
+            content: response.text
+          });
+        } catch (err) {
+          console.error('[a2a] Message storage error:', err.message);
+        }
+      }
 
       // Notify owner if configured
       if (validation.notify !== 'none') {
@@ -215,6 +269,142 @@ function createRoutes(options = {}) {
         message: 'Failed to process message'
       });
     }
+  });
+
+  /**
+   * POST /end
+   * End a conversation and trigger summary generation
+   */
+  router.post('/end', async (req, res) => {
+    // Extract token
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'unauthorized', 
+        message: 'Authorization header required' 
+      });
+    }
+
+    const token = authHeader.slice(7);
+    const validation = tokenStore.validate(token);
+    if (!validation.valid) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'unauthorized', 
+        message: 'Invalid or expired token' 
+      });
+    }
+
+    const { conversation_id } = req.body;
+    if (!conversation_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'missing_conversation_id',
+        message: 'conversation_id is required'
+      });
+    }
+
+    const convStore = getConversationStore();
+    if (!convStore) {
+      return res.json({ success: true, message: 'Conversation storage not enabled' });
+    }
+
+    try {
+      // Conclude with summarizer if available
+      const summarizer = options.summarizer || null;
+      const ownerContext = options.ownerContext || {};
+      
+      const result = await convStore.concludeConversation(conversation_id, {
+        summarizer,
+        ownerContext
+      });
+
+      // Notify owner of conversation conclusion
+      if (validation.notify !== 'none' && result.success) {
+        const conv = convStore.getConversationContext(conversation_id);
+        notifyOwner({
+          level: validation.notify,
+          type: 'conversation_concluded',
+          token: validation,
+          conversation: conv
+        }).catch(err => {
+          console.error('[a2a] Failed to notify owner:', err.message);
+        });
+      }
+
+      res.json({
+        success: true,
+        conversation_id,
+        status: 'concluded',
+        summary: result.summary
+      });
+    } catch (err) {
+      console.error('[a2a] End conversation error:', err);
+      res.status(500).json({
+        success: false,
+        error: 'internal_error',
+        message: 'Failed to end conversation'
+      });
+    }
+  });
+
+  /**
+   * GET /conversations
+   * List conversations (requires auth)
+   * This is for the agent owner, not federated callers
+   */
+  router.get('/conversations', (req, res) => {
+    // This endpoint should be protected by local auth, not federation tokens
+    // For now, require an admin token or local access
+    const adminToken = req.headers['x-admin-token'];
+    if (adminToken !== process.env.A2A_ADMIN_TOKEN && req.ip !== '127.0.0.1') {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+
+    const convStore = getConversationStore();
+    if (!convStore) {
+      return res.json({ conversations: [], message: 'Conversation storage not enabled' });
+    }
+
+    const { contact_id, status, limit = 20 } = req.query;
+    
+    const conversations = convStore.listConversations({
+      contactId: contact_id,
+      status,
+      limit: parseInt(limit),
+      includeMessages: false
+    });
+
+    res.json({ conversations });
+  });
+
+  /**
+   * GET /conversations/:id
+   * Get conversation details with context
+   */
+  router.get('/conversations/:id', (req, res) => {
+    const adminToken = req.headers['x-admin-token'];
+    if (adminToken !== process.env.A2A_ADMIN_TOKEN && req.ip !== '127.0.0.1') {
+      return res.status(401).json({ error: 'unauthorized' });
+    }
+
+    const convStore = getConversationStore();
+    if (!convStore) {
+      return res.status(404).json({ error: 'conversation_storage_disabled' });
+    }
+
+    const { recent_messages = 10 } = req.query;
+    const context = convStore.getConversationContext(
+      req.params.id, 
+      parseInt(recent_messages)
+    );
+
+    if (!context) {
+      return res.status(404).json({ error: 'conversation_not_found' });
+    }
+
+    res.json(context);
   });
 
   return router;

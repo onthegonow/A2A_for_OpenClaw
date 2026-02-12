@@ -18,6 +18,16 @@ const { TokenStore } = require('./lib/tokens');
 const { A2AClient, A2AError } = require('./lib/client');
 const { createRoutes } = require('./routes/federation');
 
+// Lazy load conversation store (optional dependency)
+let ConversationStore = null;
+let summarizers = null;
+try {
+  ConversationStore = require('./lib/conversations').ConversationStore;
+  summarizers = require('./lib/summarizer');
+} catch (err) {
+  // better-sqlite3 not installed, conversation storage not available
+}
+
 module.exports = {
   // Token management
   TokenStore,
@@ -28,6 +38,12 @@ module.exports = {
   
   // Express routes for inbound calls
   createRoutes,
+  
+  // Conversation storage (requires better-sqlite3)
+  ConversationStore,
+  
+  // Summarizers for conversation conclusion
+  ...(summarizers || {}),
   
   // Version
   version: require('../package.json').version
