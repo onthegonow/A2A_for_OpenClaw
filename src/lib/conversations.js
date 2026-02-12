@@ -92,7 +92,10 @@ class ConversationStore {
         owner_summary TEXT,
         owner_relevance TEXT,
         owner_goals_touched TEXT, -- JSON array
-        owner_action_items TEXT, -- JSON array
+        owner_action_items TEXT, -- JSON array (owner's action items)
+        caller_action_items TEXT, -- JSON array (what caller should do)
+        joint_action_items TEXT, -- JSON array (things to do together)
+        collaboration_opportunity TEXT, -- JSON object
         owner_follow_up TEXT,
         owner_notes TEXT
       );
@@ -296,7 +299,7 @@ class ConversationStore {
         summary = result.summary || null;
         ownerSummary = result.ownerSummary || null;
 
-        // Store owner-context fields
+        // Store owner-context fields (collaboration-focused)
         db.prepare(`
           UPDATE conversations SET
             ended_at = ?,
@@ -307,6 +310,9 @@ class ConversationStore {
             owner_relevance = ?,
             owner_goals_touched = ?,
             owner_action_items = ?,
+            caller_action_items = ?,
+            joint_action_items = ?,
+            collaboration_opportunity = ?,
             owner_follow_up = ?,
             owner_notes = ?
           WHERE id = ?
@@ -317,7 +323,10 @@ class ConversationStore {
           result.ownerSummary || null,
           result.relevance || null,
           result.goalsTouched ? JSON.stringify(result.goalsTouched) : null,
-          result.actionItems ? JSON.stringify(result.actionItems) : null,
+          result.ownerActionItems ? JSON.stringify(result.ownerActionItems) : null,
+          result.callerActionItems ? JSON.stringify(result.callerActionItems) : null,
+          result.jointActionItems ? JSON.stringify(result.jointActionItems) : null,
+          result.collaborationOpportunity ? JSON.stringify(result.collaborationOpportunity) : null,
           result.followUp || null,
           result.notes || null,
           conversationId
@@ -418,6 +427,12 @@ class ConversationStore {
 
     if (!conversation) return null;
 
+    // Parse JSON fields
+    const parseJson = (str) => {
+      if (!str) return null;
+      try { return JSON.parse(str); } catch (e) { return null; }
+    };
+
     return {
       id: conversation.id,
       contact: conversation.contact_name,
@@ -425,8 +440,11 @@ class ConversationStore {
       ownerContext: conversation.owner_summary ? {
         summary: conversation.owner_summary,
         relevance: conversation.owner_relevance,
-        goalsTouched: conversation.owner_goals_touched,
-        actionItems: conversation.owner_action_items,
+        goalsTouched: parseJson(conversation.owner_goals_touched),
+        ownerActionItems: parseJson(conversation.owner_action_items),
+        callerActionItems: parseJson(conversation.caller_action_items),
+        jointActionItems: parseJson(conversation.joint_action_items),
+        collaborationOpportunity: parseJson(conversation.collaboration_opportunity),
         followUp: conversation.owner_follow_up,
         notes: conversation.owner_notes
       } : null,

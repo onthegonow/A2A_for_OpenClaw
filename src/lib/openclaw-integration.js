@@ -70,6 +70,10 @@ function loadOwnerContext(workspaceDir = process.cwd()) {
 
 /**
  * Build summary prompt for agent
+ * 
+ * Philosophy: Every call is a potential collaboration. Find mutual value,
+ * create action items for BOTH sides, and surface opportunities that align
+ * with owner's goals.
  */
 function buildSummaryPrompt(messages, ownerContext, callerInfo = {}) {
   const messageText = messages.map(m => {
@@ -77,32 +81,56 @@ function buildSummaryPrompt(messages, ownerContext, callerInfo = {}) {
     return `${role}: ${m.content}`;
   }).join('\n\n');
 
+  const goalsSection = ownerContext.goals?.length ? `### Current Goals\n- ${ownerContext.goals.join('\n- ')}` : '';
+  const interestsSection = ownerContext.interests?.length ? `### Interests\n- ${ownerContext.interests.join('\n- ')}` : '';
+
   return `You just finished a federated agent-to-agent call. Summarize it from your owner's perspective.
 
+## Philosophy
+Every inbound call is a potential collaboration opportunity. Your job is to:
+1. Find MUTUAL value - what can both parties gain?
+2. Create action items for BOTH sides - not just your owner
+3. Surface alignment with owner's goals and interests
+4. Identify concrete next steps that move the relationship forward
+
 ## Your Owner's Context
-${ownerContext.user ? `### USER.md\n${ownerContext.user.slice(0, 2000)}` : ''}
+${ownerContext.user ? `### From USER.md\n${ownerContext.user.slice(0, 2000)}` : ''}
 
-${ownerContext.goals.length ? `### Current Goals\n- ${ownerContext.goals.join('\n- ')}` : ''}
+${goalsSection}
 
-${ownerContext.interests.length ? `### Interests\n- ${ownerContext.interests.join('\n- ')}` : ''}
+${interestsSection}
 
 ## The Conversation
 ${messageText}
 
+## Caller Context
+${callerInfo.name ? `Name: ${callerInfo.name}` : 'Unknown caller'}
+${callerInfo.context ? `Context: ${callerInfo.context}` : ''}
+
 ## Your Task
-Analyze this conversation from your owner's perspective. Return a JSON object:
+Analyze this conversation through the lens of MUTUAL COLLABORATION. Return JSON:
 
 {
   "summary": "Brief neutral summary of what was discussed",
-  "ownerSummary": "What this means for YOUR OWNER specifically - be personal and actionable",
-  "relevance": "high" | "medium" | "low",
-  "goalsTouched": ["list of owner goals this relates to"],
-  "actionItems": ["specific things owner should do"],
-  "followUp": "suggested follow-up action if any",
-  "notes": "any other insights for owner"
+  "ownerSummary": "What this means for YOUR OWNER - opportunities, risks, relevance",
+  "relevance": "low" | "medium" | "high",
+  "goalsTouched": ["owner goals this relates to"],
+  
+  "ownerActionItems": ["specific things YOUR OWNER should do"],
+  "callerActionItems": ["things the CALLER committed to or should do"],
+  "jointActionItems": ["things to do TOGETHER"],
+  
+  "collaborationOpportunity": {
+    "exists": true,
+    "description": "What could we build/do together?",
+    "alignment": "How does this align with owner's mission?"
+  },
+  
+  "followUp": "Suggested next step to move this forward",
+  "notes": "Other insights - who is this caller? What's their angle? Trust level?"
 }
 
-Be specific to your owner's situation. This summary is private - only your owner sees it.
+Think like a strategic advisor. This summary helps your owner decide if/how to pursue this relationship.
 
 JSON:`;
 }
