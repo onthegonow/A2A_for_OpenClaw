@@ -17,6 +17,19 @@ const { A2AClient } = require('../src/lib/client');
 
 const store = new TokenStore();
 
+// Format relative time
+function formatTimeAgo(date) {
+  const seconds = Math.floor((new Date() - date) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString();
+}
+
 // Parse arguments
 function parseArgs(argv) {
   const args = { _: [], flags: {} };
@@ -181,28 +194,227 @@ Or in code:
   },
 
   remotes: () => {
+    // Legacy alias for contacts
+    commands.contacts({ _: ['contacts'], flags: {} });
+  },
+
+  contacts: (args) => {
+    const subcommand = args._[1];
+    
+    // Sub-commands
+    if (subcommand === 'add') return commands['contacts:add'](args);
+    if (subcommand === 'show') return commands['contacts:show'](args);
+    if (subcommand === 'edit') return commands['contacts:edit'](args);
+    if (subcommand === 'ping') return commands['contacts:ping'](args);
+    if (subcommand === 'rm' || subcommand === 'remove') return commands['contacts:rm'](args);
+
+    // Default: list contacts
     const remotes = store.listRemotes();
     if (remotes.length === 0) {
-      console.log('No remote agents registered.');
+      console.log('📇 No contacts yet.\n');
+      console.log('Add one with: a2a contacts add <invite_url>');
       return;
     }
 
-    console.log('Remote agents:\n');
+    console.log(`📇 Agent Contacts (${remotes.length})\n`);
     for (const r of remotes) {
-      console.log(`📡 ${r.name}`);
-      console.log(`   Host: ${r.host}`);
-      console.log(`   Added: ${r.added_at}`);
+      const statusIcon = r.status === 'online' ? '🟢' : r.status === 'offline' ? '🔴' : '⚪';
+      const ownerText = r.owner ? ` — ${r.owner}` : '';
+      const trustBadge = r.trust === 'trusted' ? ' ⭐' : r.trust === 'verified' ? ' ✓' : '';
+      console.log(`${statusIcon} ${r.name}${ownerText}${trustBadge}`);
+      if (r.tags && r.tags.length > 0) {
+        console.log(`   🏷️  ${r.tags.join(', ')}`);
+      }
+      if (r.last_seen) {
+        const ago = formatTimeAgo(new Date(r.last_seen));
+        console.log(`   📍 Last seen: ${ago}`);
+      }
       console.log();
     }
   },
 
+  'contacts:add': (args) => {
+    const url = args._[2];
+    if (!url) {
+      console.error('Usage: a2a contacts add <invite_url> [options]');
+      console.error('Options:');
+      console.error('  --name, -n     Agent name');
+      console.error('  --owner, -o    Owner name');
+      console.error('  --notes        Notes about this contact');
+      console.error('  --tags         Comma-separated tags');
+      console.error('  --trust        Trust level (trusted, verified, unknown)');
+      process.exit(1);
+    }
+
+    const options = {
+      name: args.flags.name || args.flags.n,
+      owner: args.flags.owner || args.flags.o,
+      notes: args.flags.notes,
+      tags: args.flags.tags ? args.flags.tags.split(',').map(t => t.trim()) : [],
+      trust: args.flags.trust || 'unknown'
+    };
+
+    try {
+      const result = store.addRemote(url, options);
+      if (!result.success) {
+        console.log(`Contact already exists: ${result.existing.name}`);
+        return;
+      }
+      console.log(`✅ Contact added: ${result.remote.name}`);
+      if (result.remote.owner) console.log(`   Owner: ${result.remote.owner}`);
+      console.log(`   Host: ${result.remote.host}`);
+    } catch (err) {
+      console.error(err.message);
+      process.exit(1);
+    }
+  },
+
+  'contacts:show': (args) => {
+    const name = args._[2];
+    if (!name) {
+      console.error('Usage: a2a contacts show <name>');
+      process.exit(1);
+    }
+
+    const remote = store.getRemote(name);
+    if (!remote) {
+      console.error(`Contact not found: ${name}`);
+      process.exit(1);
+    }
+
+    const statusIcon = remote.status === 'online' ? '🟢' : remote.status === 'offline' ? '🔴' : '⚪';
+    const trustBadge = remote.trust === 'trusted' ? '⭐ Trusted' : remote.trust === 'verified' ? '✓ Verified' : '? Unknown';
+
+    console.log(`\n${'═'.repeat(50)}`);
+    console.log(`${statusIcon} ${remote.name}`);
+    console.log(`${'═'.repeat(50)}\n`);
+    
+    if (remote.owner) console.log(`👤 Owner: ${remote.owner}`);
+    console.log(`🌐 Host: ${remote.host}`);
+    console.log(`🔐 Trust: ${trustBadge}`);
+    
+    if (remote.tags && remote.tags.length > 0) {
+      console.log(`🏷️  Tags: ${remote.tags.join(', ')}`);
+    }
+    if (remote.notes) {
+      console.log(`📝 Notes: ${remote.notes}`);
+    }
+    
+    console.log(`\n📅 Added: ${new Date(remote.added_at).toLocaleDateString()}`);
+    if (remote.last_seen) {
+      console.log(`📍 Last seen: ${formatTimeAgo(new Date(remote.last_seen))}`);
+    }
+    if (remote.last_check) {
+      console.log(`🔄 Last check: ${formatTimeAgo(new Date(remote.last_check))}`);
+    }
+
+    console.log(`\n${'─'.repeat(50)}`);
+    console.log(`Quick actions:`);
+    console.log(`  a2a contacts ping ${name}`);
+    console.log(`  a2a call ${name} "Hello!"`);
+    console.log(`  a2a contacts edit ${name} --trust trusted`);
+    console.log(`${'─'.repeat(50)}\n`);
+  },
+
+  'contacts:edit': (args) => {
+    const name = args._[2];
+    if (!name) {
+      console.error('Usage: a2a contacts edit <name> [options]');
+      console.error('Options:');
+      console.error('  --name         New name');
+      console.error('  --owner        Owner name');
+      console.error('  --notes        Notes');
+      console.error('  --tags         Comma-separated tags');
+      console.error('  --trust        Trust level (trusted, verified, unknown)');
+      process.exit(1);
+    }
+
+    const updates = {};
+    if (args.flags.name) updates.name = args.flags.name;
+    if (args.flags.owner) updates.owner = args.flags.owner;
+    if (args.flags.notes) updates.notes = args.flags.notes;
+    if (args.flags.tags) updates.tags = args.flags.tags.split(',').map(t => t.trim());
+    if (args.flags.trust) updates.trust = args.flags.trust;
+
+    if (Object.keys(updates).length === 0) {
+      console.error('No updates specified. Use --name, --owner, --notes, --tags, or --trust');
+      process.exit(1);
+    }
+
+    const result = store.updateRemote(name, updates);
+    if (!result.success) {
+      console.error(`Contact not found: ${name}`);
+      process.exit(1);
+    }
+
+    console.log(`✅ Contact updated: ${result.remote.name}`);
+  },
+
+  'contacts:ping': async (args) => {
+    const name = args._[2];
+    if (!name) {
+      console.error('Usage: a2a contacts ping <name>');
+      process.exit(1);
+    }
+
+    const remote = store.getRemote(name);
+    if (!remote) {
+      console.error(`Contact not found: ${name}`);
+      process.exit(1);
+    }
+
+    const client = new A2AClient({});
+    const url = `oclaw://${remote.host}/${remote.token}`;
+
+    console.log(`🔍 Pinging ${remote.name}...`);
+
+    try {
+      const result = await client.ping(url);
+      store.updateRemoteStatus(name, 'online');
+      console.log(`🟢 ${remote.name} is online`);
+      console.log(`   Agent: ${result.name}`);
+      console.log(`   Version: ${result.version}`);
+    } catch (err) {
+      store.updateRemoteStatus(name, 'offline', err.message);
+      console.log(`🔴 ${remote.name} is offline`);
+      console.log(`   Error: ${err.message}`);
+    }
+  },
+
+  'contacts:rm': (args) => {
+    const name = args._[2];
+    if (!name) {
+      console.error('Usage: a2a contacts rm <name>');
+      process.exit(1);
+    }
+
+    const result = store.removeRemote(name);
+    if (!result.success) {
+      console.error(`Contact not found: ${name}`);
+      process.exit(1);
+    }
+
+    console.log(`✅ Contact removed: ${result.remote.name}`);
+  },
+
   call: async (args) => {
-    const url = args._[1];
+    let target = args._[1];
     const message = args._.slice(2).join(' ') || args.flags.message || args.flags.m;
 
-    if (!url || !message) {
-      console.error('Usage: a2a call <invite_url> <message>');
+    if (!target || !message) {
+      console.error('Usage: a2a call <contact_or_url> <message>');
       process.exit(1);
+    }
+
+    // Check if target is a contact name (not a URL)
+    let url = target;
+    let contactName = null;
+    if (!target.startsWith('oclaw://')) {
+      const remote = store.getRemote(target);
+      if (remote) {
+        url = `oclaw://${remote.host}/${remote.token}`;
+        contactName = remote.name;
+      }
     }
 
     const client = new A2AClient({
@@ -210,14 +422,24 @@ Or in code:
     });
 
     try {
-      console.log(`📞 Calling ${url}...`);
+      console.log(`📞 Calling ${contactName || url}...`);
       const response = await client.call(url, message);
+      
+      // Update contact status on success
+      if (contactName) {
+        store.updateRemoteStatus(contactName, 'online');
+      }
+      
       console.log(`\n✅ Response:\n`);
       console.log(response.response);
       if (response.conversation_id) {
         console.log(`\n📝 Conversation ID: ${response.conversation_id}`);
       }
     } catch (err) {
+      // Update contact status on failure
+      if (contactName) {
+        store.updateRemoteStatus(contactName, 'offline', err.message);
+      }
       console.error(`❌ Call failed: ${err.message}`);
       process.exit(1);
     }
@@ -372,9 +594,23 @@ Commands:
 
   list                List active tokens
   revoke <id>         Revoke a token
-  
-  add <url> [name]    Add a remote agent
-  remotes             List remote agents
+
+Contacts:
+  contacts            List all contacts
+  contacts add <url>  Add a contact
+    --name, -n        Agent name
+    --owner, -o       Owner name
+    --notes           Notes about this contact
+    --tags            Comma-separated tags
+    --trust           Trust level (trusted, verified, unknown)
+  contacts show <n>   Show contact details
+  contacts edit <n>   Edit contact metadata
+  contacts ping <n>   Ping contact, update status
+  contacts rm <n>     Remove contact
+
+Legacy:
+  add <url> [name]    Add a remote (use 'contacts add')
+  remotes             List remotes (use 'contacts')
   
   call <url> <msg>    Call a remote agent
   ping <url>          Check if agent is reachable
@@ -391,7 +627,9 @@ Commands:
   
 Examples:
   a2a create --name "bappybot" --owner "Benjamin Pollack" --expires 7d
-  a2a call oclaw://host/fed_xxx "Hello, can you help?"
+  a2a contacts add oclaw://host/fed_xxx --name "Alice" --owner "Alice Chen" --trust verified
+  a2a contacts ping Alice
+  a2a call Alice "Hello!"
   a2a server --port 3001
 `);
   }

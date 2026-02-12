@@ -199,17 +199,30 @@ class TokenStore {
   }
 
   /**
-   * Add a remote agent endpoint
+   * Add a remote agent endpoint (contact)
    * Note: Token is encrypted at rest using a derived key
+   * 
+   * @param {string} inviteUrl - oclaw://host/token format
+   * @param {object} options - Contact metadata
+   * @param {string} options.name - Agent name
+   * @param {string} options.owner - Human owner name
+   * @param {string} options.notes - Freeform notes
+   * @param {string[]} options.tags - Grouping tags
+   * @param {string} options.trust - Trust level (trusted, verified, unknown)
    */
-  addRemote(inviteUrl, name = null) {
+  addRemote(inviteUrl, options = {}) {
+    // Handle legacy signature: addRemote(url, name)
+    if (typeof options === 'string') {
+      options = { name: options };
+    }
+
     const match = inviteUrl.match(/^oclaw:\/\/([^/]+)\/(.+)$/);
     if (!match) {
       throw new Error(`Invalid invite URL: ${inviteUrl}`);
     }
 
     const [, host, token] = match;
-    const remoteName = name || host;
+    const remoteName = options.name || host;
 
     const db = this._load();
     
@@ -231,9 +244,15 @@ class TokenStore {
     const remote = {
       id: crypto.randomBytes(8).toString('hex'),
       name: remoteName,
+      owner: options.owner || null,
       host,
       token_hash: tokenHash,
       token_enc: encrypted.toString('base64'),
+      notes: options.notes || null,
+      tags: options.tags || [],
+      trust: options.trust || 'unknown',
+      status: 'unknown',
+      last_seen: null,
       added_at: new Date().toISOString()
     };
 
@@ -285,6 +304,55 @@ class TokenStore {
       token: this._decryptRemoteToken(remote),
       token_enc: undefined
     };
+  }
+
+  /**
+   * Update a remote agent's metadata
+   */
+  updateRemote(nameOrHost, updates) {
+    const db = this._load();
+    const remote = db.remotes.find(r => 
+      r.name === nameOrHost || 
+      r.host === nameOrHost ||
+      r.id === nameOrHost
+    );
+    
+    if (!remote) {
+      return { success: false, error: 'not_found' };
+    }
+
+    // Only allow updating specific fields
+    const allowed = ['name', 'owner', 'notes', 'tags', 'trust'];
+    for (const key of allowed) {
+      if (updates[key] !== undefined) {
+        remote[key] = updates[key];
+      }
+    }
+    remote.updated_at = new Date().toISOString();
+
+    this._save(db);
+    return { success: true, remote };
+  }
+
+  /**
+   * Update contact status after ping/call
+   */
+  updateRemoteStatus(nameOrHost, status, error = null) {
+    const db = this._load();
+    const remote = db.remotes.find(r => 
+      r.name === nameOrHost || 
+      r.host === nameOrHost ||
+      r.id === nameOrHost
+    );
+    
+    if (!remote) return;
+
+    remote.status = status; // 'online', 'offline', 'error'
+    remote.last_seen = status === 'online' ? new Date().toISOString() : remote.last_seen;
+    remote.last_error = error;
+    remote.last_check = new Date().toISOString();
+    
+    this._save(db);
   }
 
   /**
