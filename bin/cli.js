@@ -86,7 +86,19 @@ const commands = {
       ? new Date(record.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
       : 'never';
 
-    console.log(`✅ Federation token created\n`);
+    // Auto-link to contact if specified
+    const linkContact = args.flags.link || args.flags.l;
+    if (linkContact) {
+      const linkResult = store.linkTokenToContact(linkContact, record.id);
+      if (linkResult.success) {
+        console.log(`✅ Token created & linked to ${linkContact}\n`);
+      } else {
+        console.log(`✅ Token created (link failed: ${linkResult.error})\n`);
+      }
+    } else {
+      console.log(`✅ Federation token created\n`);
+    }
+    
     console.log(`Name: ${record.name}`);
     if (record.owner) console.log(`Owner: ${record.owner}`);
     console.log(`Expires: ${record.expires_at || 'never'}`);
@@ -94,6 +106,7 @@ const commands = {
     console.log(`Disclosure: ${record.disclosure}`);
     console.log(`Notify: ${record.notify}`);
     console.log(`Max calls: ${record.max_calls || 'unlimited'}`);
+    if (linkContact) console.log(`Linked to: ${linkContact}`);
     console.log(`\nTo revoke: a2a revoke ${record.id}`);
     console.log(`\n${'─'.repeat(50)}`);
     console.log(`📋 SHAREABLE INVITE (copy everything below):`);
@@ -206,6 +219,7 @@ Or in code:
     if (subcommand === 'show') return commands['contacts:show'](args);
     if (subcommand === 'edit') return commands['contacts:edit'](args);
     if (subcommand === 'ping') return commands['contacts:ping'](args);
+    if (subcommand === 'link') return commands['contacts:link'](args);
     if (subcommand === 'rm' || subcommand === 'remove') return commands['contacts:rm'](args);
 
     // Default: list contacts
@@ -220,8 +234,15 @@ Or in code:
     for (const r of remotes) {
       const statusIcon = r.status === 'online' ? '🟢' : r.status === 'offline' ? '🔴' : '⚪';
       const ownerText = r.owner ? ` — ${r.owner}` : '';
-      const trustBadge = r.trust === 'trusted' ? ' ⭐' : r.trust === 'verified' ? ' ✓' : '';
-      console.log(`${statusIcon} ${r.name}${ownerText}${trustBadge}`);
+      
+      // Permission badge from linked token (what YOU gave THEM)
+      let permBadge = '';
+      if (r.linked_token) {
+        const p = r.linked_token.permissions;
+        permBadge = p === 'tools-write' ? ' ⚡' : p === 'tools-read' ? ' 🔧' : ' 🌐';
+      }
+      
+      console.log(`${statusIcon} ${r.name}${ownerText}${permBadge}`);
       if (r.tags && r.tags.length > 0) {
         console.log(`   🏷️  ${r.tags.join(', ')}`);
       }
@@ -231,6 +252,8 @@ Or in code:
       }
       console.log();
     }
+    
+    console.log('Legend: 🌐 chat-only  🔧 tools-read  ⚡ tools-write');
   },
 
   'contacts:add': (args) => {
@@ -242,7 +265,7 @@ Or in code:
       console.error('  --owner, -o    Owner name');
       console.error('  --notes        Notes about this contact');
       console.error('  --tags         Comma-separated tags');
-      console.error('  --trust        Trust level (trusted, verified, unknown)');
+      console.error('  --link         Link to token ID you gave them');
       process.exit(1);
     }
 
@@ -251,7 +274,7 @@ Or in code:
       owner: args.flags.owner || args.flags.o,
       notes: args.flags.notes,
       tags: args.flags.tags ? args.flags.tags.split(',').map(t => t.trim()) : [],
-      trust: args.flags.trust || 'unknown'
+      linkedTokenId: args.flags.link || null
     };
 
     try {
@@ -263,6 +286,11 @@ Or in code:
       console.log(`✅ Contact added: ${result.remote.name}`);
       if (result.remote.owner) console.log(`   Owner: ${result.remote.owner}`);
       console.log(`   Host: ${result.remote.host}`);
+      if (options.linkedTokenId) {
+        console.log(`   Linked to token: ${options.linkedTokenId}`);
+      } else {
+        console.log(`\n💡 Link a token: a2a contacts link ${result.remote.name} <token_id>`);
+      }
     } catch (err) {
       console.error(err.message);
       process.exit(1);
@@ -276,14 +304,15 @@ Or in code:
       process.exit(1);
     }
 
-    const remote = store.getRemote(name);
+    // Get contact with linked token info
+    const remotes = store.listRemotes();
+    const remote = remotes.find(r => r.name === name || r.id === name);
     if (!remote) {
       console.error(`Contact not found: ${name}`);
       process.exit(1);
     }
 
     const statusIcon = remote.status === 'online' ? '🟢' : remote.status === 'offline' ? '🔴' : '⚪';
-    const trustBadge = remote.trust === 'trusted' ? '⭐ Trusted' : remote.trust === 'verified' ? '✓ Verified' : '? Unknown';
 
     console.log(`\n${'═'.repeat(50)}`);
     console.log(`${statusIcon} ${remote.name}`);
@@ -291,7 +320,19 @@ Or in code:
     
     if (remote.owner) console.log(`👤 Owner: ${remote.owner}`);
     console.log(`🌐 Host: ${remote.host}`);
-    console.log(`🔐 Trust: ${trustBadge}`);
+    
+    // Show linked token (permissions you gave them)
+    if (remote.linked_token) {
+      const t = remote.linked_token;
+      const permLabel = t.permissions === 'tools-write' ? '⚡ tools-write' : 
+                        t.permissions === 'tools-read' ? '🔧 tools-read' : '🌐 chat-only';
+      console.log(`🔐 Your token to them: ${t.id}`);
+      console.log(`   Permissions: ${permLabel}`);
+      console.log(`   Calls: ${t.calls_made}${t.max_calls ? '/' + t.max_calls : ''}`);
+      if (t.revoked) console.log(`   ⚠️  REVOKED`);
+    } else {
+      console.log(`🔐 No linked token (you haven't given them access yet)`);
+    }
     
     if (remote.tags && remote.tags.length > 0) {
       console.log(`🏷️  Tags: ${remote.tags.join(', ')}`);
@@ -312,7 +353,9 @@ Or in code:
     console.log(`Quick actions:`);
     console.log(`  a2a contacts ping ${name}`);
     console.log(`  a2a call ${name} "Hello!"`);
-    console.log(`  a2a contacts edit ${name} --trust trusted`);
+    if (!remote.linked_token) {
+      console.log(`  a2a contacts link ${name} <token_id>`);
+    }
     console.log(`${'─'.repeat(50)}\n`);
   },
 
@@ -325,7 +368,6 @@ Or in code:
       console.error('  --owner        Owner name');
       console.error('  --notes        Notes');
       console.error('  --tags         Comma-separated tags');
-      console.error('  --trust        Trust level (trusted, verified, unknown)');
       process.exit(1);
     }
 
@@ -334,10 +376,9 @@ Or in code:
     if (args.flags.owner) updates.owner = args.flags.owner;
     if (args.flags.notes) updates.notes = args.flags.notes;
     if (args.flags.tags) updates.tags = args.flags.tags.split(',').map(t => t.trim());
-    if (args.flags.trust) updates.trust = args.flags.trust;
 
     if (Object.keys(updates).length === 0) {
-      console.error('No updates specified. Use --name, --owner, --notes, --tags, or --trust');
+      console.error('No updates specified. Use --name, --owner, --notes, or --tags');
       process.exit(1);
     }
 
@@ -348,6 +389,37 @@ Or in code:
     }
 
     console.log(`✅ Contact updated: ${result.remote.name}`);
+  },
+
+  'contacts:link': (args) => {
+    const contactName = args._[2];
+    const tokenId = args._[3];
+    
+    if (!contactName || !tokenId) {
+      console.error('Usage: a2a contacts link <contact_name> <token_id>');
+      console.error('\nLinks a token you created to a contact, showing what access they have.');
+      console.error('\nExample:');
+      console.error('  a2a contacts link Alice tok_abc123');
+      process.exit(1);
+    }
+
+    const result = store.linkTokenToContact(contactName, tokenId);
+    if (!result.success) {
+      if (result.error === 'contact_not_found') {
+        console.error(`Contact not found: ${contactName}`);
+      } else if (result.error === 'token_not_found') {
+        console.error(`Token not found: ${tokenId}`);
+      }
+      process.exit(1);
+    }
+
+    const permLabel = result.token.permissions === 'tools-write' ? '⚡ tools-write' : 
+                      result.token.permissions === 'tools-read' ? '🔧 tools-read' : '🌐 chat-only';
+    
+    console.log(`✅ Linked token to contact`);
+    console.log(`   Contact: ${result.remote.name}`);
+    console.log(`   Token: ${result.token.id} (${result.token.name})`);
+    console.log(`   Permissions: ${permLabel}`);
   },
 
   'contacts:ping': async (args) => {
@@ -591,22 +663,26 @@ Commands:
     --disclosure, -d  Disclosure level (public, minimal, none)
     --notify          Owner notification (all, summary, none)
     --max-calls       Maximum invocations (default: 100)
+    --link, -l        Auto-link to contact name
 
   list                List active tokens
   revoke <id>         Revoke a token
 
 Contacts:
-  contacts            List all contacts
+  contacts            List all contacts (shows permission badges)
   contacts add <url>  Add a contact
     --name, -n        Agent name
     --owner, -o       Owner name
     --notes           Notes about this contact
     --tags            Comma-separated tags
-    --trust           Trust level (trusted, verified, unknown)
-  contacts show <n>   Show contact details
+    --link            Link to token ID you gave them
+  contacts show <n>   Show contact details + linked token
   contacts edit <n>   Edit contact metadata
+  contacts link <n> <tok>  Link a token to a contact
   contacts ping <n>   Ping contact, update status
   contacts rm <n>     Remove contact
+
+Permission badges: 🌐 chat-only  🔧 tools-read  ⚡ tools-write
 
 Legacy:
   add <url> [name]    Add a remote (use 'contacts add')

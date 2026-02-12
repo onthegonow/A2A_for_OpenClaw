@@ -250,7 +250,7 @@ class TokenStore {
       token_enc: encrypted.toString('base64'),
       notes: options.notes || null,
       tags: options.tags || [],
-      trust: options.trust || 'unknown',
+      linked_token_id: options.linkedTokenId || null,  // Token you gave them
       status: 'unknown',
       last_seen: null,
       added_at: new Date().toISOString()
@@ -279,11 +279,39 @@ class TokenStore {
   }
 
   /**
-   * List remote agents
+   * List remote agents with linked token info
    */
   listRemotes() {
     const db = this._load();
-    return db.remotes;
+    return db.remotes.map(r => {
+      if (r.linked_token_id) {
+        const token = db.tokens.find(t => t.id === r.linked_token_id);
+        if (token) {
+          return { ...r, linked_token: token };
+        }
+      }
+      return r;
+    });
+  }
+
+  /**
+   * Link a token to a contact
+   */
+  linkTokenToContact(contactNameOrId, tokenId) {
+    const db = this._load();
+    const remote = db.remotes.find(r => 
+      r.name === contactNameOrId || r.id === contactNameOrId
+    );
+    const token = db.tokens.find(t => 
+      t.id === tokenId || t.id.startsWith(tokenId)
+    );
+
+    if (!remote) return { success: false, error: 'contact_not_found' };
+    if (!token) return { success: false, error: 'token_not_found' };
+
+    remote.linked_token_id = token.id;
+    this._save(db);
+    return { success: true, remote, token };
   }
 
   /**
@@ -322,7 +350,7 @@ class TokenStore {
     }
 
     // Only allow updating specific fields
-    const allowed = ['name', 'owner', 'notes', 'tags', 'trust'];
+    const allowed = ['name', 'owner', 'notes', 'tags', 'linked_token_id'];
     for (const key of allowed) {
       if (updates[key] !== undefined) {
         remote[key] = updates[key];
