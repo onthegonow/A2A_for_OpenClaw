@@ -29,6 +29,53 @@ Enable agent-to-agent communication across OpenClaw instances.
 
 ## Commands
 
+### Quickstart
+
+User says: `/a2a quickstart`, `/a2a start`, "set up A2A", "get started with A2A", "configure what my agent shares"
+
+Full onboarding flow: generates a disclosure manifest that controls what topics your agent leads with, discusses, or deflects during A2A calls — scoped by access tier (public, friends, family).
+
+This onboarding is required before the first `/a2a call`. The owner must approve permissions first.
+
+Flow:
+
+1. Scan USER.md, HEARTBEAT.md, SOUL.md to generate a default manifest
+2. Present the manifest as a numbered text list grouped by tier:
+
+```
+PUBLIC TIER (anyone can see):
+Lead with:
+  1. [topic] — [detail]
+  2. [topic] — [detail]
+Discuss freely:
+  3. [topic] — [detail]
+Deflect:
+  4. [topic] — [detail]
+
+FRIENDS TIER (trusted contacts):
+Lead with:
+  5. [topic] — [detail]
+...
+
+FAMILY TIER (inner circle):
+...
+
+NEVER DISCLOSE:
+  N. [item]
+```
+
+3. User edits via text commands:
+
+```
+move 3 to friends.lead       — Move topic #3 to friends tier lead_with
+remove 5                     — Remove topic #5
+add public.discuss "Topic" "Detail about it"  — Add new topic
+edit 2 detail "Updated desc" — Edit topic #2's detail
+done                         — Save manifest and finish
+```
+
+4. Manifest saved to `~/.config/openclaw/a2a-disclosure.json`
+
 ### Create Token
 
 User says: `/a2a create`, "create an A2A token", "let another agent call me"

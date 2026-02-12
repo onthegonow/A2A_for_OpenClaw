@@ -80,6 +80,11 @@ When sending messages with buttons in Telegram forum groups, **ALWAYS include th
 
 Settings saved to ~/.config/openclaw/a2a-config.json
 
+## First-Call Requirement
+
+Before any agent uses \`/a2a call\`, the human owner must complete onboarding and approve tier permissions.
+If onboarding has not been completed yet, route them to \`/a2a quickstart\` first.
+
 ## Main Menu (Post-Onboarding)
 
 \`\`\`javascript
@@ -221,6 +226,7 @@ ${bold('━━━ Usage ━━━')}
 
 In your chat app, use:
 
+  /a2a quickstart     REQUIRED first step: owner sets permission tiers
   /a2a invite         Create an invitation token
   /a2a list           List active tokens
   /a2a revoke <id>    Revoke a token

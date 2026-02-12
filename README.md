@@ -69,6 +69,12 @@ npm install
 node scripts/install-openclaw.js
 ```
 
+Before the first `a2a call`, the owner must set permissions and disclosure tiers. Run onboarding first:
+
+```bash
+/a2a quickstart
+```
+
 ## 🎯 Permission Tiers
 
 | Tier | Alias | What They Can Access |

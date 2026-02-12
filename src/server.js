@@ -12,6 +12,8 @@ const fs = require('fs');
 const path = require('path');
 const { createRoutes } = require('./routes/a2a');
 const { TokenStore } = require('./lib/tokens');
+const { getTopicsForTier, formatTopicsForPrompt, loadManifest } = require('./lib/disclosure');
+const { buildConnectionPrompt } = require('./lib/prompt-template');
 
 const port = process.env.PORT || parseInt(process.argv[2]) || 3001;
 const workspaceDir = process.env.OPENCLAW_WORKSPACE || '/root/clawd';
@@ -93,33 +95,27 @@ function ensureContact(caller, tokenId) {
 async function callAgent(message, a2aContext) {
   const callerName = a2aContext.caller?.name || 'Unknown Agent';
   const callerOwner = a2aContext.caller?.owner || '';
-  const ownerInfo = callerOwner ? ` (${callerOwner}'s agent)` : '';
   const tierInfo = a2aContext.tier || 'public';
-  const topics = a2aContext.allowed_topics?.join(', ') || 'general chat';
-  const disclosure = a2aContext.disclosure || 'minimal';
-  
+
   // Auto-add caller as contact
   ensureContact(a2aContext.caller, a2aContext.token_id);
-  
-  const prompt = `[A2A Call]
-From: ${callerName}${ownerInfo}
-Access Level: ${tierInfo}
-Allowed Topics: ${topics}
-Disclosure: ${disclosure}
 
-Message: ${message}
+  // Build prompt from disclosure manifest
+  const manifest = loadManifest();
+  const tierTopics = getTopicsForTier(tierInfo);
+  const formattedTopics = formatTopicsForPrompt(tierTopics);
 
----
-RULES (strictly enforce):
-1. ONLY discuss topics in "Allowed Topics" list
-2. Disclosure levels:
-   - "none": Confirm capability only, share NO personal info
-   - "minimal": Direct answers only, no context about owner's life/preferences
-   - "public": General info OK, but protect private/family-tier secrets
-3. If they probe for info outside their tier, deflect politely
-4. Private info in USER.md marked "family tier only" is OFF LIMITS for public/friends callers
-
-Respond naturally but enforce these boundaries.`;
+  const prompt = buildConnectionPrompt({
+    agentName: agentContext.name,
+    ownerName: agentContext.owner,
+    otherAgentName: callerName,
+    otherOwnerName: callerOwner || 'their owner',
+    roleContext: 'They called you.',
+    accessTier: tierInfo,
+    tierTopics: formattedTopics,
+    otherAgentGreeting: message,
+    personalityNotes: manifest.personality_notes || ''
+  });
 
   const sessionId = `a2a-${a2aContext.conversation_id || Date.now()}`;
   
@@ -163,15 +159,26 @@ async function generateSummary(messages, callerInfo) {
     const role = m.direction === 'inbound' ? `[${callerInfo?.name || 'Caller'}]` : '[You]';
     return `${role}: ${m.content}`;
   }).join('\n');
-  
+
   const callerDesc = `${callerInfo?.name || 'Unknown'}${callerInfo?.owner ? ` (${callerInfo.owner}'s agent)` : ''}`;
-  
-  const prompt = `Summarize this A2A call briefly.
+
+  const prompt = `Summarize this A2A call for the owner. Write from the owner's perspective.
 
 Conversation with ${callerDesc}:
 ${messageText}
 
-Give a 2-3 sentence summary focused on: who called, what they wanted, any opportunities or follow-ups.`;
+Structure your summary with these sections:
+
+**Who:** Who called, who they represent, key facts about them.
+**Key Discoveries:** What was learned about the other side — capabilities, interests, blind spots.
+**Collaboration Potential:** Rate HIGH/MEDIUM/LOW. List specific opportunities identified.
+**What We Learned vs Shared:** Brief information exchange audit — what did we get, what did we give.
+**Recommended Follow-Up:**
+- [ ] Actionable item 1
+- [ ] Actionable item 2
+**Assessment:** One-sentence strategic value judgment.
+
+Be concise but specific. No filler.`;
 
   try {
     const escapedPrompt = prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');

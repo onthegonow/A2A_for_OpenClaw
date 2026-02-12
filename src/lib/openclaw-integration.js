@@ -84,7 +84,7 @@ function buildSummaryPrompt(messages, ownerContext, callerInfo = {}) {
   const goalsSection = ownerContext.goals?.length ? `### Current Goals\n- ${ownerContext.goals.join('\n- ')}` : '';
   const interestsSection = ownerContext.interests?.length ? `### Interests\n- ${ownerContext.interests.join('\n- ')}` : '';
 
-  return `You just finished a A2A agent-to-agent call. Analyze it strategically for your owner.
+  return `You just finished an A2A agent-to-agent call. Analyze it strategically for your owner.
 
 ## Philosophy
 A2A is cooperative AND adversarial. Each agent maximizes value for their own owner — but the best outcomes are mutual wins. Your job:
@@ -112,35 +112,32 @@ ${callerInfo.context ? `Context: ${callerInfo.context}` : ''}
 Analyze as a strategic advisor. Return JSON:
 
 {
-  "summary": "Brief neutral summary (shareable)",
-  
+  "who": "Who called, who they represent, key facts about them",
+
+  "keyDiscoveries": ["What was learned about the other side — capabilities, interests, blind spots"],
+
+  "collaborationPotential": {
+    "rating": "HIGH | MEDIUM | LOW",
+    "opportunities": ["specific opportunities identified"]
+  },
+
   "exchange": {
     "weGot": ["info, commitments, or value we extracted"],
     "weGave": ["info, compute, or commitments we provided"],
-    "balance": "favorable | even | unfavorable",
-    "fair": true
+    "balance": "favorable | even | unfavorable"
   },
-  
-  "mutualValue": {
-    "found": true,
-    "opportunities": ["potential wins for BOTH sides"],
-    "alignment": "how this connects to owner's goals"
-  },
-  
-  "actionItems": {
-    "owner": ["what YOUR OWNER should do"],
-    "caller": ["what THEY committed to or should do"],
-    "joint": ["things to do TOGETHER"]
-  },
-  
+
+  "recommendedFollowUp": ["actionable items with specifics"],
+
+  "assessment": "One-sentence strategic value judgment",
+
   "trust": {
     "assessment": "appropriate | too_high | too_low",
     "recommendation": "maintain | increase | decrease | revoke",
     "pattern": "What's their angle? Genuine partner or extractive?"
   },
-  
-  "ownerBrief": "2-3 sentences: the strategic takeaway for your owner",
-  "followUp": "concrete next step to advance this relationship (if any)"
+
+  "ownerBrief": "2-3 sentences: the strategic takeaway for your owner"
 }
 
 Think like a strategic advisor: protect your owner's interests AND find mutual wins.
