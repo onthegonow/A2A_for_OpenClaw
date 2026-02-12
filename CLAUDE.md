@@ -15,7 +15,7 @@ git remote set-url origin https://${GH_TOKEN}@github.com/onthegonow/a2a_calling.
 
 ## What This Does
 
-1. **Token Management** - Create expiring tokens with permissions (chat-only/tools-read/tools-write)
+1. **Token Management** - Create expiring tokens with tier-based permissions (public/friends/family) and capabilities
 2. **Inbound Calls** - Express routes handle `/api/a2a/invoke` from remote agents
 3. **Outbound Calls** - `A2AClient` calls remote agents via their invite URLs
 4. **Owner Notifications** - Configurable alerts when your agent gets called

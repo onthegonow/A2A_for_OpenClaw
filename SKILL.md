@@ -76,9 +76,53 @@ done                         — Save manifest and finish
 
 4. Manifest saved to `~/.config/openclaw/a2a-disclosure.json`
 
-### Create Token
+### Invite (Create & Share Token)
+
+User says: `/a2a invite`, `/a2a invite public`, `/a2a invite friends`, `/a2a invite family`, "create an invite", "generate an A2A invite"
+
+This is the primary way to create and share access. Run the CLI to create a token, then format the output as a beautiful invite message.
+
+**Step 1:** Determine the tier from the user's command (default: `public`).
+
+**Step 2:** Run the CLI:
+
+```bash
+a2a create --name "AGENT_NAME" --owner "OWNER_NAME" --expires never --permissions TIER
+```
+
+Use the agent's real name and owner from context. The tier is `public`, `friends`, or `family`.
+
+**Step 3:** The CLI outputs the invite URL and token details. Take the invite URL and the token's topics and goals, then reply to the user with a formatted invite block using EXACTLY this template:
+
+```
+📞🗣️ **Agent-to-Agent Call Invite**
+
+👤 **OWNER_NAME** would like your agent to call **AGENT_NAME** and explore where our owners might collaborate.
+
+💬 topic1 · topic2 · topic3
+🎯 goal1 · goal2 · goal3
+
+a2a://hostname/fed_xxxxx
+
+── setup ──
+npm i -g a2acalling && a2a add "a2a://hostname/fed_xxxxx" "AGENT_NAME" && a2a call "AGENT_NAME" "Hello from my owner!"
+https://github.com/onthegonow/a2a_calling
+```
+
+Rules:
+- Topics come from the token's `allowed_topics`, joined with ` · ` (middle dot separator)
+- Goals come from the token's `allowed_goals`, joined with ` · `. Only include the 🎯 line if goals exist.
+- The invite URL is the `a2a://` URL from the CLI output
+- The setup line is a single copy-pasteable command
+- The GitHub link goes at the very bottom
+- If the token has an expiration, add `⏰ EXPIRY_DATE` after the invite URL
+- Present this as a ready-to-copy message the user can paste anywhere (Telegram, Discord, email, etc.)
+
+### Create Token (Advanced)
 
 User says: `/a2a create`, "create an A2A token", "let another agent call me"
+
+For users who want fine-grained control over token options:
 
 ```bash
 a2a create --name "NAME" --expires DURATION --permissions LEVEL
@@ -87,11 +131,11 @@ a2a create --name "NAME" --expires DURATION --permissions LEVEL
 Options:
 - `--name, -n` — Token label
 - `--expires, -e` — `1h`, `1d`, `7d`, `30d`, `never` (default: `1d`)
-- `--permissions, -p` — `chat-only`, `tools-read`, `tools-write` (default: `chat-only`)
+- `--permissions, -p` — `public`, `friends`, `family` (default: `public`)
 - `--disclosure, -d` — `public`, `minimal`, `none` (default: `minimal`)
 - `--notify` — `all`, `summary`, `none` (default: `all`)
 
-Reply with the invite URL: `a2a://hostname/fed_xxxxx`
+After creating, format the output as the invite block described above.
 
 ### List Tokens
 
@@ -115,7 +159,7 @@ a2a add "a2a://host/token" "Agent Name"
 
 ## Calling Remote Agents
 
-When task delegation to a known remote agent would help, or user asks to contact a A2A agent:
+When task delegation to a known remote agent would help, or user asks to contact an A2A agent:
 
 ```javascript
 // Use a2a_call tool
@@ -128,13 +172,17 @@ a2a_call({
 
 ## Handling Incoming Calls
 
-When receiving an A2A call, the agent operates within the token's permission scope:
+When receiving an A2A call, the agent operates within the token's permission scope.
 
-| Permission | Allowed |
-|------------|---------|
-| `chat-only` | Conversation only. No tools, files, memory. |
-| `tools-read` | Chat + read-only tools |
-| `tools-write` | Chat + read/write tools |
+Each tier carries a `capabilities[]` array. `context-read` is always available — the agent can read its own knowledge base to formulate answers. Higher tiers unlock caller-facing capabilities:
+
+| Tier | Default Capabilities |
+|------|---------------------|
+| `public` | `context-read` |
+| `friends` | `context-read`, `calendar.read`, `email.read`, `search` |
+| `family` | `context-read`, `calendar`, `email`, `search`, `tools`, `memory` |
+
+Topics and goals act as information filters — they control what the agent proactively shares, discusses, or deflects.
 
 Apply disclosure level:
 - `public` — Share any non-private info
