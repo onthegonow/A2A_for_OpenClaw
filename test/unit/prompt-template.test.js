@@ -214,6 +214,7 @@ module.exports = function (test, assert, helpers) {
     });
 
     assert.includes(prompt, 'Minimum 8 exchanges');
+    assert.includes(prompt, 'NO maximum');
     assert.includes(prompt, 'at least one question');
   });
 
