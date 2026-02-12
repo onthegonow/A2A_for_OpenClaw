@@ -266,6 +266,85 @@ Or in code:
     require('../src/server.js');
   },
 
+  quickstart: (args) => {
+    const hostname = process.env.A2A_HOSTNAME || process.env.HOSTNAME || 'localhost:3001';
+    const name = args.flags.name || args.flags.n || 'My Agent';
+    
+    console.log(`\n🚀 A2A Quickstart\n${'═'.repeat(50)}\n`);
+    
+    // Step 1: Check server
+    console.log('1️⃣  Checking server status...');
+    const http = require('http');
+    const serverHost = hostname.split(':')[0];
+    const serverPort = hostname.split(':')[1] || 3001;
+    
+    const checkServer = () => new Promise((resolve) => {
+      const req = http.request({
+        hostname: serverHost === 'localhost' ? '127.0.0.1' : serverHost,
+        port: serverPort,
+        path: '/api/federation/ping',
+        timeout: 2000
+      }, (res) => {
+        resolve(res.statusCode === 200);
+      });
+      req.on('error', () => resolve(false));
+      req.on('timeout', () => { req.destroy(); resolve(false); });
+      req.end();
+    });
+
+    checkServer().then(serverOk => {
+      if (!serverOk) {
+        console.log('   ⚠️  Server not running!');
+        console.log(`   Run: A2A_HOSTNAME="${hostname}" a2a server\n`);
+      } else {
+        console.log('   ✅ Server running\n');
+      }
+
+      // Step 2: Create invite
+      console.log('2️⃣  Creating your first invite...\n');
+      const { token, record } = store.create({
+        name,
+        expires: '7d',
+        permissions: 'chat-only',
+        maxCalls: 100
+      });
+
+      const inviteUrl = `oclaw://${hostname}/${token}`;
+      const expiresText = new Date(record.expires_at).toLocaleDateString('en-US', { 
+        month: 'short', day: 'numeric', year: 'numeric' 
+      });
+
+      // Step 3: Show the invite
+      console.log('3️⃣  Share this invite:\n');
+      console.log('─'.repeat(50));
+      console.log(`
+🤝 Agent-to-Agent Invite
+
+${name} is inviting your agent to connect!
+
+📡 Connection URL:
+${inviteUrl}
+
+⏰ Expires: ${expiresText}
+🔐 Permissions: chat-only
+📊 Limits: 100 calls, 10/min rate limit
+
+━━━ Quick Setup ━━━
+
+1. Install: npm install -g a2acalling
+
+2. Connect: a2a add "${inviteUrl}" "${name}"
+
+3. Call: a2a call "${inviteUrl}" "Hello!"
+
+📚 Docs: https://github.com/onthegonow/A2A_for_OpenClaw
+`);
+      console.log('─'.repeat(50));
+      console.log(`\n✅ Done! Share the invite above with other agents.\n`);
+      console.log(`To revoke: a2a revoke ${record.id}\n`);
+    });
+  },
+
   install: () => {
     require('../scripts/install-openclaw.js');
   },
@@ -296,6 +375,9 @@ Commands:
 
   server              Start the federation server
     --port, -p        Port to listen on (default: 3001)
+  
+  quickstart          One-command setup: check server + create invite
+    --name, -n        Agent name for the invite
   
   install             Install A2A for OpenClaw
   
