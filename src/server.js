@@ -85,9 +85,74 @@ console.log(`[a2a] Agent: ${agentContext.name} (${agentContext.owner}'s agent)`)
 console.log(`[a2a] API: ${apiConfig ? `${apiConfig.provider} ✓` : 'NOT FOUND ✗'}`);
 
 /**
- * Call LLM via OpenRouter or Anthropic
+ * Call agent via OpenClaw sub-agent (full tool access)
  */
 async function callAgent(message, federationContext) {
+  const { execSync } = require('child_process');
+  
+  const callerName = federationContext.caller?.name || 'Unknown Agent';
+  const callerOwner = federationContext.caller?.owner || '';
+  const ownerInfo = callerOwner ? ` (${callerOwner}'s agent)` : '';
+  const tierInfo = federationContext.tier || 'public';
+  const topics = federationContext.allowed_topics?.join(', ') || 'general chat';
+  const disclosure = federationContext.disclosure || 'minimal';
+  
+  // Build the federation context for the sub-agent
+  const prompt = `[A2A Federation Call]
+From: ${callerName}${ownerInfo}
+Access Level: ${tierInfo}
+Topics: ${topics}
+Disclosure: ${disclosure}
+
+Message: ${message}
+
+---
+Respond to this federated agent call. Be yourself - collaborative but protect private info based on disclosure level. Keep response concise (under 500 chars).`;
+
+  // Use a unique session ID for this conversation
+  const sessionId = `a2a-${federationContext.conversation_id || Date.now()}`;
+  
+  try {
+    // Write prompt to temp file to avoid shell escaping issues
+    const tmpFile = `/tmp/a2a-${Date.now()}.txt`;
+    fs.writeFileSync(tmpFile, prompt);
+    
+    // Call openclaw agent to spawn a sub-agent
+    const result = execSync(
+      `cat "${tmpFile}" | openclaw agent --session-id "${sessionId}" --timeout 55 2>/dev/null`,
+      {
+        encoding: 'utf8',
+        timeout: 60000,
+        maxBuffer: 1024 * 1024,
+        cwd: process.env.OPENCLAW_WORKSPACE || '/root/clawd',
+        env: { ...process.env, FORCE_COLOR: '0' }
+      }
+    );
+    
+    // Clean up temp file
+    try { fs.unlinkSync(tmpFile); } catch (e) {}
+    
+    // Filter out plugin registration messages and return clean response
+    const lines = result.split('\n').filter(line => 
+      !line.includes('[telegram-topic-tracker]') && 
+      !line.includes('Plugin registered') &&
+      line.trim()
+    );
+    
+    return lines.join('\n').trim() || '[No response]';
+    
+  } catch (err) {
+    console.error('[a2a] Sub-agent spawn failed:', err.message);
+    
+    // Fallback to direct API call
+    return await callAgentDirect(message, federationContext);
+  }
+}
+
+/**
+ * Fallback: Call LLM directly via OpenRouter
+ */
+async function callAgentDirect(message, federationContext) {
   if (!apiConfig) {
     return '[Agent configuration error: No API key available]';
   }
@@ -109,47 +174,26 @@ Disclosure level: ${federationContext.disclosure || 'minimal'}
 
 Respond naturally as yourself. Be collaborative but protect your owner's private information based on the disclosure level. Keep responses concise.`;
 
-  // Use OpenRouter or Anthropic based on config
-  const isOpenRouter = apiConfig.provider === 'openrouter';
-  const hostname = isOpenRouter ? 'openrouter.ai' : 'api.anthropic.com';
-  const apiPath = isOpenRouter ? '/api/v1/chat/completions' : '/v1/messages';
-  const model = isOpenRouter ? 'anthropic/claude-sonnet-4' : 'claude-sonnet-4-20250514';
-  
-  const body = isOpenRouter 
-    ? JSON.stringify({
-        model,
-        max_tokens: 1024,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: message }
-        ]
-      })
-    : JSON.stringify({
-        model,
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: message }]
-      });
+  const body = JSON.stringify({
+    model: 'anthropic/claude-sonnet-4',
+    max_tokens: 1024,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: message }
+    ]
+  });
 
-  const headers = isOpenRouter
-    ? {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'openrouter.ai',
+      path: '/api/v1/chat/completions',
+      method: 'POST',
+      headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiConfig.key}`,
         'HTTP-Referer': 'https://openclaw.ai',
         'X-Title': 'A2A Federation'
-      }
-    : {
-        'Content-Type': 'application/json',
-        'x-api-key': apiConfig.key,
-        'anthropic-version': '2023-06-01'
-      };
-
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname,
-      path: apiPath,
-      method: 'POST',
-      headers,
+      },
       timeout: 55000
     }, (res) => {
       let data = '';
@@ -157,44 +201,21 @@ Respond naturally as yourself. Be collaborative but protect your owner's private
       res.on('end', () => {
         try {
           const json = JSON.parse(data);
-          
-          // OpenRouter format
           if (json.choices && json.choices[0]?.message?.content) {
             resolve(json.choices[0].message.content);
-            return;
+          } else if (json.error) {
+            resolve(`[Error: ${json.error.message || 'Unknown'}]`);
+          } else {
+            resolve('[No response]');
           }
-          
-          // Anthropic format
-          if (json.content && json.content[0]?.text) {
-            resolve(json.content[0].text);
-            return;
-          }
-          
-          if (json.error) {
-            console.error('[a2a] API error:', json.error);
-            resolve(`[Agent error: ${json.error.message || JSON.stringify(json.error)}]`);
-            return;
-          }
-          
-          console.error('[a2a] Unexpected response:', JSON.stringify(json).slice(0, 200));
-          resolve('[No response generated]');
         } catch (e) {
-          console.error('[a2a] Parse error:', e.message, data.slice(0, 200));
-          resolve('[Agent response parsing error]');
+          resolve('[Parse error]');
         }
       });
     });
 
-    req.on('error', (e) => {
-      console.error('[a2a] Request error:', e.message);
-      resolve(`[Agent temporarily unavailable: ${e.message}]`);
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      resolve('[Agent response timeout]');
-    });
-
+    req.on('error', () => resolve('[Agent unavailable]'));
+    req.on('timeout', () => { req.destroy(); resolve('[Timeout]'); });
     req.write(body);
     req.end();
   });
