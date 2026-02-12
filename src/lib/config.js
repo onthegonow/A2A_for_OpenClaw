@@ -23,6 +23,8 @@ const DEFAULT_CONFIG = {
       name: 'Public',
       description: 'Basic networking - safe for anyone',
       capabilities: [],
+      topics: [],
+      goals: [],
       disclosure: 'minimal',
       examples: ['calendar availability', 'public social posts', 'general questions']
     },
@@ -30,6 +32,8 @@ const DEFAULT_CONFIG = {
       name: 'Friends',
       description: 'Most capabilities, no sensitive financial data',
       capabilities: [],
+      topics: [],
+      goals: [],
       disclosure: 'public',
       examples: ['email summaries', 'schedule meetings', 'project discussions']
     },
@@ -37,6 +41,8 @@ const DEFAULT_CONFIG = {
       name: 'Private',
       description: 'Full access - only for you',
       capabilities: [],
+      topics: [],
+      goals: [],
       disclosure: 'public',
       examples: ['financial data', 'personal notes', 'private conversations']
     },
@@ -44,6 +50,8 @@ const DEFAULT_CONFIG = {
       name: 'Custom',
       description: 'User-defined permissions',
       capabilities: [],
+      topics: [],
+      goals: [],
       disclosure: 'minimal',
       examples: []
     }

@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
  * A2A Calling - OpenClaw Integration Installer
- * 
- * This script:
- * 1. Installs the a2a skill to the user's OpenClaw skills directory
- * 2. Adds /a2a as a custom command in OpenClaw config
- * 3. Sets up the A2A server as a systemd service (optional)
- * 
+ *
+ * Supports automatic setup:
+ * - If OpenClaw gateway is detected, install a gateway HTTP proxy plugin
+ *   so dashboard is accessible at /a2a on gateway.
+ * - If gateway is not detected, dashboard runs on standalone A2A server.
+ *
  * Usage:
  *   npx a2acalling install
- *   npx a2acalling install --hostname myserver.com
- *   npx a2acalling install --port 3001
+ *   npx a2acalling setup
+ *   npx a2acalling install --hostname myserver.com --port 3001
  *   npx a2acalling uninstall
  */
 
@@ -21,7 +21,9 @@ const { execSync } = require('child_process');
 // Paths
 const OPENCLAW_CONFIG = process.env.OPENCLAW_CONFIG || path.join(process.env.HOME, '.openclaw', 'openclaw.json');
 const OPENCLAW_SKILLS = process.env.OPENCLAW_SKILLS || path.join(process.env.HOME, '.openclaw', 'skills');
+const OPENCLAW_EXTENSIONS = process.env.OPENCLAW_EXTENSIONS || path.join(process.env.HOME, '.openclaw', 'extensions');
 const SKILL_NAME = 'a2a';
+const DASHBOARD_PLUGIN_ID = 'a2a-dashboard-proxy';
 
 // Parse args
 const args = process.argv.slice(2);
@@ -43,6 +45,240 @@ const bold = (s) => `\x1b[1m${s}\x1b[0m`;
 function log(msg) { console.log(`${green('[a2a]')} ${msg}`); }
 function warn(msg) { console.log(`${yellow('[a2a]')} ${msg}`); }
 function error(msg) { console.error(`${red('[a2a]')} ${msg}`); }
+
+function ensureDir(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+function commandExists(cmd) {
+  try {
+    execSync(`command -v ${cmd}`, { stdio: 'ignore' });
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function loadOpenClawConfig() {
+  if (!fs.existsSync(OPENCLAW_CONFIG)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, 'utf8'));
+  } catch (err) {
+    warn(`OpenClaw config is unreadable: ${err.message}`);
+    return null;
+  }
+}
+
+function writeOpenClawConfig(config) {
+  const backupPath = `${OPENCLAW_CONFIG}.backup.${Date.now()}`;
+  fs.copyFileSync(OPENCLAW_CONFIG, backupPath);
+  fs.writeFileSync(OPENCLAW_CONFIG, JSON.stringify(config, null, 2));
+  log(`Backed up config to: ${backupPath}`);
+  log('Updated OpenClaw config');
+}
+
+function detectGateway(config) {
+  const hasBinary = commandExists('openclaw');
+  const hasGatewayBlock = Boolean(config?.gateway);
+  return hasBinary && hasGatewayBlock;
+}
+
+function resolveGatewayBaseUrl() {
+  if (flags['gateway-url']) {
+    return String(flags['gateway-url']).replace(/\/+$/, '');
+  }
+
+  try {
+    const output = execSync('openclaw dashboard --no-open', {
+      encoding: 'utf8',
+      timeout: 8000,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const match = output.match(/Dashboard URL:\s*(\S+)/);
+    if (match && match[1]) {
+      const parsed = new URL(match[1]);
+      return `${parsed.protocol}//${parsed.host}`;
+    }
+  } catch (err) {
+    // fall through to default
+  }
+
+  const fallbackPort = process.env.OPENCLAW_GATEWAY_PORT || '18789';
+  return `http://127.0.0.1:${fallbackPort}`;
+}
+
+const DASHBOARD_PLUGIN_MANIFEST = {
+  id: DASHBOARD_PLUGIN_ID,
+  name: 'A2A Dashboard Proxy',
+  description: 'Proxy A2A dashboard routes through OpenClaw gateway',
+  version: '1.0.0',
+  configSchema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      backendUrl: {
+        type: 'string',
+        default: 'http://127.0.0.1:3001'
+      }
+    }
+  }
+};
+
+const DASHBOARD_PLUGIN_TS = `import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import http from "node:http";
+import https from "node:https";
+
+const PLUGIN_ID = "a2a-dashboard-proxy";
+const UI_PREFIX = "/a2a";
+const API_PREFIX = "/api/a2a/dashboard";
+
+function sendJson(res: ServerResponse, status: number, body: unknown) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.end(JSON.stringify(body));
+}
+
+function sendHtml(res: ServerResponse, status: number, html: string) {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.end(html);
+}
+
+function resolveBackendUrl(api: OpenClawPluginApi): URL {
+  const fallback = process.env.A2A_DASHBOARD_BACKEND_URL || "http://127.0.0.1:3001";
+  try {
+    const cfg = api.runtime.config.loadConfig() as Record<string, unknown>;
+    const plugins = (cfg.plugins || {}) as Record<string, unknown>;
+    const entries = (plugins.entries || {}) as Record<string, unknown>;
+    const pluginEntry = (entries[PLUGIN_ID] || {}) as Record<string, unknown>;
+    const candidate = typeof pluginEntry.backendUrl === "string" && pluginEntry.backendUrl
+      ? pluginEntry.backendUrl
+      : fallback;
+    return new URL(candidate);
+  } catch {
+    return new URL(fallback);
+  }
+}
+
+function rewriteUiPath(pathname: string): string {
+  if (pathname === UI_PREFIX || pathname === UI_PREFIX + "/") {
+    return "/dashboard/";
+  }
+  if (pathname.startsWith(UI_PREFIX + "/")) {
+    return "/dashboard/" + pathname.slice((UI_PREFIX + "/").length);
+  }
+  return pathname;
+}
+
+const plugin = {
+  id: PLUGIN_ID,
+  name: "A2A Dashboard Proxy",
+  description: "Proxy A2A dashboard routes through OpenClaw gateway",
+  configSchema: {
+    type: "object" as const,
+    additionalProperties: false,
+    properties: {
+      backendUrl: {
+        type: "string" as const,
+        default: "http://127.0.0.1:3001"
+      }
+    }
+  },
+  register(api: OpenClawPluginApi) {
+    api.registerHttpHandler(async (req: IncomingMessage, res: ServerResponse) => {
+      const incoming = new URL(req.url ?? "/", \`http://\${req.headers.host ?? "localhost"}\`);
+      const isUi = incoming.pathname === UI_PREFIX || incoming.pathname.startsWith(UI_PREFIX + "/");
+      const isApi = incoming.pathname === API_PREFIX || incoming.pathname.startsWith(API_PREFIX + "/");
+      if (!isUi && !isApi) {
+        return false;
+      }
+
+      if (incoming.pathname === UI_PREFIX) {
+        res.statusCode = 302;
+        res.setHeader("Location", UI_PREFIX + "/");
+        res.end();
+        return true;
+      }
+
+      const backendBase = resolveBackendUrl(api);
+      const rewrittenPath = isUi ? rewriteUiPath(incoming.pathname) : incoming.pathname;
+      const target = new URL(rewrittenPath + (incoming.search || ""), backendBase);
+      const client = target.protocol === "https:" ? https : http;
+
+      const headers: Record<string, string> = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (!value || key.toLowerCase() === "host") continue;
+        headers[key] = Array.isArray(value) ? value.join(", ") : String(value);
+      }
+      headers["x-forwarded-by"] = "a2a-dashboard-proxy";
+
+      const proxyReq = client.request({
+        protocol: target.protocol,
+        hostname: target.hostname,
+        port: target.port || (target.protocol === "https:" ? 443 : 80),
+        path: target.pathname + target.search,
+        method: req.method,
+        headers
+      }, (proxyRes) => {
+        res.statusCode = proxyRes.statusCode || 502;
+        Object.entries(proxyRes.headers).forEach(([key, value]) => {
+          if (value !== undefined) {
+            res.setHeader(key, value as string | string[]);
+          }
+        });
+        proxyRes.pipe(res);
+      });
+
+      proxyReq.on("error", (err) => {
+        const backend = backendBase.toString();
+        if (isApi) {
+          sendJson(res, 502, {
+            success: false,
+            error: "dashboard_backend_unreachable",
+            message: \`Could not reach A2A server at \${backend}: \${err.message}\`
+          });
+          return;
+        }
+
+        sendHtml(res, 502, \`<!doctype html>
+<html><head><meta charset="utf-8"><title>A2A Dashboard</title></head>
+<body style="font-family: sans-serif; padding: 2rem;">
+  <h1>A2A Dashboard Unavailable</h1>
+  <p>The gateway proxy is active, but the A2A backend is not reachable.</p>
+  <p>Expected backend: <code>\${backend}</code></p>
+  <p>Start the backend with: <code>a2a server --port 3001</code></p>
+</body></html>\`);
+      });
+
+      req.pipe(proxyReq);
+      return true;
+    });
+  }
+};
+
+export default plugin;
+`;
+
+function installDashboardProxyPlugin(backendUrl) {
+  ensureDir(OPENCLAW_EXTENSIONS);
+  const pluginDir = path.join(OPENCLAW_EXTENSIONS, DASHBOARD_PLUGIN_ID);
+  ensureDir(pluginDir);
+
+  fs.writeFileSync(
+    path.join(pluginDir, 'openclaw.plugin.json'),
+    JSON.stringify(DASHBOARD_PLUGIN_MANIFEST, null, 2)
+  );
+  fs.writeFileSync(path.join(pluginDir, 'index.ts'), DASHBOARD_PLUGIN_TS);
+
+  log(`Installed gateway dashboard plugin: ${pluginDir}`);
+  log(`Dashboard proxy backend: ${backendUrl}`);
+  return pluginDir;
+}
 
 // Skill content
 const SKILL_MD = `---
@@ -144,83 +380,91 @@ a2a server --port 3001
 function install() {
   log('Installing A2A Calling for OpenClaw...\n');
 
+  const hostname = flags.hostname || process.env.HOSTNAME || 'localhost';
+  const port = String(flags.port || process.env.A2A_PORT || '3001');
+  const backendUrl = flags['dashboard-backend'] || `http://127.0.0.1:${port}`;
+
   // 1. Create skills directory if needed
-  if (!fs.existsSync(OPENCLAW_SKILLS)) {
-    fs.mkdirSync(OPENCLAW_SKILLS, { recursive: true });
-    log(`Created skills directory: ${OPENCLAW_SKILLS}`);
-  }
+  ensureDir(OPENCLAW_SKILLS);
 
   // 2. Install skill
   const skillDir = path.join(OPENCLAW_SKILLS, SKILL_NAME);
-  if (!fs.existsSync(skillDir)) {
-    fs.mkdirSync(skillDir, { recursive: true });
-  }
+  ensureDir(skillDir);
   fs.writeFileSync(path.join(skillDir, 'SKILL.md'), SKILL_MD);
   log(`Installed skill to: ${skillDir}`);
 
-  // 3. Update OpenClaw config
-  if (fs.existsSync(OPENCLAW_CONFIG)) {
-    try {
-      const config = JSON.parse(fs.readFileSync(OPENCLAW_CONFIG, 'utf8'));
-      
-      // Add custom command for each channel that supports it
-      const channels = ['telegram', 'discord', 'slack'];
-      let updated = false;
-      
-      for (const channel of channels) {
-        if (config.channels?.[channel]?.enabled) {
-          if (!config.channels[channel].customCommands) {
-            config.channels[channel].customCommands = [];
-          }
-          
-          const existing = config.channels[channel].customCommands.find(c => c.command === 'a2a');
-          if (!existing) {
-            config.channels[channel].customCommands.push({
-              command: 'a2a',
-              description: 'Agent-to-Agent: create invitations, manage connections'
-            });
-            updated = true;
-            log(`Added /a2a command to ${channel} config`);
-          } else {
-            log(`/a2a command already exists in ${channel} config`);
-          }
+  // 3. Update OpenClaw config + gateway plugin setup (if available)
+  let config = loadOpenClawConfig();
+  let configUpdated = false;
+  let gatewayDetected = false;
+  let dashboardMode = 'standalone';
+  let dashboardUrl = `http://${hostname}:${port}/dashboard`;
+
+  if (config) {
+    // Add custom command for each enabled channel
+    const channels = ['telegram', 'discord', 'slack'];
+    for (const channel of channels) {
+      if (config.channels?.[channel]?.enabled) {
+        if (!config.channels[channel].customCommands) {
+          config.channels[channel].customCommands = [];
+        }
+        const existing = config.channels[channel].customCommands.find(c => c.command === 'a2a');
+        if (!existing) {
+          config.channels[channel].customCommands.push({
+            command: 'a2a',
+            description: 'Agent-to-Agent: create invitations, manage connections'
+          });
+          configUpdated = true;
+          log(`Added /a2a command to ${channel} config`);
+        } else {
+          log(`/a2a command already exists in ${channel} config`);
         }
       }
-      
-      if (updated) {
-        // Backup original
-        const backupPath = `${OPENCLAW_CONFIG}.backup.${Date.now()}`;
-        fs.copyFileSync(OPENCLAW_CONFIG, backupPath);
-        log(`Backed up config to: ${backupPath}`);
-        
-        // Write updated config
-        fs.writeFileSync(OPENCLAW_CONFIG, JSON.stringify(config, null, 2));
-        log('Updated OpenClaw config');
-        warn('Restart OpenClaw gateway to apply changes: openclaw gateway restart');
-      }
-    } catch (e) {
-      warn(`Could not update OpenClaw config: ${e.message}`);
-      warn('You may need to manually add the /a2a custom command');
+    }
+
+    gatewayDetected = detectGateway(config);
+    if (gatewayDetected) {
+      dashboardMode = 'gateway';
+      installDashboardProxyPlugin(backendUrl);
+      const gatewayBaseUrl = resolveGatewayBaseUrl();
+      dashboardUrl = `${gatewayBaseUrl.replace(/\/+$/, '')}/a2a`;
+
+      config.plugins = config.plugins || {};
+      config.plugins.entries = config.plugins.entries || {};
+      const existingEntry = config.plugins.entries[DASHBOARD_PLUGIN_ID] || {};
+      config.plugins.entries[DASHBOARD_PLUGIN_ID] = {
+        ...existingEntry,
+        enabled: true,
+        backendUrl
+      };
+      configUpdated = true;
+      log(`Configured gateway plugin entry: ${DASHBOARD_PLUGIN_ID}`);
+    }
+
+    if (configUpdated) {
+      writeOpenClawConfig(config);
+      warn('Restart OpenClaw gateway to apply changes: openclaw gateway restart');
     }
   } else {
     warn(`OpenClaw config not found at: ${OPENCLAW_CONFIG}`);
-    warn('You may need to manually add the /a2a custom command');
+    warn('Skipping OpenClaw command/plugin config updates');
   }
 
-  // 4. Show server setup instructions
-  const hostname = flags.hostname || process.env.HOSTNAME || 'localhost';
-  const port = flags.port || '3001';
-  
   console.log(`
 ${bold('━━━ Server Setup ━━━')}
 
-To receive incoming calls, run the A2A server:
+To receive incoming calls and host A2A APIs:
 
-  ${green(`A2A_HOSTNAME="${hostname}:${port}" a2a server`)}
+  ${green(`A2A_HOSTNAME="${hostname}:${port}" a2a server --port ${port}`)}
 
-Or create a systemd service:
+${bold('━━━ Dashboard Setup ━━━')}
 
-  ${green('sudo a2a service install')}
+Mode: ${dashboardMode === 'gateway' ? green('gateway') : yellow('standalone')}
+Dashboard URL: ${green(dashboardUrl)}
+
+${dashboardMode === 'gateway'
+  ? `Gateway path /a2a is now proxied to ${backendUrl}.`
+  : 'No gateway detected. Dashboard is served directly from the A2A server.'}
 
 ${bold('━━━ Usage ━━━')}
 
@@ -242,16 +486,20 @@ ${green('✅ A2A Calling installed successfully!')}
 function uninstall() {
   log('Uninstalling A2A Calling...\n');
 
-  // Remove skill
   const skillDir = path.join(OPENCLAW_SKILLS, SKILL_NAME);
   if (fs.existsSync(skillDir)) {
     fs.rmSync(skillDir, { recursive: true });
     log(`Removed skill from: ${skillDir}`);
   }
 
-  // Note about config
-  warn('Custom command in OpenClaw config was not removed.');
-  warn('You can manually remove it if desired.');
+  const pluginDir = path.join(OPENCLAW_EXTENSIONS, DASHBOARD_PLUGIN_ID);
+  if (fs.existsSync(pluginDir)) {
+    fs.rmSync(pluginDir, { recursive: true });
+    log(`Removed dashboard plugin: ${pluginDir}`);
+  }
+
+  warn('Custom command and plugin entries in OpenClaw config were not removed.');
+  warn('You can remove them manually if desired.');
 
   log('✅ Uninstall complete');
 }
@@ -262,22 +510,27 @@ ${bold('A2A Calling - OpenClaw Integration')}
 
 Usage:
   npx a2acalling install [options]    Install A2A for OpenClaw
-  npx a2acalling uninstall            Remove A2A skill
+  npx a2acalling setup [options]      Alias for install (auto gateway/standalone)
+  npx a2acalling uninstall            Remove A2A skill + dashboard plugin
   npx a2acalling server               Start A2A server
 
 Install Options:
-  --hostname <host>    Hostname for invite URLs (default: system hostname)
-  --port <port>        Server port (default: 3001)
+  --hostname <host>          Hostname for invite URLs (default: system hostname)
+  --port <port>              A2A server port (default: 3001)
+  --gateway-url <url>        Force gateway base URL for printed dashboard link
+  --dashboard-backend <url>  Backend URL used by gateway dashboard proxy
 
 Examples:
-  npx a2acalling install --hostname myserver.com --port 443
-  npx a2acalling server --port 3001
+  npx a2acalling install --hostname myserver.com --port 3001
+  npx a2acalling setup --dashboard-backend http://127.0.0.1:3001
+  npx a2acalling uninstall
 `);
 }
 
 // Main
 switch (command) {
   case 'install':
+  case 'setup':
     install();
     break;
   case 'uninstall':

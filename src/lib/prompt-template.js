@@ -5,6 +5,19 @@
  * and call metadata for multi-phase exploratory conversations.
  */
 
+const COLLAB_STATE_TAG = 'collab_state';
+const COLLAB_STATE_REGEX = new RegExp(
+  `<${COLLAB_STATE_TAG}>\\s*([\\s\\S]*?)\\s*<\\/${COLLAB_STATE_TAG}>`,
+  'i'
+);
+
+function formatList(items, fallback = '  (none specified)') {
+  if (!items || items.length === 0) {
+    return fallback;
+  }
+  return items.map(item => `  - ${item}`).join('\n');
+}
+
 /**
  * Build the full connection prompt for an A2A call.
  *
@@ -16,6 +29,7 @@
  * @param {string} options.roleContext - 'You initiated this call.' or 'They called you.'
  * @param {string} options.accessTier - 'public', 'friends', 'family'
  * @param {Object} options.tierTopics - from formatTopicsForPrompt()
+ * @param {string[]} options.tierGoals - strategic goals for this access tier
  * @param {string} options.otherAgentGreeting - the message from the other agent
  * @param {string} options.personalityNotes
  * @returns {string} Full prompt string
@@ -29,6 +43,7 @@ function buildConnectionPrompt(options) {
     roleContext,
     accessTier,
     tierTopics,
+    tierGoals,
     otherAgentGreeting,
     personalityNotes
   } = options;
@@ -52,6 +67,12 @@ ${leadWithTopics}
 
 Other areas of active interest:
 ${discussFreelyTopics}
+
+== STRATEGIC GOALS FOR THIS CALL ==
+
+${tierGoals && tierGoals.length > 0
+    ? `At the ${accessTier} access level, ${ownerName}'s objectives are:\n${formatList(tierGoals)}\n\nPursue these goals naturally during conversation. Surface opportunities that align with them.`
+    : `No specific goals configured for this tier. Focus on general discovery and relationship building.`}
 
 == WHAT THEY SHARED WITH YOU ==
 
@@ -120,4 +141,216 @@ ${personalityNotes || "Default: Direct, curious, slightly irreverent. You have o
 When unsure about your owner's position, say so honestly: "I don't have ${ownerName}'s take on that — but here's what I think based on their work..."`;
 }
 
-module.exports = { buildConnectionPrompt };
+/**
+ * Build an adaptive prompt that lets the sub-agent change pace and depth
+ * based on evolving overlap signals.
+ *
+ * @param {Object} options
+ * @param {string} options.agentName
+ * @param {string} options.ownerName
+ * @param {string} options.otherAgentName
+ * @param {string} options.otherOwnerName
+ * @param {string} options.roleContext
+ * @param {string} options.accessTier
+ * @param {Object} options.tierTopics - from formatTopicsForPrompt()
+ * @param {string[]} options.tierGoals - strategic goals for this access tier
+ * @param {string} options.otherAgentGreeting
+ * @param {string} options.personalityNotes
+ * @param {Object} options.conversationState
+ * @returns {string}
+ */
+function buildAdaptiveConnectionPrompt(options) {
+  const {
+    agentName,
+    ownerName,
+    otherAgentName,
+    otherOwnerName,
+    roleContext,
+    accessTier,
+    tierTopics,
+    tierGoals,
+    otherAgentGreeting,
+    personalityNotes,
+    conversationState = {}
+  } = options;
+
+  const {
+    leadWithTopics = '  (none specified)',
+    discussFreelyTopics = '  (none specified)',
+    deflectTopics = '  (none specified)',
+    neverDisclose = '  (none specified)'
+  } = tierTopics || {};
+
+  const phase = conversationState.phase || 'handshake';
+  const turnCount = Number.isFinite(conversationState.turnCount)
+    ? conversationState.turnCount
+    : 0;
+  const overlapScore = Number.isFinite(conversationState.overlapScore)
+    ? conversationState.overlapScore
+    : 0;
+  const activeThreads = formatList(conversationState.activeThreads || [], '  (none yet)');
+  const candidateCollaborations = formatList(
+    conversationState.candidateCollaborations || [],
+    '  (none yet)'
+  );
+  const openQuestions = formatList(conversationState.openQuestions || [], '  (none yet)');
+
+  return `You are ${agentName}, the personal AI agent for ${ownerName}.
+You are on a live call with ${otherAgentName}, who represents ${otherOwnerName}. ${roleContext}
+
+This call runs in ADAPTIVE collaboration mode. Keep the conversation natural and strategic.
+
+== CURRENT COLLABORATION STATE ==
+
+- Conversation phase: ${phase}
+- Completed turns: ${turnCount}
+- Estimated overlap score (0-1): ${overlapScore}
+- Active threads:
+${activeThreads}
+- Candidate collaborations:
+${candidateCollaborations}
+- Open questions:
+${openQuestions}
+
+== WHAT YOU BRING TO THE TABLE ==
+
+${ownerName} is currently focused on:
+${leadWithTopics}
+
+Other areas of active interest:
+${discussFreelyTopics}
+
+== STRATEGIC GOALS FOR THIS CALL ==
+
+${tierGoals && tierGoals.length > 0
+    ? `At the ${accessTier} access level, ${ownerName}'s objectives are:\n${formatList(tierGoals)}\n\nPursue these goals naturally during conversation. Surface opportunities that align with them.`
+    : `No specific goals configured for this tier. Focus on general discovery and relationship building.`}
+
+== WHAT THEY SHARED WITH YOU ==
+
+${otherAgentName} introduced the following about ${otherOwnerName}:
+${otherAgentGreeting}
+
+== ADAPTIVE COLLABORATION GUIDELINES ==
+
+Primary objective:
+- Find concrete overlap between owner interests and move from discovery to practical collaboration options.
+
+Behavior:
+- Ask high-value questions, but do not force one every turn if synthesis is stronger.
+- Increase depth when overlap is strong: constraints, timelines, ownership, resources, and execution risks.
+- Broaden exploration when overlap is weak: adjacent domains, overlooked capabilities, and unmet needs.
+- Pressure-test claims respectfully. Curiosity plus rigor beats agreeable small talk.
+- Keep momentum. If something promising appears, stay with it long enough to get actionable detail.
+
+Adaptive phase cues (not hard locks):
+- handshake: establish context and one meaningful direction.
+- explore: map goals, capabilities, and constraints.
+- deep_dive: work through specific collaboration threads in detail.
+- synthesize: convert insights into concrete next steps for owners.
+- close: summarize value, unresolved items, and clear follow-up.
+
+Wrap-up guidance:
+- End only when value has been surfaced or the thread is clearly exhausted.
+- Before close, provide a concise synthesis and at least one actionable follow-up.
+
+== INFORMATION BOUNDARIES ==
+
+Access level for this call: ${accessTier}
+
+LEAD WITH (proactively share):
+${leadWithTopics}
+
+DISCUSS FREELY (share when relevant):
+${discussFreelyTopics}
+
+DEFLECT (acknowledge but redirect):
+${deflectTopics}
+
+When deflecting, do not mention policy mechanics. Redirect naturally and suggest direct owner follow-up when needed.
+
+NEVER disclose:
+${neverDisclose}
+
+== PERSONALITY ==
+
+${personalityNotes || "Default: Direct, curious, slightly irreverent. You have opinions and share them. You're not a concierge - you're a sparring partner who represents someone."}
+
+When unsure about your owner's position, say so honestly: "I don't have ${ownerName}'s take on that - but here's what I think based on their work..."
+
+== METADATA (MUST APPEND) ==
+
+After your visible response, append EXACTLY one metadata block:
+<collab_state>{"phase":"explore","turnCount":2,"overlapScore":0.42,"activeThreads":["thread"],"candidateCollaborations":["idea"],"openQuestions":["question"],"closeSignal":false}</collab_state>
+
+Metadata rules:
+- Must be valid JSON object (double quotes only).
+- Keep arrays short and specific (max 4 items each).
+- overlapScore must be a number from 0 to 1.
+- phase must be one of: handshake, explore, deep_dive, synthesize, close.
+- Metadata must contain no secrets beyond the visible response.`;
+}
+
+/**
+ * Extract collaboration metadata from a model response.
+ *
+ * @param {string} responseText
+ * @returns {{ cleanText: string, statePatch: object|null, hasState: boolean, parseError: string|null }}
+ */
+function extractCollaborationState(responseText) {
+  if (typeof responseText !== 'string') {
+    return {
+      cleanText: '',
+      statePatch: null,
+      hasState: false,
+      parseError: 'non_string_response'
+    };
+  }
+
+  const match = responseText.match(COLLAB_STATE_REGEX);
+  if (!match) {
+    return {
+      cleanText: responseText.trim(),
+      statePatch: null,
+      hasState: false,
+      parseError: null
+    };
+  }
+
+  const cleanText = responseText.replace(COLLAB_STATE_REGEX, '').trim();
+  const stateJson = (match[1] || '').trim();
+  if (!stateJson) {
+    return {
+      cleanText,
+      statePatch: null,
+      hasState: false,
+      parseError: 'empty_state_block'
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(stateJson);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('state block must be a JSON object');
+    }
+    return {
+      cleanText,
+      statePatch: parsed,
+      hasState: true,
+      parseError: null
+    };
+  } catch (err) {
+    return {
+      cleanText,
+      statePatch: null,
+      hasState: false,
+      parseError: err.message
+    };
+  }
+}
+
+module.exports = {
+  buildConnectionPrompt,
+  buildAdaptiveConnectionPrompt,
+  extractCollaborationState
+};

@@ -9,8 +9,11 @@ const path = require('path');
 
 /**
  * Load owner context from OpenClaw workspace files
+ * @param {string} workspaceDir - Path to workspace
+ * @param {Object} options
+ * @param {string[]} options.tierGoals - Goals from config tier (takes priority over USER.md)
  */
-function loadOwnerContext(workspaceDir = process.cwd()) {
+function loadOwnerContext(workspaceDir = process.cwd(), options = {}) {
   const context = {
     goals: [],
     interests: [],
@@ -19,18 +22,25 @@ function loadOwnerContext(workspaceDir = process.cwd()) {
     memory: null
   };
 
+  // Tier goals from config take priority
+  if (options.tierGoals && options.tierGoals.length > 0) {
+    context.goals = [...options.tierGoals];
+  }
+
   // Load USER.md
   const userPath = path.join(workspaceDir, 'USER.md');
   if (fs.existsSync(userPath)) {
     context.user = fs.readFileSync(userPath, 'utf8');
-    // Extract goals from USER.md
-    const goalsMatch = context.user.match(/##\s*(?:Goals|Current|Seeking)[^\n]*\n([\s\S]*?)(?=\n##|$)/i);
-    if (goalsMatch) {
-      context.goals = goalsMatch[1]
-        .split('\n')
-        .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
-        .map(l => l.replace(/^[\s\-\*]+/, '').trim())
-        .filter(Boolean);
+    // Extract goals from USER.md (fallback if no tier goals from config)
+    if (context.goals.length === 0) {
+      const goalsMatch = context.user.match(/##\s*(?:Goals|Current|Seeking)[^\n]*\n([\s\S]*?)(?=\n##|$)/i);
+      if (goalsMatch) {
+        context.goals = goalsMatch[1]
+          .split('\n')
+          .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
+          .map(l => l.replace(/^[\s\-\*]+/, '').trim())
+          .filter(Boolean);
+      }
     }
     // Extract interests
     const interestsMatch = context.user.match(/##\s*(?:Interests|Projects)[^\n]*\n([\s\S]*?)(?=\n##|$)/i);

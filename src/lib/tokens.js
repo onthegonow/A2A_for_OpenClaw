@@ -96,6 +96,7 @@ class TokenStore {
       maxCalls = 100,  // Default limit, not unlimited
       // Snapshot of actual capabilities at creation time
       allowedTopics = null,  // Array of topic strings, e.g. ['chat', 'calendar.read']
+      allowedGoals = null,   // Array of goal strings, e.g. ['grow-network', 'find-collaborators']
       tierSettings = null    // Object with tier-specific settings
     } = options;
 
@@ -128,7 +129,17 @@ class TokenStore {
       'tools-write': ['chat', 'calendar', 'email', 'search', 'tools'],
       'family': configTiers.family?.topics || ['chat', 'calendar', 'email', 'search', 'tools']
     };
-    
+
+    // Default goals based on permissions tier (snapshot at creation)
+    const defaultGoals = {
+      'chat-only': [],
+      'public': configTiers.public?.goals || [],
+      'tools-read': [],
+      'friends': configTiers.friends?.goals || [],
+      'tools-write': [],
+      'family': configTiers.family?.goals || []
+    };
+
     // Normalize tier name
     const tierAliases = {
       'public': 'chat-only',
@@ -146,6 +157,7 @@ class TokenStore {
       tier: normalizedTier,  // Normalized tier (chat-only, tools-read, tools-write)
       tier_label: permissions,  // Original label (public, friends, family)
       allowed_topics: allowedTopics || defaultTopics[permissions] || ['chat'],
+      allowed_goals: allowedGoals || defaultGoals[permissions] || [],
       tier_settings: tierSettings || {},  // Snapshot of settings at creation
       disclosure,
       notify,
@@ -214,6 +226,7 @@ class TokenStore {
       name: record.name,
       tier: record.tier || record.permissions,  // backward compat
       allowed_topics: record.allowed_topics || ['chat'],
+      allowed_goals: record.allowed_goals || [],
       tier_settings: record.tier_settings || {},
       disclosure: record.disclosure,
       notify: record.notify,

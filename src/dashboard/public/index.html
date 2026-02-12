@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A2A Dashboard</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header>
+    <h1>A2A Dashboard</h1>
+    <p>Contacts, calls, settings, and invites.</p>
+  </header>
+
+  <nav>
+    <button class="tab is-active" data-tab="contacts">Contacts</button>
+    <button class="tab" data-tab="calls">Calls</button>
+    <button class="tab" data-tab="settings">Settings</button>
+    <button class="tab" data-tab="invites">Invites</button>
+  </nav>
+
+  <main>
+    <section id="tab-contacts" class="panel is-active">
+      <div class="row">
+        <h2>Contacts</h2>
+        <button id="refresh-contacts">Refresh</button>
+      </div>
+      <table id="contacts-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Owner</th>
+            <th>Status</th>
+            <th>Calls</th>
+            <th>Last Summary</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="contact-calls"></div>
+    </section>
+
+    <section id="tab-calls" class="panel">
+      <div class="row">
+        <h2>Calls</h2>
+        <button id="refresh-calls">Refresh</button>
+      </div>
+      <table id="calls-table">
+        <thead>
+          <tr>
+            <th>Conversation</th>
+            <th>Contact</th>
+            <th>Status</th>
+            <th>Messages</th>
+            <th>Updated</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="call-detail"></div>
+    </section>
+
+    <section id="tab-settings" class="panel">
+      <h2>Tier Settings</h2>
+      <div class="row">
+        <label for="tier-select">Tier</label>
+        <select id="tier-select"></select>
+        <button id="new-tier-btn">New Tier</button>
+      </div>
+
+      <form id="tier-form">
+        <label>Tier ID <input id="tier-id" type="text" readonly></label>
+        <label>Name <input id="tier-name" type="text"></label>
+        <label>Description <input id="tier-description" type="text"></label>
+        <label>Disclosure <input id="tier-disclosure" type="text" placeholder="minimal"></label>
+        <label>Topics (one per line)<textarea id="tier-topics" rows="6"></textarea></label>
+        <label>Goals (one per line)<textarea id="tier-goals" rows="6"></textarea></label>
+        <div class="row">
+          <button type="submit">Save Tier</button>
+        </div>
+      </form>
+
+      <div class="row">
+        <label for="copy-from-tier">Copy from</label>
+        <select id="copy-from-tier"></select>
+        <button id="copy-tier-btn">Copy Tier</button>
+      </div>
+
+      <h3>Defaults</h3>
+      <form id="defaults-form">
+        <label>Expiration <input id="defaults-expiration" type="text" placeholder="7d"></label>
+        <label>Max Calls <input id="defaults-max-calls" type="number" min="1"></label>
+        <div class="row">
+          <button type="submit">Save Defaults</button>
+        </div>
+      </form>
+
+      <h3>New Tier</h3>
+      <form id="new-tier-form">
+        <label>Tier ID <input id="new-tier-id" type="text" placeholder="partners"></label>
+        <label>Name <input id="new-tier-name" type="text" placeholder="Partners"></label>
+        <label>Copy from
+          <select id="new-tier-copy-from">
+            <option value="">None</option>
+          </select>
+        </label>
+        <div class="row">
+          <button type="submit">Create Tier</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="tab-invites" class="panel">
+      <h2>Generate Invite</h2>
+      <form id="invite-form">
+        <label>Name <input id="invite-name" type="text" required></label>
+        <label>Owner <input id="invite-owner" type="text"></label>
+        <label>Tier <select id="invite-tier"></select></label>
+        <label>Expires <input id="invite-expires" type="text" value="7d"></label>
+        <label>Max Calls <input id="invite-max-calls" type="number" min="1" value="100"></label>
+        <label>Notify <input id="invite-notify" type="text" value="all"></label>
+        <div class="row">
+          <button type="submit">Create Invite</button>
+        </div>
+      </form>
+
+      <label>Invite Message<textarea id="invite-message" rows="8" readonly></textarea></label>
+
+      <div class="row">
+        <h3>Existing Invites</h3>
+        <button id="refresh-invites">Refresh</button>
+      </div>
+      <table id="invites-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Tier</th>
+            <th>Calls</th>
+            <th>Expires</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <div id="notice"></div>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

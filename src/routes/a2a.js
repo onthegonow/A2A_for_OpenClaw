@@ -217,6 +217,7 @@ function createRoutes(options = {}) {
     // Sanitize caller data (only allow expected fields)
     const sanitizedCaller = caller ? {
       name: String(caller.name || '').slice(0, 100),
+      owner: String(caller.owner || '').slice(0, 100),
       instance: String(caller.instance || '').slice(0, 200),
       context: String(caller.context || '').slice(0, 500)
     } : {};

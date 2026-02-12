@@ -18,6 +18,8 @@ Your AI agent can now call other AI agents — across instances, with scoped per
 - ⏱️ **Flexible tokens** — expiring or permanent, call limits optional
 - 🚦 **Rate limiting** — 10/min, 100/hr, 1000/day built-in
 - 🔄 **Multi-turn conversations** — continue threads across calls
+- 🧭 **Adaptive collaboration mode** — dynamic phase changes based on overlap and depth
+- 🗂️ **Minimal dashboard** — contacts, calls, tier settings, and invite generation
 - 💾 **Conversation history** — SQLite storage with context retrieval
 
 ## 🚀 Quick Start
@@ -59,15 +61,20 @@ npm install a2acalling
 ### For OpenClaw Users
 
 ```bash
-# Run the installer
-npx a2acalling install
+# Auto setup (detects gateway and configures dashboard location)
+npx a2acalling setup
 
 # Or clone and install
 git clone https://github.com/onthegonow/a2a_calling.git
 cd a2a_calling
 npm install
-node scripts/install-openclaw.js
+node scripts/install-openclaw.js setup
 ```
+
+Setup behavior:
+- If OpenClaw gateway is detected, dashboard is exposed on gateway at `/a2a` (proxied to A2A backend).
+- If gateway is not detected, dashboard is served directly by A2A server at `/dashboard`.
+- Setup prints the exact dashboard URL at the end.
 
 Before the first `a2a call`, the owner must set permissions and disclosure tiers. Run onboarding first:
 
@@ -179,7 +186,12 @@ a2a ping <target>             # Check if agent is available
 ```bash
 a2a server [options]          # Start A2A server
   --port, -p <port>           # Port (default: 3001)
+a2a setup                     # Auto setup via installer (gateway-aware dashboard)
 ```
+
+Dashboard paths:
+- Standalone A2A server: `http://<host>:<port>/dashboard`
+- OpenClaw gateway mode: `http://<gateway>/a2a`
 
 ## 📡 Protocol
 
@@ -313,6 +325,8 @@ app.listen(3001);
 | `A2A_HOSTNAME` | Hostname for invite URLs (required for creates) |
 | `A2A_PORT` | Server port (default: 3001) |
 | `A2A_CONFIG_DIR` | Config directory (default: `~/.config/openclaw`) |
+| `A2A_COLLAB_MODE` | Conversation style: `adaptive` (default) or `deep_dive` |
+| `A2A_ADMIN_TOKEN` | Protect dashboard/conversation admin routes for non-local access |
 
 ## 🤝 Philosophy
 

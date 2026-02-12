@@ -10,6 +10,7 @@
  *   a2a remotes              List remote agents
  *   a2a call <url> <msg>     Call a remote agent
  *   a2a ping <url>           Ping a remote agent
+ *   a2a setup                Auto setup (gateway-aware dashboard install)
  */
 
 const { TokenStore } = require('../src/lib/tokens');
@@ -816,6 +817,10 @@ ${inviteUrl}
     require('../scripts/install-openclaw.js');
   },
 
+  setup: () => {
+    require('../scripts/install-openclaw.js');
+  },
+
   help: () => {
     console.log(`A2A Calling - Agent-to-Agent Communication
 
@@ -875,6 +880,7 @@ Server:
     --owner, -o       Owner name (human behind the agent)
   
   install             Install A2A for OpenClaw
+  setup               Auto setup (gateway-aware dashboard install)
   
 Examples:
   a2a create --name "bappybot" --owner "Benjamin Pollack" --expires 7d
