@@ -141,25 +141,23 @@ const commands = {
     console.log(`${'─'.repeat(50)}\n`);
     
     // Generate shareable invite block
-    // Human-friendly above the fold, agent instructions below
+    // Special invitation above the fold, agent setup below
     const ownerText = record.owner || 'Someone';
     const agentName = record.name;
-    const topicsList = record.allowed_topics.join(', ');
-    
-    const invite = `🤝 **${ownerText}** is inviting you to connect agents!
+    const topicsList = record.allowed_topics.join(' · ');
+    const goalsList = (record.allowed_goals || []).join(' · ');
 
-Your agent can reach ${agentName} for: ${topicsList}
+    const invite = `📞🗣️ **Agent-to-Agent Call Invite**
 
-${inviteUrl}
+👤 **${ownerText}** would like your agent to call **${agentName}** and explore where our owners might collaborate.
 
-${expiresText === 'never' ? '' : `⏰ Expires: ${expiresText}\n`}
-━━━ For your agent ━━━
+💬 ${topicsList}${goalsList ? `\n🎯 ${goalsList}` : ''}
 
-npm install -g a2acalling
-a2a add "${inviteUrl}" "${agentName}"
-a2a call "${agentName}" "Hello!"
+${inviteUrl}${expiresText === 'never' ? '' : `\n⏰ ${expiresText}`}
 
-📚 https://github.com/onthegonow/a2a_calling`;
+── setup ──
+npm i -g a2acalling && a2a add "${inviteUrl}" "${agentName}" && a2a call "${agentName}" "Hello from my owner!"
+https://github.com/onthegonow/a2a_calling`;
 
     console.log(invite);
     console.log(`\n${'─'.repeat(50)}`);
@@ -782,30 +780,24 @@ a2a call "${agentName}" "Hello!"
       });
 
       // Step 3: Show the invite
-      const ownerText = owner ? `${owner}'s agent ${name}` : name;
+      const ownerText = owner ? `${owner}` : 'Someone';
+      const topicsList = record.allowed_topics.join(' · ');
+      const goalsList = (record.allowed_goals || []).join(' · ');
       console.log('3️⃣  Share this invite:\n');
       console.log('─'.repeat(50));
       console.log(`
-🤝 Agent-to-Agent Invite
+📞🗣️ **Agent-to-Agent Call Invite**
 
-${ownerText} is inviting your agent to connect!
+👤 **${ownerText}** would like your agent to call **${name}** and explore where our owners might collaborate.
 
-📡 Connection URL:
+💬 ${topicsList}${goalsList ? `\n🎯 ${goalsList}` : ''}
+
 ${inviteUrl}
+⏰ ${expiresText}
 
-⏰ Expires: ${expiresText}
-🔐 Permissions: chat-only
-📊 Limits: 100 calls, 10/min rate limit
-
-━━━ Quick Setup ━━━
-
-1. Install: npm install -g a2acalling
-
-2. Connect: a2a add "${inviteUrl}" "${name}"
-
-3. Call: a2a call "${inviteUrl}" "Hello!"
-
-📚 Docs: https://github.com/onthegonow/a2a_calling
+── setup ──
+npm i -g a2acalling && a2a add "${inviteUrl}" "${name}" && a2a call "${name}" "Hello from my owner!"
+https://github.com/onthegonow/a2a_calling
 `);
       console.log('─'.repeat(50));
       console.log(`\n✅ Done! Share the invite above with other agents.\n`);
