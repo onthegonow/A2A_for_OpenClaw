@@ -58,6 +58,7 @@ const commands = {
 
     const { token, record } = store.create({
       name: args.flags.name || args.flags.n || 'unnamed',
+      owner: args.flags.owner || args.flags.o || null,
       expires: args.flags.expires || args.flags.e || '1d',
       permissions: args.flags.permissions || args.flags.p || 'chat-only',
       disclosure: args.flags.disclosure || args.flags.d || 'minimal',
@@ -74,6 +75,7 @@ const commands = {
 
     console.log(`✅ Federation token created\n`);
     console.log(`Name: ${record.name}`);
+    if (record.owner) console.log(`Owner: ${record.owner}`);
     console.log(`Expires: ${record.expires_at || 'never'}`);
     console.log(`Permissions: ${record.permissions}`);
     console.log(`Disclosure: ${record.disclosure}`);
@@ -86,9 +88,10 @@ const commands = {
     
     // Generate shareable invite block
     const maxCallsText = record.max_calls ? `${record.max_calls} calls` : 'unlimited';
+    const ownerText = record.owner ? `${record.owner}'s agent ${record.name}` : record.name;
     const invite = `🤝 Agent-to-Agent Invite
 
-${record.name} is inviting your agent to connect!
+${ownerText} is inviting your agent to connect!
 
 📡 Connection URL:
 ${inviteUrl}
@@ -269,6 +272,7 @@ Or in code:
   quickstart: (args) => {
     const hostname = process.env.A2A_HOSTNAME || process.env.HOSTNAME || 'localhost:3001';
     const name = args.flags.name || args.flags.n || 'My Agent';
+    const owner = args.flags.owner || args.flags.o || null;
     
     console.log(`\n🚀 A2A Quickstart\n${'═'.repeat(50)}\n`);
     
@@ -304,6 +308,7 @@ Or in code:
       console.log('2️⃣  Creating your first invite...\n');
       const { token, record } = store.create({
         name,
+        owner,
         expires: '7d',
         permissions: 'chat-only',
         maxCalls: 100
@@ -315,12 +320,13 @@ Or in code:
       });
 
       // Step 3: Show the invite
+      const ownerText = owner ? `${owner}'s agent ${name}` : name;
       console.log('3️⃣  Share this invite:\n');
       console.log('─'.repeat(50));
       console.log(`
 🤝 Agent-to-Agent Invite
 
-${name} is inviting your agent to connect!
+${ownerText} is inviting your agent to connect!
 
 📡 Connection URL:
 ${inviteUrl}
@@ -356,7 +362,8 @@ Usage: a2a <command> [options]
 
 Commands:
   create              Create a federation token
-    --name, -n        Token name
+    --name, -n        Token/agent name
+    --owner, -o       Owner name (human behind the agent)
     --expires, -e     Expiration (1h, 1d, 7d, 30d, never)
     --permissions, -p Permission level (chat-only, tools-read, tools-write)
     --disclosure, -d  Disclosure level (public, minimal, none)
@@ -378,11 +385,12 @@ Commands:
   
   quickstart          One-command setup: check server + create invite
     --name, -n        Agent name for the invite
+    --owner, -o       Owner name (human behind the agent)
   
   install             Install A2A for OpenClaw
   
 Examples:
-  a2a create --name "Alice" --expires 7d
+  a2a create --name "bappybot" --owner "Benjamin Pollack" --expires 7d
   a2a call oclaw://host/fed_xxx "Hello, can you help?"
   a2a server --port 3001
 `);

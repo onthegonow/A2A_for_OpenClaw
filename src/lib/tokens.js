@@ -88,6 +88,7 @@ class TokenStore {
   create(options = {}) {
     const {
       name = 'unnamed',
+      owner = null,
       expires = '1d',
       permissions = 'chat-only',
       disclosure = 'minimal',
@@ -105,6 +106,7 @@ class TokenStore {
       id: 'tok_' + crypto.randomBytes(8).toString('hex'),
       token_hash: tokenHash,
       name,
+      owner,
       permissions,
       disclosure,
       notify,
