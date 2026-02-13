@@ -92,14 +92,14 @@ module.exports = function (test, assert, helpers) {
     delete process.env.A2A_HOSTNAME;
     delete process.env.A2A_DISABLE_QUICK_TUNNEL;
 
-    const quickTunnelPath = require.resolve('../../src/lib/quick-tunnel');
-    const previous = require.cache[quickTunnelPath];
-    require.cache[quickTunnelPath] = {
-      id: quickTunnelPath,
-      filename: quickTunnelPath,
+    const tunnelPath = require.resolve('../../src/lib/tunnel');
+    const previous = require.cache[tunnelPath];
+    require.cache[tunnelPath] = {
+      id: tunnelPath,
+      filename: tunnelPath,
       loaded: true,
       exports: {
-        ensureQuickTunnel: async () => ({ host: 'demo.trycloudflare.com' })
+        ensureTunnel: async () => ({ host: 'demo.trycloudflare.com', provider: 'cloudflare' })
       }
     };
 
@@ -113,9 +113,48 @@ module.exports = function (test, assert, helpers) {
     assert.equal(resolved.host, 'demo.trycloudflare.com:443');
     assert.equal(resolved.source, 'quick_tunnel');
 
-    delete require.cache[quickTunnelPath];
+    delete require.cache[tunnelPath];
     if (previous) {
-      require.cache[quickTunnelPath] = previous;
+      require.cache[tunnelPath] = previous;
+    }
+    tmp.cleanup();
+  });
+
+  test('resolveInviteHost ignores config-persisted trycloudflare host and refreshes tunnel', async () => {
+    tmp = helpers.tmpConfigDir('invite-tunnel-stale-config');
+    delete process.env.A2A_HOSTNAME;
+    delete process.env.A2A_DISABLE_QUICK_TUNNEL;
+
+    delete require.cache[require.resolve('../../src/lib/config')];
+    const { A2AConfig } = require('../../src/lib/config');
+    const config = new A2AConfig();
+    config.setAgent({ hostname: 'stale.trycloudflare.com:443' });
+
+    const tunnelPath = require.resolve('../../src/lib/tunnel');
+    const previous = require.cache[tunnelPath];
+    require.cache[tunnelPath] = {
+      id: tunnelPath,
+      filename: tunnelPath,
+      loaded: true,
+      exports: {
+        ensureTunnel: async () => ({ host: 'fresh.trycloudflare.com', provider: 'cloudflare' })
+      }
+    };
+
+    delete require.cache[require.resolve('../../src/lib/invite-host')];
+    const { resolveInviteHost } = require('../../src/lib/invite-host');
+    const resolved = await resolveInviteHost({
+      config,
+      defaultPort: 3001,
+      preferQuickTunnel: true
+    });
+
+    assert.equal(resolved.host, 'fresh.trycloudflare.com:443');
+    assert.equal(resolved.source, 'quick_tunnel');
+
+    delete require.cache[tunnelPath];
+    if (previous) {
+      require.cache[tunnelPath] = previous;
     }
     tmp.cleanup();
   });

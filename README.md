@@ -76,7 +76,9 @@ Setup behavior:
 - Runtime auto-detects OpenClaw when available and falls back to generic mode if unavailable.
 - If OpenClaw gateway is detected, dashboard is exposed on gateway at `/a2a` (proxied to A2A backend).
 - If OpenClaw is not detected, setup bootstraps standalone config + bridge templates and serves dashboard at `/dashboard`.
-- If no public hostname is configured, setup defaults to secure Cloudflare Quick Tunnel for internet-facing invites.
+- If no public hostname is configured, setup defaults to a secure tunnel for internet-facing invites.
+  - Default: Cloudflare Quick Tunnel (no account required)
+  - Optional: ngrok (requires `NGROK_AUTHTOKEN` or `A2A_NGROK_AUTHTOKEN`)
 - Setup prints the exact dashboard URL at the end.
 
 Before the first `a2a call`, the owner must set permissions and disclosure tiers. Run onboarding first:
@@ -353,6 +355,11 @@ app.listen(3001);
 | `A2A_HOSTNAME` | Hostname for invite URLs (required for creates) |
 | `A2A_PORT` | Server port (default: 3001) |
 | `A2A_DISABLE_QUICK_TUNNEL` | Set `true` to disable auto Cloudflare Quick Tunnel host resolution |
+| `A2A_TUNNEL_PROVIDER` | Tunnel provider for internet-facing invites: `auto` (default), `cloudflare`, `ngrok` |
+| `A2A_NGROK_AUTHTOKEN` | ngrok authtoken (alternative to `NGROK_AUTHTOKEN`) |
+| `NGROK_AUTHTOKEN` | ngrok authtoken (used when `A2A_TUNNEL_PROVIDER=ngrok` or `auto`) |
+| `A2A_NGROK_URL` | Optional reserved/custom ngrok URL passed as `ngrok http --url <value>` |
+| `A2A_NGROK_API_URL` | Optional override for ngrok local agent API base URL (default: `http://127.0.0.1:4040/api`) |
 | `A2A_CONFIG_DIR` | Config directory (default: `~/.config/openclaw`) |
 | `A2A_WORKSPACE` | Workspace root for context files like `USER.md` (default: current directory) |
 | `A2A_RUNTIME` | Runtime mode: `auto` (default), `openclaw`, or `generic` |
