@@ -39,8 +39,12 @@ module.exports = function(test, assert, helpers) {
         )
       );
 
+      // Use the current Node executable so the test passes even if PATH is
+      // intentionally restricted (GitHub Actions setup-node is not in /usr/bin).
+      const nodeBin = process.execPath;
+      const installScript = path.join(process.cwd(), 'scripts', 'install-openclaw.js');
       const output = execSync(
-        `node ${path.join(process.cwd(), 'scripts/install-openclaw.js')} install --hostname test-host.local --port 3001`,
+        `${JSON.stringify(nodeBin)} ${JSON.stringify(installScript)} install --hostname test-host.local --port 3001`,
         {
           encoding: 'utf8',
           env: {
