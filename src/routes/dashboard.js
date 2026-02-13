@@ -185,6 +185,69 @@ function ensureDashboardAccess(req, res, next) {
   return res.status(401).json({ success: false, error: 'unauthorized', message: 'Admin token required' });
 }
 
+function summarizeDebugLogs(logs) {
+  if (!Array.isArray(logs) || logs.length === 0) {
+    return {
+      event_count: 0,
+      events: [],
+      timestamps: [],
+      error_count: 0,
+      warning_count: 0
+    };
+  }
+
+  const normalized = logs.slice().sort((a, b) => {
+    const aTime = Number(new Date(a.timestamp));
+    const bTime = Number(new Date(b.timestamp));
+    if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0;
+    if (Number.isNaN(aTime)) return 1;
+    if (Number.isNaN(bTime)) return -1;
+    return aTime - bTime;
+  });
+
+  const firstTimestamp = normalized[0]?.timestamp || null;
+  const lastTimestamp = normalized[normalized.length - 1]?.timestamp || null;
+  const firstMs = firstTimestamp ? Number(new Date(firstTimestamp)) : null;
+  const lastMs = lastTimestamp ? Number(new Date(lastTimestamp)) : null;
+
+  return {
+    event_count: normalized.length,
+    events: normalized.map(row => row.event).filter(Boolean),
+    timestamps: normalized.map(row => row.timestamp),
+    first_seen: firstTimestamp,
+    last_seen: lastTimestamp,
+    timeline_ms: Number.isFinite(firstMs) && Number.isFinite(lastMs) && lastMs >= firstMs
+      ? lastMs - firstMs
+      : null,
+    trace_ids: [...new Set(normalized.map(row => row.trace_id).filter(Boolean))],
+    conversation_ids: [...new Set(normalized.map(row => row.conversation_id).filter(Boolean))],
+    token_ids: [...new Set(normalized.map(row => row.token_id).filter(Boolean))],
+    request_ids: [...new Set(normalized.map(row => row.request_id).filter(Boolean))],
+    error_count: normalized.filter(row => row.level === 'error').length,
+    warning_count: normalized.filter(row => row.level === 'warn').length,
+    hints: [...new Set(normalized
+      .filter(row => row.hint)
+      .map(row => String(row.hint)))]
+  };
+}
+
+function findErrorHints(logs) {
+  const hints = new Map();
+  for (const row of logs) {
+    if (!row.error_code) continue;
+    if (!hints.has(row.error_code)) {
+      hints.set(row.error_code, {
+        error_code: row.error_code,
+        status_code: row.status_code,
+        count: 0
+      });
+    }
+    const existing = hints.get(row.error_code);
+    existing.count += 1;
+  }
+  return Array.from(hints.values());
+}
+
 function createDashboardApiRouter(options = {}) {
   const router = express.Router();
   const context = buildContext(options);
@@ -237,6 +300,65 @@ function createDashboardApiRouter(options = {}) {
       to: req.query.to || null
     });
     return res.json({ success: true, stats });
+  });
+
+  router.get('/debug/call', (req, res) => {
+    const traceId = sanitizeString(req.query.trace_id || req.query.traceId || '', 120);
+    const conversationId = sanitizeString(req.query.conversation_id || req.query.conversationId || '', 120);
+    const limit = Math.min(1000, Math.max(1, Number.parseInt(req.query.limit || '500', 10) || 500));
+
+    if (!traceId && !conversationId) {
+      return res.status(400).json({
+        success: false,
+        error: 'missing_scope',
+        message: 'Provide trace_id or conversation_id.'
+      });
+    }
+
+    const logs = traceId
+      ? context.logger.getTrace(traceId, { limit })
+      : context.logger.list({
+        limit,
+        conversationId,
+        sort_desc: false
+      });
+
+    if (!Array.isArray(logs) || logs.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'no_logs_found',
+        message: traceId ? 'No logs for trace_id' : 'No logs for conversation_id'
+      });
+    }
+
+    const summary = summarizeDebugLogs(logs);
+    const errors = logs.filter(row => row.level === 'error' || row.level === 'warn').slice(0, 20);
+    const callSignature = {
+      trace_ids: summary.trace_ids,
+      conversation_ids: summary.conversation_ids,
+      token_ids: summary.token_ids,
+      request_ids: summary.request_ids
+    };
+
+    return res.json({
+      success: true,
+      summary: {
+        ...summary,
+        ...callSignature,
+        errors: errors.map(row => ({
+          id: row.id,
+          timestamp: row.timestamp,
+          level: row.level,
+          event: row.event,
+          message: row.message,
+          error_code: row.error_code,
+          status_code: row.status_code,
+          hint: row.hint
+        })),
+        error_codes: findErrorHints(logs)
+      },
+      logs: summary.timeline_ms === null ? logs : logs
+    });
   });
 
   router.get('/contacts', (req, res) => {

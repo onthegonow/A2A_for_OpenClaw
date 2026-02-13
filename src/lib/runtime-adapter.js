@@ -34,6 +34,15 @@ function cleanText(value, maxLength = 300) {
     .slice(0, maxLength);
 }
 
+function normalizeCommandText(command) {
+  return String(command || '').trim().slice(0, 160);
+}
+
+function payloadAuditLength(payload) {
+  const raw = JSON.stringify(payload || {});
+  return Number.isFinite(raw?.length) ? raw.length : 0;
+}
+
 function toBool(value, fallback = true) {
   if (value === undefined || value === null || value === '') {
     return fallback;
@@ -326,6 +335,21 @@ function createRuntimeAdapter(options = {}) {
       caller: caller || {},
       context: context || {}
     };
+    const traceId = context?.traceId || context?.trace_id;
+    const requestId = context?.requestId || context?.request_id;
+    const conversationId = context?.conversationId || context?.conversation_id;
+    const startAt = Date.now();
+
+    logger.debug('Invoking generic agent command', {
+      event: 'generic_agent_command_start',
+      traceId,
+      requestId,
+      conversationId,
+      data: {
+        command: normalizeCommandText(genericAgentCommand),
+        payload_bytes: payloadAuditLength(payload)
+      }
+    });
 
     if (genericAgentCommand) {
       try {
@@ -333,6 +357,17 @@ function createRuntimeAdapter(options = {}) {
           timeoutMs: context?.timeoutMs || 65000
         });
         const text = parseCommandTextOutput(output);
+        logger.debug('Generic agent command completed', {
+          event: 'generic_agent_command_complete',
+          traceId,
+          requestId,
+          conversationId,
+          data: {
+            command: normalizeCommandText(genericAgentCommand),
+            duration_ms: Date.now() - startAt,
+            output_length: String(output || '').length
+          }
+        });
         if (text) {
           return text;
         }
@@ -340,13 +375,17 @@ function createRuntimeAdapter(options = {}) {
         runtimeError = err.message;
         logger.error('Generic agent command failed', {
           event: 'generic_agent_command_failed',
-          traceId: context?.traceId,
-          conversationId: context?.conversationId,
+          traceId,
+          requestId,
+          conversationId,
           error_code: 'GENERIC_AGENT_COMMAND_FAILED',
           hint: 'Verify A2A_AGENT_COMMAND exits 0 and returns valid text/JSON response.',
           error: err,
           data: {
-            command_present: Boolean(genericAgentCommand)
+            command_present: Boolean(genericAgentCommand),
+            command: normalizeCommandText(genericAgentCommand),
+            payload_bytes: payloadAuditLength(payload),
+            duration_ms: Date.now() - startAt
           }
         });
       }
@@ -366,11 +405,26 @@ function createRuntimeAdapter(options = {}) {
       messages,
       caller: callerInfo || {}
     };
+    const traceId = callerInfo?.trace_id || callerInfo?.traceId;
+    const requestId = callerInfo?.request_id || callerInfo?.requestId;
+    const conversationId = callerInfo?.conversation_id || callerInfo?.conversationId;
+    const startAt = Date.now();
 
     if (genericSummaryCommand) {
       try {
         const output = runCommand(genericSummaryCommand, payload, { timeoutMs: 35000 });
         const parsed = parseSummaryOutput(output);
+        logger.debug('Generic summary command completed', {
+          event: 'generic_summary_command_complete',
+          traceId,
+          requestId,
+          conversationId,
+          data: {
+            command: normalizeCommandText(genericSummaryCommand),
+            payload_bytes: payloadAuditLength(payload),
+            output_length: String(output || '').length
+          }
+        });
         if (parsed && parsed.summary) {
           return parsed;
         }
@@ -378,13 +432,17 @@ function createRuntimeAdapter(options = {}) {
         reason = err.message;
         logger.error('Generic summary command failed', {
           event: 'generic_summary_command_failed',
-          traceId: callerInfo?.trace_id || callerInfo?.traceId,
-          conversationId: callerInfo?.conversation_id || callerInfo?.conversationId,
+          traceId,
+          requestId,
+          conversationId,
           error_code: 'GENERIC_SUMMARY_COMMAND_FAILED',
           hint: 'Verify A2A_SUMMARY_COMMAND returns JSON with summary field or plain text.',
           error: err,
           data: {
-            command_present: Boolean(genericSummaryCommand)
+            command_present: Boolean(genericSummaryCommand),
+            command: normalizeCommandText(genericSummaryCommand),
+            payload_bytes: payloadAuditLength(payload),
+            duration_ms: Date.now() - startAt
           }
         });
       }
@@ -397,19 +455,47 @@ function createRuntimeAdapter(options = {}) {
     if (!genericNotifyCommand) {
       return;
     }
+    const traceId = payload?.trace_id || payload?.traceId;
+    const requestId = payload?.request_id || payload?.requestId;
+    const conversationId = payload?.conversationId;
+    const startAt = Date.now();
+    logger.debug('Invoking generic notify command', {
+      event: 'generic_notify_command_start',
+      traceId,
+      requestId,
+      conversationId,
+      data: {
+        command: normalizeCommandText(genericNotifyCommand),
+        payload_bytes: payloadAuditLength(payload)
+      }
+    });
     try {
       runCommand(genericNotifyCommand, payload, { timeoutMs: 10000 });
+      logger.debug('Generic notify command completed', {
+        event: 'generic_notify_command_complete',
+        traceId,
+        requestId,
+        conversationId,
+        data: {
+          command: normalizeCommandText(genericNotifyCommand),
+          duration_ms: Date.now() - startAt
+        }
+      });
     } catch (err) {
       logger.error('Generic notify command failed', {
         event: 'generic_notify_command_failed',
-        traceId: payload?.trace_id || payload?.traceId,
-        conversationId: payload?.conversationId,
+        traceId,
+        requestId,
+        conversationId,
         tokenId: payload?.token?.id,
         error_code: 'GENERIC_NOTIFY_COMMAND_FAILED',
         hint: 'Validate A2A_NOTIFY_COMMAND and downstream notifier transport availability.',
         error: err,
         data: {
-          command_present: Boolean(genericNotifyCommand)
+          command_present: Boolean(genericNotifyCommand),
+          command: normalizeCommandText(genericNotifyCommand),
+          payload_bytes: payloadAuditLength(payload),
+          duration_ms: Date.now() - startAt
         }
       });
     }
@@ -417,24 +503,65 @@ function createRuntimeAdapter(options = {}) {
 
   async function runTurn({ sessionId, prompt, message, caller, context = {}, timeoutMs }) {
     const traceId = context?.traceId || context?.trace_id;
+    const requestId = context?.requestId || context?.request_id;
+    const conversationId = context?.conversationId || context?.conversation_id;
     if (modeInfo.mode !== 'openclaw') {
       return runGenericTurn({ message, caller, context });
     }
 
+    const startAt = Date.now();
+    logger.debug('Invoking openclaw turn', {
+      event: 'openclaw_turn_start',
+      traceId,
+      requestId,
+      conversationId,
+      data: {
+        session_id: sessionId,
+        timeout_ms: timeoutMs
+      }
+    });
+
     try {
-      return await runOpenClawTurn({ sessionId, prompt, timeoutMs });
+      const response = await runOpenClawTurn({ sessionId, prompt, timeoutMs });
+      logger.debug('OpenClaw turn completed', {
+        event: 'openclaw_turn_complete',
+        traceId,
+        requestId,
+        conversationId,
+        data: {
+          session_id: sessionId,
+          duration_ms: Date.now() - startAt
+        }
+      });
+      return response;
     } catch (err) {
       if (!failoverEnabled) {
+        logger.error('OpenClaw turn failed', {
+          event: 'openclaw_turn_failed',
+          traceId,
+          requestId,
+          conversationId,
+          error_code: 'OPENCLAW_TURN_FAILED',
+          hint: 'Inspect OpenClaw CLI output, timeout settings, and environment PATH.',
+          error: err,
+          data: {
+            session_id: sessionId,
+            timeout_ms: timeoutMs,
+            duration_ms: Date.now() - startAt
+          }
+        });
         throw err;
       }
       logger.warn('OpenClaw runtime failed, switching to generic fallback', {
         event: 'openclaw_turn_failed_fallback',
         traceId,
-        conversationId: context?.conversationId,
+        requestId,
+        conversationId,
         error_code: 'OPENCLAW_TURN_FAILED_FALLBACK',
         hint: 'Inspect OpenClaw CLI health or set A2A_RUNTIME=generic for explicit fallback mode.',
         error: err,
         data: {
+          duration_ms: Date.now() - startAt,
           failover_enabled: failoverEnabled
         }
       });
@@ -448,9 +575,23 @@ function createRuntimeAdapter(options = {}) {
   }
 
   async function summarize({ sessionId, prompt, messages, callerInfo, traceId, conversationId }) {
+    const effectiveTraceId = traceId || callerInfo?.trace_id || callerInfo?.traceId;
+    const requestId = callerInfo?.request_id || callerInfo?.requestId;
+    const effectiveConversationId = conversationId || callerInfo?.conversation_id || callerInfo?.conversationId;
     if (modeInfo.mode !== 'openclaw') {
       return runGenericSummary({ messages, callerInfo });
     }
+    const startAt = Date.now();
+    logger.debug('Invoking openclaw summary', {
+      event: 'openclaw_summary_start',
+      traceId: effectiveTraceId,
+      requestId,
+      conversationId: effectiveConversationId,
+      data: {
+        session_id: sessionId,
+        message_count: Array.isArray(messages) ? messages.length : 0
+      }
+    });
 
     try {
       const result = await runOpenClawSummary({
@@ -459,8 +600,28 @@ function createRuntimeAdapter(options = {}) {
         timeoutMs: 35000
       });
       if (result && result.summary) {
+        logger.debug('OpenClaw summary completed', {
+          event: 'openclaw_summary_complete',
+          traceId: effectiveTraceId,
+          requestId,
+          conversationId: effectiveConversationId,
+          data: {
+            session_id: sessionId,
+            duration_ms: Date.now() - startAt
+          }
+        });
         return result;
       }
+      logger.warn('OpenClaw summary returned empty output; using generic fallback', {
+        event: 'openclaw_summary_empty',
+        traceId: effectiveTraceId,
+        requestId,
+        conversationId: effectiveConversationId,
+        data: {
+          session_id: sessionId,
+          duration_ms: Date.now() - startAt
+        }
+      });
       return runGenericSummary({
         messages,
         callerInfo,
@@ -468,16 +629,32 @@ function createRuntimeAdapter(options = {}) {
       });
     } catch (err) {
       if (!failoverEnabled) {
+        logger.error('OpenClaw summary failed', {
+          event: 'openclaw_summary_failed',
+          traceId: effectiveTraceId,
+          requestId,
+          conversationId: effectiveConversationId,
+          error_code: 'OPENCLAW_SUMMARY_FAILED',
+          hint: 'Inspect summary message length, timeout configuration, and CLI stderr output.',
+          error: err,
+          data: {
+            session_id: sessionId,
+            duration_ms: Date.now() - startAt
+          }
+        });
         throw err;
       }
       logger.warn('OpenClaw summary failed, using generic fallback', {
         event: 'openclaw_summary_failed_fallback',
-        traceId: traceId || callerInfo?.trace_id || callerInfo?.traceId,
-        conversationId: conversationId || callerInfo?.conversation_id || callerInfo?.conversationId,
+        traceId: effectiveTraceId,
+        requestId,
+        conversationId: effectiveConversationId,
         error_code: 'OPENCLAW_SUMMARY_FAILED_FALLBACK',
         hint: 'Inspect OpenClaw summary session output and summarizer prompt input.',
         error: err,
         data: {
+          session_id: sessionId,
+          duration_ms: Date.now() - startAt,
           failover_enabled: failoverEnabled
         }
       });
@@ -490,6 +667,7 @@ function createRuntimeAdapter(options = {}) {
   }
 
   async function notify({ level, token, caller, message, conversationId, traceId }) {
+    const requestId = token?.request_id || token?.requestId || null;
     const payload = {
       mode: 'a2a-notify',
       level,
@@ -497,8 +675,18 @@ function createRuntimeAdapter(options = {}) {
       caller: caller || null,
       message,
       conversationId,
-      traceId
+      traceId,
+      requestId
     };
+
+    logger.debug('Owner notify requested', {
+      event: 'notify_requested',
+      traceId,
+      requestId,
+      conversationId,
+      tokenId: token?.id,
+      data: { level }
+    });
 
     if (modeInfo.mode !== 'openclaw') {
       return runGenericNotify(payload);
@@ -510,9 +698,20 @@ function createRuntimeAdapter(options = {}) {
 
     const callerName = caller?.name || 'Unknown';
     const callerOwner = caller?.owner ? ` (${caller.owner})` : '';
+    const notifyStart = Date.now();
 
     try {
       await runOpenClawNotify({ callerName, callerOwner, message: message || '' });
+      logger.debug('OpenClaw notify completed', {
+        event: 'openclaw_notify_complete',
+        traceId,
+        requestId,
+        conversationId,
+        tokenId: token?.id,
+        data: {
+          duration_ms: Date.now() - notifyStart
+        }
+      });
     } catch (err) {
       if (!failoverEnabled) {
         throw err;
@@ -520,14 +719,23 @@ function createRuntimeAdapter(options = {}) {
       logger.warn('OpenClaw notify failed, running generic notifier', {
         event: 'openclaw_notify_failed_fallback',
         traceId,
+        requestId,
         conversationId,
         tokenId: token?.id,
         error_code: 'OPENCLAW_NOTIFY_FAILED_FALLBACK',
         hint: 'Check OpenClaw messaging channel config and notify permissions.',
         error: err,
         data: {
-          failover_enabled: failoverEnabled
+          failover_enabled: failoverEnabled,
+          duration_ms: Date.now() - notifyStart
         }
+      });
+      logger.debug('OpenClaw notify fallback to generic notifier', {
+        event: 'openclaw_notify_generic_fallback',
+        traceId,
+        requestId,
+        conversationId,
+        tokenId: token?.id
       });
       await runGenericNotify(payload);
     }

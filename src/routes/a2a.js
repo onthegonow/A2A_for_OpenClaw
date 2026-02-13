@@ -74,6 +74,32 @@ function resolveTraceId(req) {
   return createTraceId('a2a');
 }
 
+function resolveRequestId(req) {
+  const headerRequestId = req.headers['x-request-id'];
+  if (typeof headerRequestId === 'string' && headerRequestId.trim()) {
+    return headerRequestId.trim().slice(0, 120);
+  }
+  return createTraceId('req');
+}
+
+function extractClientHost(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.ip || null;
+}
+
+function normalizeRequestMetadata(req) {
+  const body = req && typeof req.body === 'object' && req.body ? req.body : {};
+  return {
+    has_message: typeof body.message === 'string',
+    has_caller: Boolean(body.caller && typeof body.caller === 'object'),
+    has_context: Boolean(body.context && typeof body.context === 'object'),
+    timeout_seconds: body.timeout_seconds
+  };
+}
+
 function checkRateLimit(tokenId, limits = { minute: 10, hour: 100, day: 1000 }) {
   const now = Date.now();
   const minute = Math.floor(now / 60000);
@@ -177,13 +203,24 @@ function createRoutes(options = {}) {
   router.post('/invoke', async (req, res) => {
     const startedAt = Date.now();
     const traceId = resolveTraceId(req);
-    const reqLogger = logger.child({ traceId, event: 'invoke' });
+    const requestId = resolveRequestId(req);
+    const reqLogger = logger.child({ traceId, requestId, event: 'invoke' });
+    const withTracePayload = (payload) => ({ ...payload, trace_id: traceId, request_id: requestId });
     res.set('x-trace-id', traceId);
+    res.set('x-request-id', requestId);
     reqLogger.info('Received invoke request', {
       data: {
         ip: req.ip,
+        request_id: requestId,
+        client_host: extractClientHost(req),
+        forwarded_for: req.headers['x-forwarded-for'] || null,
+        user_agent: req.headers['user-agent'] || null,
         has_auth_header: Boolean(req.headers.authorization)
       }
+    });
+    reqLogger.debug('Invoke request metadata', {
+      event: 'invoke_request_metadata',
+      data: normalizeRequestMetadata(req)
     });
 
     // Extract token
@@ -194,11 +231,11 @@ function createRoutes(options = {}) {
         status_code: 401,
         hint: 'Send Authorization: Bearer <a2a_token>.'
       });
-      return res.status(401).json({ 
+      return res.status(401).json(withTracePayload({ 
         success: false, 
         error: 'missing_token', 
         message: 'Authorization header required' 
-      });
+      }));
     }
 
     const token = authHeader.slice(7);
@@ -213,11 +250,11 @@ function createRoutes(options = {}) {
         status_code: 401,
         hint: 'Create a fresh invite token and retry with the new bearer token.'
       });
-      return res.status(401).json({ 
+      return res.status(401).json(withTracePayload({ 
         success: false, 
         error: 'unauthorized', 
         message: 'Invalid or expired token' 
-      });
+      }));
     }
 
     // Check rate limit
@@ -233,11 +270,11 @@ function createRoutes(options = {}) {
         }
       });
       res.set('Retry-After', rateCheck.retryAfter);
-      return res.status(429).json({ 
+      return res.status(429).json(withTracePayload({ 
         success: false, 
         error: rateCheck.error, 
         message: rateCheck.message 
-      });
+      }));
     }
 
     // Extract and validate request
@@ -250,11 +287,11 @@ function createRoutes(options = {}) {
         status_code: 400,
         hint: 'Include a non-empty string field `message` in the request body.'
       });
-      return res.status(400).json({ 
+      return res.status(400).json(withTracePayload({ 
         success: false, 
         error: 'missing_message', 
         message: 'Message is required' 
-      });
+      }));
     }
 
     // Validate message length
@@ -269,11 +306,11 @@ function createRoutes(options = {}) {
           message_length: typeof message === 'string' ? message.length : null
         }
       });
-      return res.status(400).json({
+      return res.status(400).json(withTracePayload({
         success: false,
         error: 'invalid_message',
         message: `Message must be a string under ${MAX_MESSAGE_LENGTH} characters`
-      });
+      }));
     }
 
     // Validate and bound timeout
@@ -299,7 +336,8 @@ function createRoutes(options = {}) {
       disclosure: validation.disclosure,
       caller: sanitizedCaller,
       conversation_id: conversation_id || `conv_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`,
-      trace_id: traceId
+      trace_id: traceId,
+      request_id: requestId
     };
 
     // Track conversation if store available
@@ -317,7 +355,8 @@ function createRoutes(options = {}) {
         if (monitor) {
           monitor.trackActivity(a2aContext.conversation_id, {
             ...sanitizedCaller,
-            trace_id: traceId
+            trace_id: traceId,
+            request_id: requestId
           });
         }
         
@@ -377,7 +416,8 @@ function createRoutes(options = {}) {
           message,
           response: response.text,
           conversation_id: a2aContext.conversation_id,
-          trace_id: traceId
+          trace_id: traceId,
+          request_id: requestId
         }).catch(err => {
           reqLogger.error('Failed to notify owner', {
             conversationId: a2aContext.conversation_id,
@@ -395,6 +435,7 @@ function createRoutes(options = {}) {
       reqLogger.info('Invoke request completed', {
         conversationId: a2aContext.conversation_id,
         tokenId: validation.id,
+        requestId,
         data: {
           duration_ms: Date.now() - startedAt,
           message_length: message.length,
@@ -404,6 +445,8 @@ function createRoutes(options = {}) {
 
       res.json({
         success: true,
+        trace_id: traceId,
+        request_id: requestId,
         conversation_id: a2aContext.conversation_id,
         response: response.text,
         can_continue: response.canContinue !== false,
@@ -422,11 +465,11 @@ function createRoutes(options = {}) {
           duration_ms: Date.now() - startedAt
         }
       });
-      res.status(500).json({
+      res.status(500).json(withTracePayload({
         success: false,
         error: 'internal_error',
         message: 'Failed to process message'
-      });
+      }));
     }
   });
 
@@ -437,8 +480,20 @@ function createRoutes(options = {}) {
   router.post('/end', async (req, res) => {
     const startedAt = Date.now();
     const traceId = resolveTraceId(req);
-    const reqLogger = logger.child({ traceId, event: 'end' });
+    const requestId = resolveRequestId(req);
+    const reqLogger = logger.child({ traceId, requestId, event: 'end' });
+    const withTracePayload = (payload) => ({ ...payload, trace_id: traceId, request_id: requestId });
     res.set('x-trace-id', traceId);
+    res.set('x-request-id', requestId);
+    reqLogger.info('Received end request', {
+      data: {
+        request_id: requestId,
+        ip: req.ip,
+        client_host: extractClientHost(req),
+        has_auth_header: Boolean(req.headers.authorization),
+        has_conversation_id: Boolean(req.body && req.body.conversation_id)
+      }
+    });
 
     // Extract token
     const authHeader = req.headers.authorization;
@@ -448,11 +503,11 @@ function createRoutes(options = {}) {
         status_code: 401,
         hint: 'Send Authorization: Bearer <a2a_token>.'
       });
-      return res.status(401).json({ 
+      return res.status(401).json(withTracePayload({ 
         success: false, 
         error: 'unauthorized', 
         message: 'Authorization header required' 
-      });
+      }));
     }
 
     const token = authHeader.slice(7);
@@ -463,11 +518,11 @@ function createRoutes(options = {}) {
         status_code: 401,
         hint: 'Use a currently valid invite token for conversation end calls.'
       });
-      return res.status(401).json({ 
+      return res.status(401).json(withTracePayload({ 
         success: false, 
         error: 'unauthorized', 
         message: 'Invalid or expired token' 
-      });
+      }));
     }
 
     const { conversation_id } = req.body;
@@ -478,16 +533,16 @@ function createRoutes(options = {}) {
         status_code: 400,
         hint: 'Provide `conversation_id` returned from /invoke.'
       });
-      return res.status(400).json({
+      return res.status(400).json(withTracePayload({
         success: false,
         error: 'missing_conversation_id',
         message: 'conversation_id is required'
-      });
+      }));
     }
 
     const convStore = getConversationStore();
     if (!convStore) {
-      return res.json({ success: true, message: 'Conversation storage not enabled' });
+      return res.json(withTracePayload({ success: true, message: 'Conversation storage not enabled' }));
     }
 
     try {
@@ -508,7 +563,8 @@ function createRoutes(options = {}) {
           type: 'conversation_concluded',
           token: validation,
           conversation: conv,
-          trace_id: traceId
+          trace_id: traceId,
+          request_id: requestId
         }).catch(err => {
           reqLogger.error('Failed to notify owner after conversation end', {
             conversationId: conversation_id,
@@ -526,6 +582,7 @@ function createRoutes(options = {}) {
       reqLogger.info('End request completed', {
         conversationId: conversation_id,
         tokenId: validation.id,
+        requestId,
         data: {
           duration_ms: Date.now() - startedAt,
           status: result.success ? 'concluded' : 'unchanged'
@@ -534,6 +591,8 @@ function createRoutes(options = {}) {
 
       res.json({
         success: true,
+        trace_id: traceId,
+        request_id: requestId,
         conversation_id,
         status: 'concluded',
         summary: result.summary
@@ -550,11 +609,11 @@ function createRoutes(options = {}) {
           duration_ms: Date.now() - startedAt
         }
       });
-      res.status(500).json({
+      res.status(500).json(withTracePayload({
         success: false,
         error: 'internal_error',
         message: 'Failed to end conversation'
-      });
+      }));
     }
   });
 

@@ -454,8 +454,10 @@ async function callAgent(message, a2aContext) {
   const tierInfo = a2aContext.tier || 'public';
   const conversationId = a2aContext.conversation_id || `conv_${Date.now()}`;
   const traceId = a2aContext.trace_id || null;
+  const requestId = a2aContext.request_id || null;
   const callLogger = logger.child({
     traceId,
+    requestId,
     conversationId,
     tokenId: a2aContext.token_id
   });
@@ -528,20 +530,21 @@ async function callAgent(message, a2aContext) {
       }
     });
 
-    const rawResponse = await runtime.runTurn({
-      sessionId,
-      prompt,
-      message,
-      caller: a2aContext.caller || {},
-      timeoutMs: 65000,
-      context: {
-        conversationId,
-        tier: tierInfo,
-        ownerName: agentContext.owner,
-        allowedTopics: a2aContext.allowed_topics || [],
-        traceId
-      }
-    });
+      const rawResponse = await runtime.runTurn({
+        sessionId,
+        prompt,
+        message,
+        caller: a2aContext.caller || {},
+        timeoutMs: 65000,
+        context: {
+          conversationId,
+          tier: tierInfo,
+          ownerName: agentContext.owner,
+          allowedTopics: a2aContext.allowed_topics || [],
+          traceId,
+          requestId
+        }
+      });
 
     if (collabMode !== 'adaptive') {
       return rawResponse;
@@ -595,7 +598,7 @@ async function callAgent(message, a2aContext) {
       }
     });
 
-    return cleanResponse || '[Sub-agent returned empty response]';
+      return cleanResponse || '[Sub-agent returned empty response]';
     
   } catch (err) {
     callLogger.error('Runtime turn handling failed; using fallback response', {

@@ -208,6 +208,7 @@ Dashboard/API log routes:
 - `GET /api/a2a/dashboard/logs`
 - `GET /api/a2a/dashboard/logs/trace/:traceId`
 - `GET /api/a2a/dashboard/logs/stats`
+- `GET /api/a2a/dashboard/debug/call?trace_id=<id>` (or `conversation_id=<id>`)
 
 Useful filters for `/api/a2a/dashboard/logs`:
 
@@ -220,6 +221,24 @@ Example:
 ```bash
 curl "http://localhost:3001/api/a2a/dashboard/logs?trace_id=trace_abc123&error_code=TOKEN_INVALID_OR_EXPIRED"
 ```
+
+### Incoming Call Debug
+
+Every `/api/a2a/invoke` and `/api/a2a/end` response now returns:
+- `trace_id` (generated when caller does not send one)
+- `request_id` (generated when caller does not send one)
+
+To inspect one call, use the dashboard debug endpoint:
+
+```bash
+curl -H "x-admin-token: $A2A_ADMIN_TOKEN" \
+  "http://localhost:3001/api/a2a/dashboard/debug/call?trace_id=<trace_id>"
+```
+
+For each call you get:
+- `summary` (event count, first/last seen, duration, and IDs involved)
+- `errors` and `error_codes` for fast triage
+- `logs` (ordered timeline events from that trace)
 
 ## 📡 Protocol
 

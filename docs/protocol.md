@@ -56,6 +56,8 @@ Headers:
 ```
 Authorization: Bearer fed_abc123xyz
 Content-Type: application/json
+x-trace-id: trace_... (optional)
+x-request-id: req_... (optional)
 ```
 
 Request body:
@@ -76,6 +78,8 @@ Success response:
 ```json
 {
   "success": true,
+  "trace_id": "trace_...",
+  "request_id": "req_...",
   "conversation_id": "conv_123456",
   "response": "The agent's response text",
   "can_continue": true,
@@ -114,6 +118,8 @@ Success response:
 ```json
 {
   "success": true,
+  "trace_id": "trace_...",
+  "request_id": "req_...",
   "conversation_id": "conv_123456",
   "status": "concluded",
   "summary": "Optional summary text"
@@ -143,6 +149,7 @@ Dashboard API endpoints:
 - `GET /api/a2a/dashboard/logs`
 - `GET /api/a2a/dashboard/logs/trace/:traceId`
 - `GET /api/a2a/dashboard/logs/stats`
+- `GET /api/a2a/dashboard/debug/call?trace_id=<id>`
 
 Example filters for `/logs`: `trace_id`, `conversation_id`, `token_id`, `error_code`, `status_code`, `component`, `event`, `level`, `search`, `from`, `to`.
 

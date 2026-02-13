@@ -116,4 +116,28 @@ module.exports = function (test, assert, helpers) {
 
     await teardown();
   });
+
+  test('GET /debug/call can resolve and summarize an incoming call trace', async () => {
+    await setup();
+    const traceId = 'trace_dash_1';
+
+    const result = await client.get(`/api/a2a/dashboard/debug/call?trace_id=${traceId}`);
+    assert.equal(result.statusCode, 200);
+    assert.equal(result.body.success, true);
+    assert.ok(result.body.summary);
+    assert.equal(result.body.summary.event_count, 2);
+    assert.equal(result.body.summary.trace_ids.includes(traceId), true);
+    assert.equal(Array.isArray(result.body.summary.error_codes), true);
+    assert.equal(typeof result.body.summary.timeline_ms, 'number');
+    assert.equal(result.body.summary.timeline_ms >= 0, true);
+    assert.equal(Array.isArray(result.body.logs), true);
+    assert.equal(result.body.logs.length >= 2, true);
+    assert.equal(result.body.summary.errors.length >= 1, true);
+
+    const missing = await client.get('/api/a2a/dashboard/debug/call');
+    assert.equal(missing.statusCode, 400);
+    assert.equal(missing.body.success, false);
+
+    await teardown();
+  });
 };
