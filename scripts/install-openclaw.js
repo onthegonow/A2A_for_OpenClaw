@@ -7,8 +7,8 @@
  *   so dashboard and A2A API are accessible at /a2a and /api/a2a on gateway.
  * - If gateway is not detected, dashboard runs on standalone A2A server.
  * - If OpenClaw is not installed, bootstrap standalone runtime templates.
- * - If no public hostname is configured, default to secure Quick Tunnel
- *   for internet-facing invite URLs (lazy cloudflared download).
+ * - Networking-aware: inspects port 80 and prints reverse proxy guidance
+ *   for stable internet-facing ingress.
  *
  * Usage:
  *   npx a2acalling install
@@ -20,6 +20,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
 const { execSync } = require('child_process');
 
 // Paths
@@ -423,6 +425,7 @@ const plugin = {
 
       proxyReq.on("error", (err) => {
         const backend = backendBase.toString();
+        const suggestedPort = backendBase.port || (backendBase.protocol === "https:" ? "443" : "80");
         if (isApi) {
           sendJson(res, 502, {
             success: false,
@@ -438,7 +441,7 @@ const plugin = {
   <h1>A2A Dashboard Unavailable</h1>
   <p>The gateway proxy is active, but the A2A backend is not reachable.</p>
   <p>Expected backend: <code>\${backend}</code></p>
-  <p>Start the backend with: <code>a2a server --port 3001</code></p>
+  <p>Start the backend with: <code>a2a server --port \${suggestedPort}</code></p>
 </body></html>\`);
       });
 
@@ -491,30 +494,137 @@ function readExistingConfiguredInviteHost() {
     if (!parsed.hostname || isLocalOrUnroutableHost(parsed.hostname)) {
       return '';
     }
+    // Legacy: Cloudflare quick tunnels are ephemeral and no longer supported.
+    if (String(parsed.hostname).toLowerCase().endsWith('.trycloudflare.com')) {
+      return '';
+    }
     return existing;
   } catch (err) {
     return '';
   }
 }
 
-async function maybeSetupQuickTunnel(port) {
-  const disabled = Boolean(flags['no-quick-tunnel']) ||
-    String(process.env.A2A_DISABLE_QUICK_TUNNEL || '').toLowerCase() === 'true';
-  if (disabled) return null;
-
+function safeJsonParse(text) {
   try {
-    const { ensureQuickTunnel } = require('../src/lib/quick-tunnel');
-    const tunnel = await ensureQuickTunnel({ localPort: Number.parseInt(String(port), 10) || 3001 });
-    if (!tunnel || !tunnel.host) return null;
-    return {
-      ...tunnel,
-      inviteHost: `${tunnel.host}:443`
-    };
+    return JSON.parse(String(text || ''));
   } catch (err) {
-    warn(`Quick Tunnel setup failed: ${err.message}`);
-    warn('Falling back to direct host invites (may require firewall/NAT config).');
     return null;
   }
+}
+
+function looksLikePong(body) {
+  const parsed = safeJsonParse(body);
+  if (parsed && typeof parsed === 'object' && parsed.pong === true) return true;
+  return String(body || '').includes('"pong":true') || String(body || '').includes('"pong": true');
+}
+
+function fetchUrlText(url, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (err) {
+      reject(new Error('invalid_url'));
+      return;
+    }
+
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.request({
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      method: 'GET',
+      path: parsed.pathname + parsed.search,
+      headers: {
+        'User-Agent': `a2acalling/${process.env.npm_package_version || 'dev'} (setup-check)`
+      },
+      timeout: timeoutMs
+    }, (res) => {
+      let data = '';
+      res.setEncoding('utf8');
+
+      res.on('data', (chunk) => {
+        data += chunk;
+        if (data.length > 1024 * 256) {
+          req.destroy(new Error('response_too_large'));
+        }
+      });
+
+      res.on('end', () => {
+        resolve({
+          statusCode: res.statusCode || 0,
+          headers: res.headers || {},
+          body: data
+        });
+      });
+    });
+
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.end();
+  });
+}
+
+async function probeLocalA2APing(port) {
+  try {
+    const res = await fetchUrlText(`http://127.0.0.1:${port}/api/a2a/ping`, 900);
+    return { ok: looksLikePong(res.body), statusCode: res.statusCode, body: res.body };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : 'request_failed' };
+  }
+}
+
+async function scanPort80() {
+  const { isPortListening, tryBindPort } = require('../src/lib/port-scanner');
+
+  const listening = await isPortListening(80, '127.0.0.1', { timeoutMs: 500 });
+  const bind = await tryBindPort(80, '0.0.0.0');
+  const a2aPing = listening.listening ? await probeLocalA2APing(80) : { ok: false };
+
+  return {
+    listening: Boolean(listening.listening),
+    listeningCode: listening.code,
+    bindOk: Boolean(bind.ok),
+    bindCode: bind.code,
+    a2aPingOk: Boolean(a2aPing.ok),
+    a2aPingStatusCode: a2aPing.statusCode,
+    a2aPingError: a2aPing.error
+  };
+}
+
+async function externalPingCheck(targetUrl) {
+  const providers = [
+    {
+      name: 'allorigins',
+      buildUrl: () => {
+        const u = new URL('https://api.allorigins.win/raw');
+        u.searchParams.set('url', targetUrl);
+        return u.toString();
+      }
+    },
+    {
+      name: 'jina',
+      buildUrl: () => `https://r.jina.ai/${targetUrl}`
+    }
+  ];
+
+  const attempts = [];
+  for (const provider of providers) {
+    const providerUrl = provider.buildUrl();
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const res = await fetchUrlText(providerUrl, 8000);
+      const ok = looksLikePong(res.body);
+      attempts.push({ provider: provider.name, ok, statusCode: res.statusCode });
+      if (ok) {
+        return { ok: true, provider: provider.name, statusCode: res.statusCode, attempts };
+      }
+    } catch (err) {
+      attempts.push({ provider: provider.name, ok: false, error: err && err.message ? err.message : 'request_failed' });
+    }
+  }
+
+  return { ok: false, attempts };
 }
 
 async function install() {
@@ -522,38 +632,83 @@ async function install() {
 
   const localHostname = process.env.HOSTNAME || 'localhost';
 
-  // Port scanning: use explicit port or scan for available one
-  let port;
+  // Networking scan (port 80) + backend port selection.
+  const port80 = await scanPort80();
+  if (port80.a2aPingOk) {
+    log('Port 80 already serves /api/a2a/ping (A2A detected on :80).');
+  } else if (port80.listening) {
+    warn(`Port 80 is already bound (${port80.listeningCode || 'in_use'}). Setup will use an internal port and recommend reverse proxy routing.`);
+  } else if (!port80.bindOk && port80.bindCode === 'EACCES') {
+    warn('Port 80 appears free but is not bindable by this user (EACCES). Setup will use an unprivileged port unless you run with elevated privileges.');
+  } else if (port80.bindOk) {
+    log('Port 80 is bindable by this user (recommended for inbound A2A if you intend to serve directly on :80).');
+  }
+
+  let backendPort = null;
   if (flags.port) {
-    port = String(flags.port);
+    backendPort = Number.parseInt(String(flags.port), 10);
   } else if (process.env.A2A_PORT) {
-    port = String(process.env.A2A_PORT);
+    backendPort = Number.parseInt(String(process.env.A2A_PORT), 10);
   } else {
-    try {
-      const { findAvailablePort } = require('../src/lib/port-scanner');
-      const available = await findAvailablePort([80, 3001, 8080, 8443, 9001]);
-      port = available ? String(available) : '3001';
-      if (available === 80) {
-        log(`Port 80 is available (recommended for inbound A2A connections)`);
-      } else if (available) {
-        log(`Auto-detected available port: ${available}`);
+    if (port80.bindOk && !port80.listening) {
+      backendPort = 80;
+    } else {
+      try {
+        const { findAvailablePort } = require('../src/lib/port-scanner');
+        backendPort = await findAvailablePort([3001, 8080, 8443, 9001]);
+      } catch (e) {
+        backendPort = null;
       }
-    } catch (e) {
-      port = '3001';
+      if (!backendPort) {
+        backendPort = 3001;
+      }
+      log(`Auto-detected available internal port: ${backendPort}`);
     }
   }
-  const backendUrl = flags['dashboard-backend'] || `http://127.0.0.1:${port}`;
+  if (!Number.isFinite(backendPort) || backendPort <= 0 || backendPort > 65535) {
+    backendPort = 3001;
+  }
+
+  const backendUrl = flags['dashboard-backend'] || `http://127.0.0.1:${backendPort}`;
+
+  // Invite host selection: explicit > existing configured public host > auto resolve to external IP.
   const explicitInviteHost = flags.hostname ||
     process.env.A2A_HOSTNAME ||
     process.env.OPENCLAW_HOSTNAME ||
     readExistingConfiguredInviteHost();
-  const quickTunnel = explicitInviteHost ? null : await maybeSetupQuickTunnel(port);
-  const inviteHost = explicitInviteHost || (quickTunnel && quickTunnel.inviteHost) || `${localHostname}:${port}`;
+
+  let inviteHost = explicitInviteHost;
+  let inviteHostWarnings = [];
+
+  if (!inviteHost) {
+    try {
+      const { A2AConfig } = require('../src/lib/config');
+      const { resolveInviteHost } = require('../src/lib/invite-host');
+      const config = new A2AConfig();
+      const inviteDefaultPort = port80.listening ? 80 : backendPort;
+      const resolved = await resolveInviteHost({
+        config,
+        fallbackHost: localHostname,
+        defaultPort: inviteDefaultPort,
+        refreshExternalIp: true
+      });
+      inviteHost = resolved.host;
+      inviteHostWarnings = resolved.warnings || [];
+    } catch (err) {
+      inviteHost = `${localHostname}:${backendPort}`;
+    }
+  }
+
+  for (const w of inviteHostWarnings) {
+    warn(w);
+  }
+
   const forceStandalone = Boolean(flags.standalone) || String(process.env.A2A_FORCE_STANDALONE || '').toLowerCase() === 'true';
   const hasOpenClawBinary = commandExists('openclaw');
   const hasOpenClawConfig = fs.existsSync(OPENCLAW_CONFIG);
   const hasOpenClaw = !forceStandalone && (hasOpenClawBinary || hasOpenClawConfig);
   let standaloneBootstrap = null;
+  const forceHostname = Boolean(flags.hostname || process.env.A2A_HOSTNAME || process.env.OPENCLAW_HOSTNAME) || !explicitInviteHost;
 
   if (hasOpenClaw) {
     // 1. Create skills directory if needed
@@ -571,13 +726,13 @@ async function install() {
     log(`Installed skill to: ${skillDir}`);
 
     // Ensure config and manifest exist even in OpenClaw path
-    ensureConfigAndManifest(inviteHost, port, {
-      forceHostname: Boolean(flags.hostname || process.env.A2A_HOSTNAME || process.env.OPENCLAW_HOSTNAME || quickTunnel)
+    ensureConfigAndManifest(inviteHost, backendPort, {
+      forceHostname
     });
   } else {
     warn('OpenClaw not detected. Enabling standalone A2A bootstrap.');
-    standaloneBootstrap = ensureStandaloneBootstrap(inviteHost, port, {
-      forceHostname: Boolean(flags.hostname || process.env.A2A_HOSTNAME || process.env.OPENCLAW_HOSTNAME || quickTunnel)
+    standaloneBootstrap = ensureStandaloneBootstrap(inviteHost, backendPort, {
+      forceHostname
     });
   }
 
@@ -586,7 +741,7 @@ async function install() {
   let configUpdated = false;
   let gatewayDetected = false;
   let dashboardMode = 'standalone';
-  let dashboardUrl = `http://${localHostname}:${port}/dashboard`;
+  let dashboardUrl = `http://${localHostname}:${backendPort}/dashboard`;
 
   if (config) {
     // Add custom command for each enabled channel
@@ -650,12 +805,76 @@ async function install() {
     ? 'Runtime auto-selects OpenClaw when available and falls back to generic if needed.'
     : 'Runtime defaults to generic fallback (no OpenClaw dependency required).';
 
+  const { splitHostPort, isLocalOrUnroutableHost } = require('../src/lib/invite-host');
+  const inviteParsed = splitHostPort(inviteHost);
+  const invitePort = inviteParsed.port;
+  const inviteScheme = (!invitePort || invitePort === 443) ? 'https' : 'http';
+  const invitePingUrl = `${inviteScheme}://${inviteHost}/api/a2a/ping`;
+  const inviteLooksLocal = isLocalOrUnroutableHost(inviteParsed.hostname);
+  const expectsReverseProxy = Boolean(
+    (invitePort === 80 && backendPort !== 80) ||
+    ((!invitePort || invitePort === 443) && backendPort !== 443)
+  );
+
+  let externalPing = null;
+  if (!inviteLooksLocal && inviteParsed.hostname) {
+    externalPing = await externalPingCheck(invitePingUrl);
+  }
+
   console.log(`
 ${bold('━━━ Server Setup ━━━')}
 
 To receive incoming calls and host A2A APIs:
 
-  ${green(`A2A_HOSTNAME="${inviteHost}" a2a server --port ${port}`)}
+  ${green(`A2A_HOSTNAME="${inviteHost}" a2a server --port ${backendPort}`)}
+
+${bold('━━━ Ingress Setup ━━━')}
+
+Invite host: ${green(inviteHost)}
+Expected ping URL: ${green(invitePingUrl)}
+
+Port 80 scan:
+  ${port80.a2aPingOk
+    ? green('Port 80 responds to /api/a2a/ping (A2A ready on :80)')
+    : port80.listening
+    ? yellow(`Port 80 has a listener (${port80.listeningCode || 'in_use'})`)
+    : port80.bindOk
+    ? green('Port 80 is free and bindable by this user')
+    : yellow(`Port 80 not bindable (${port80.bindCode || 'unknown'})`)}
+
+${expectsReverseProxy
+  ? `Reverse proxy required:
+  Route ${green('/api/a2a/*')} -> ${green(backendUrl)}
+  Route ${green('/a2a/*')} -> ${green(backendUrl.replace(/\/$/, ''))}${green('/dashboard/*')} (optional dashboard)
+
+  Example (Caddy):
+  ${green(`YOUR_DOMAIN {
+    handle /api/a2a/* {
+      reverse_proxy 127.0.0.1:${backendPort}
+    }
+    handle /a2a* {
+      uri replace /a2a /dashboard
+      reverse_proxy 127.0.0.1:${backendPort}
+    }
+  }`)}
+
+  Example (nginx):
+  ${green(`location /api/a2a/ {
+    proxy_pass http://127.0.0.1:${backendPort}/api/a2a/;
+  }
+  location = /a2a { return 301 /a2a/; }
+  location /a2a/ {
+    proxy_pass http://127.0.0.1:${backendPort}/dashboard/;
+  }`)}`
+  : 'Reverse proxy not required for the selected invite host.'}
+
+${bold('━━━ External Ping ━━━')}
+
+${inviteLooksLocal
+  ? yellow('Skipped external ping: invite host looks local/unroutable. Set --hostname to a public endpoint to enable this check.')
+  : externalPing && externalPing.ok
+  ? green(`External ping OK via ${externalPing.provider}`)
+  : yellow(`External ping FAILED (expected if the server is not running yet, or ingress is not publicly reachable).`)}
 
 ${bold('━━━ Dashboard Setup ━━━')}
 
@@ -669,12 +888,6 @@ ${dashboardMode === 'gateway'
 ${bold('━━━ Runtime Setup ━━━')}
 
 ${runtimeLine}
-${quickTunnel
-  ? `Quick Tunnel enabled:
-  ${green(quickTunnel.url)}
-Invites will use: ${green(inviteHost)}
-`
-  : 'Quick Tunnel not enabled (using configured/direct invite host).'}
 ${standaloneBootstrap
   ? `Standalone bridge templates:
   ${green(standaloneBootstrap.turnScript)}
@@ -740,12 +953,11 @@ Usage:
   npx a2acalling server               Start A2A server
 
 Install Options:
-  --hostname <host>          Hostname for invite URLs (skip quick tunnel when set)
+  --hostname <host>          Public hostname for invite URLs (e.g. myserver.com, myserver.com:80)
   --port <port>              A2A server port (default: 3001)
   --gateway-url <url>        Force gateway base URL for printed dashboard link
   --dashboard-backend <url>  Backend URL used by gateway dashboard proxy
   --standalone               Force standalone bootstrap (ignore OpenClaw detection)
-  --no-quick-tunnel          Disable auto quick tunnel for no-DNS environments
 
 Examples:
   npx a2acalling install --hostname myserver.com --port 3001

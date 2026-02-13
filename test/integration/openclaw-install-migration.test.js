@@ -40,7 +40,7 @@ module.exports = function(test, assert, helpers) {
       );
 
       const output = execSync(
-        `node ${path.join(process.cwd(), 'scripts/install-openclaw.js')} install --hostname test-host.local --port 3001 --no-quick-tunnel`,
+        `node ${path.join(process.cwd(), 'scripts/install-openclaw.js')} install --hostname test-host.local --port 3001`,
         {
           encoding: 'utf8',
           env: {

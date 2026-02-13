@@ -170,15 +170,13 @@ async function resolveInviteHostname() {
     const config = new A2AConfig();
     const resolved = await resolveInviteHost({
       config,
-      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001,
-      preferQuickTunnel: true
+      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001
     });
     return resolved;
   } catch (err) {
     return resolveInviteHost({
       fallbackHost: process.env.OPENCLAW_HOSTNAME || process.env.HOSTNAME || 'localhost',
-      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001,
-      preferQuickTunnel: true
+      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001
     });
   }
 }

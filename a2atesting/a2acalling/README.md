@@ -4,7 +4,6 @@ This harness runs end-to-end tests in an ephemeral Docker container using a pack
 
 Lanes:
 - `smoke`: deterministic PR-safe black-box flow (two local A2A servers)
-- `internet`: forced subagent hop + Cloudflare Quick Tunnel round-trip (A->B and B->C both traverse the internet)
 - `public-port`: remote probe lane (GitHub runner calls your server on its real public URL/port; asserts trace logs and forced subagent marker)
 - `nightly-real`: optional real-runtime canary lane (external integration)
 
@@ -13,9 +12,6 @@ Lanes:
 ```bash
 # from repo root
 ./a2atesting/a2acalling/run-lane.sh smoke
-
-# internet round-trip (downloads cloudflared on first run)
-./a2atesting/a2acalling/run-lane.sh internet
 
 # public port probe (requires env vars)
 A2A_PUBLIC_BASE_URL="http://your-public-host:3001" A2A_PUBLIC_ADMIN_TOKEN="..." ./a2atesting/a2acalling/run-lane.sh public-port
@@ -34,7 +30,12 @@ Optional:
 
 ## Required Env (public-port)
 
-- `A2A_PUBLIC_BASE_URL` - public base URL of the server under test (example: `http://your-host:3001` or `https://a2a.example.com`)\n+- `A2A_PUBLIC_ADMIN_TOKEN` - admin token configured on that server (sent as `x-admin-token`)\n+\nOptional:\n+- `A2A_PUBLIC_EXPECT_MARKER` - marker string required in the invoke response (default: `SUBAGENT_OK`)\n+- `A2A_PUBLIC_REQUIRED` - set `1` to fail instead of skipping when vars are missing
+- `A2A_PUBLIC_BASE_URL` - public base URL of the server under test (example: `http://your-host:3001` or `https://a2a.example.com`)
+- `A2A_PUBLIC_ADMIN_TOKEN` - admin token configured on that server (sent as `x-admin-token`)
+
+Optional:
+- `A2A_PUBLIC_EXPECT_MARKER` - marker string required in the invoke response (default: `SUBAGENT_OK`)
+- `A2A_PUBLIC_REQUIRED` - set `1` to fail instead of skipping when vars are missing
 
 ## What Smoke Verifies
 
@@ -44,14 +45,6 @@ Optional:
 4. Traceability APIs: `/logs`, `/logs/trace/:traceId`, `/logs/stats`
 5. DB persistence checks in `a2a-logs.db` and `a2a-conversations.db`
 6. Failure-injection check for invalid token (`TOKEN_INVALID_OR_EXPIRED` + hint)
-
-## What Internet Verifies
-
-Everything in `smoke`, plus:
-
-1. Cloudflare Quick Tunnel internet ingress/egress works
-2. A->B calls traverse the internet (caller uses `https://*.trycloudflare.com/...`)
-3. B->C subagent hop also traverses the internet (bridge calls C via quick tunnel)
 
 ## Notes
 

@@ -87,75 +87,44 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('resolveInviteHost prefers quick tunnel when requested', async () => {
-    tmp = helpers.tmpConfigDir('invite-tunnel');
+  test('resolveInviteHost ignores config-persisted trycloudflare host (legacy) and falls back to external IP', async () => {
+    tmp = helpers.tmpConfigDir('invite-legacy-tunnel');
+    const http = require('http');
+    const path = require('path');
     delete process.env.A2A_HOSTNAME;
-    delete process.env.A2A_DISABLE_QUICK_TUNNEL;
 
-    const quickTunnelPath = require.resolve('../../src/lib/quick-tunnel');
-    const previous = require.cache[quickTunnelPath];
-    require.cache[quickTunnelPath] = {
-      id: quickTunnelPath,
-      filename: quickTunnelPath,
-      loaded: true,
-      exports: {
-        ensureQuickTunnel: async () => ({ host: 'demo.trycloudflare.com' })
-      }
-    };
-
-    delete require.cache[require.resolve('../../src/lib/invite-host')];
-    const { resolveInviteHost } = require('../../src/lib/invite-host');
-    const resolved = await resolveInviteHost({
-      fallbackHost: 'localhost',
-      defaultPort: 3001,
-      preferQuickTunnel: true
+    const server = http.createServer((req, res) => {
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/plain');
+      res.end('203.0.113.7\n');
     });
-    assert.equal(resolved.host, 'demo.trycloudflare.com:443');
-    assert.equal(resolved.source, 'quick_tunnel');
-
-    delete require.cache[quickTunnelPath];
-    if (previous) {
-      require.cache[quickTunnelPath] = previous;
-    }
-    tmp.cleanup();
-  });
-
-  test('resolveInviteHost ignores config-persisted trycloudflare host and refreshes tunnel', async () => {
-    tmp = helpers.tmpConfigDir('invite-tunnel-stale-config');
-    delete process.env.A2A_HOSTNAME;
-    delete process.env.A2A_DISABLE_QUICK_TUNNEL;
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const serviceUrl = `http://127.0.0.1:${addr.port}/`;
 
     delete require.cache[require.resolve('../../src/lib/config')];
     const { A2AConfig } = require('../../src/lib/config');
     const config = new A2AConfig();
     config.setAgent({ hostname: 'stale.trycloudflare.com:443' });
 
-    const quickTunnelPath = require.resolve('../../src/lib/quick-tunnel');
-    const previous = require.cache[quickTunnelPath];
-    require.cache[quickTunnelPath] = {
-      id: quickTunnelPath,
-      filename: quickTunnelPath,
-      loaded: true,
-      exports: {
-        ensureQuickTunnel: async () => ({ host: 'fresh.trycloudflare.com' })
-      }
-    };
-
     delete require.cache[require.resolve('../../src/lib/invite-host')];
     const { resolveInviteHost } = require('../../src/lib/invite-host');
     const resolved = await resolveInviteHost({
       config,
       defaultPort: 3001,
-      preferQuickTunnel: true
+      externalIpServices: [serviceUrl],
+      externalIpTimeoutMs: 1000,
+      externalIpCacheFile: path.join(tmp.dir, 'a2a-external-ip.json')
     });
 
-    assert.equal(resolved.host, 'fresh.trycloudflare.com:443');
-    assert.equal(resolved.source, 'quick_tunnel');
+    assert.equal(resolved.host, '203.0.113.7:3001');
+    assert.equal(resolved.source, 'external_ip');
+    assert.ok(
+      (resolved.warnings || []).some((w) => String(w).includes('Quick Tunnel support was removed')),
+      'should warn about legacy Quick Tunnel hostnames'
+    );
 
-    delete require.cache[quickTunnelPath];
-    if (previous) {
-      require.cache[quickTunnelPath] = previous;
-    }
+    await new Promise((resolve) => server.close(resolve));
     tmp.cleanup();
   });
 };

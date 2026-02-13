@@ -36,9 +36,6 @@ case "$LANE" in
   smoke)
     node "$WORK_DIR/smoke-lane.js" "$REPO_DIR"
     ;;
-  internet)
-    node "$WORK_DIR/internet-lane.js" "$REPO_DIR"
-    ;;
   public-port)
     node "$WORK_DIR/public-port-lane.js" "$REPO_DIR"
     ;;

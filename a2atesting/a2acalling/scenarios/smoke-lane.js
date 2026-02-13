@@ -38,7 +38,6 @@ function startServer(options) {
     ...process.env,
     A2A_RUNTIME: 'generic',
     A2A_RUNTIME_FAILOVER: 'true',
-    A2A_DISABLE_QUICK_TUNNEL: 'true',
     A2A_CONFIG_DIR: options.configDir,
     A2A_HOSTNAME: `127.0.0.1:${options.port}`,
     A2A_PORT: String(options.port),

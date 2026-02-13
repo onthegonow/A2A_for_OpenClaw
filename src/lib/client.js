@@ -5,6 +5,51 @@
 const https = require('https');
 const http = require('http');
 
+function splitHostPort(rawHost) {
+  const host = String(rawHost || '').trim();
+  if (!host) return { hostname: '', port: null };
+
+  // IPv6 in brackets: [::1]:3001
+  const bracketed = host.match(/^\[([^\]]+)\](?::(\d+))?$/);
+  if (bracketed) {
+    return {
+      hostname: bracketed[1],
+      port: bracketed[2] ? Number.parseInt(bracketed[2], 10) : null
+    };
+  }
+
+  // Only treat the last ":" as a port separator when there's exactly one colon.
+  const lastColon = host.lastIndexOf(':');
+  if (lastColon !== -1 && host.indexOf(':') === lastColon) {
+    const maybePort = host.slice(lastColon + 1);
+    if (/^\d+$/.test(maybePort)) {
+      return {
+        hostname: host.slice(0, lastColon),
+        port: Number.parseInt(maybePort, 10)
+      };
+    }
+  }
+
+  return { hostname: host, port: null };
+}
+
+function resolveProtocolAndPort(host) {
+  const parsed = splitHostPort(host);
+  const hostname = parsed.hostname;
+  const hasExplicitPort = Number.isFinite(parsed.port);
+  const isLocalhost = hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname.startsWith('127.');
+
+  const port = hasExplicitPort ? parsed.port : (isLocalhost ? 80 : 443);
+  // Use HTTP for localhost or explicit non-443 ports, HTTPS otherwise.
+  const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
+  const protocol = useHttp ? http : https;
+
+  return { protocol, hostname, port };
+}
+
 class A2AClient {
   constructor(options = {}) {
     this.timeout = options.timeout || 60000;
@@ -50,13 +95,7 @@ class A2AClient {
       timeout_seconds: timeoutSeconds || 60
     });
 
-    const isLocalhost = host === 'localhost' || host.startsWith('localhost:') || host.startsWith('127.');
-    const hasExplicitPort = host.includes(':');
-    const port = hasExplicitPort ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
-    // Use HTTP for localhost or explicit non-443 ports, HTTPS otherwise
-    const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
-    const protocol = useHttp ? http : https;
-    const hostname = host.split(':')[0];
+    const { protocol, hostname, port } = resolveProtocolAndPort(host);
 
     return new Promise((resolve, reject) => {
       const req = protocol.request({
@@ -125,12 +164,7 @@ class A2AClient {
       conversation_id: conversationId
     });
 
-    const isLocalhost = host === 'localhost' || host.startsWith('localhost:') || host.startsWith('127.');
-    const hasExplicitPort = host.includes(':');
-    const port = hasExplicitPort ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
-    const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
-    const protocol = useHttp ? http : https;
-    const hostname = host.split(':')[0];
+    const { protocol, hostname, port } = resolveProtocolAndPort(host);
 
     return new Promise((resolve, reject) => {
       const req = protocol.request({
@@ -187,12 +221,7 @@ class A2AClient {
       ({ host } = endpoint);
     }
 
-    const isLocalhost = host === 'localhost' || host.startsWith('localhost:') || host.startsWith('127.');
-    const hasExplicitPort = host.includes(':');
-    const port = hasExplicitPort ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
-    const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
-    const protocol = useHttp ? http : https;
-    const hostname = host.split(':')[0];
+    const { protocol, hostname, port } = resolveProtocolAndPort(host);
 
     return new Promise((resolve, reject) => {
       const req = protocol.request({
@@ -234,12 +263,7 @@ class A2AClient {
       ({ host } = endpoint);
     }
 
-    const isLocalhost = host === 'localhost' || host.startsWith('localhost:') || host.startsWith('127.');
-    const hasExplicitPort = host.includes(':');
-    const port = hasExplicitPort ? parseInt(host.split(':')[1]) : (isLocalhost ? 80 : 443);
-    const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
-    const protocol = useHttp ? http : https;
-    const hostname = host.split(':')[0];
+    const { protocol, hostname, port } = resolveProtocolAndPort(host);
 
     return new Promise((resolve, reject) => {
       const req = protocol.request({

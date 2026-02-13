@@ -3,9 +3,9 @@ set -euo pipefail
 
 LANE="${1:-smoke}"
 case "$LANE" in
-  smoke|internet|public-port|nightly-real) ;;
+  smoke|public-port|nightly-real) ;;
   *)
-    echo "Usage: $0 <smoke|internet|public-port|nightly-real>"
+    echo "Usage: $0 <smoke|public-port|nightly-real>"
     exit 1
     ;;
 esac

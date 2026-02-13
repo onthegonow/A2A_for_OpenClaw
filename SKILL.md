@@ -53,9 +53,10 @@ Extract: professional context, interests, goals, skills, sensitive areas. Group 
 
 ## Network Ingress (Internet-Facing Invites)
 
-- By default, A2A now prefers a secure Quick Tunnel endpoint for invite URLs when no public hostname is configured.
-- If the owner has custom infrastructure (domain, reverse proxy, managed tunnel), they can set `A2A_HOSTNAME` to their own public endpoint and bypass Quick Tunnel.
-- Managed/domain-specific ingress automation is intentionally not bundled yet. Advanced users can implement it based on their own network and security requirements.
+- A2A does not bundle an auto-tunneling service for internet-facing ingress.
+- For stable internet-facing invites, set `A2A_HOSTNAME` to your public endpoint (domain or public IP).
+- Recommended: run the A2A backend on an internal port and expose it via a reverse proxy on `:443` (HTTPS) or `:80` (HTTP), routing `/api/a2a/*` to the backend.
+- `npx a2acalling setup` inspects port 80 and prints reverse proxy guidance + an external reachability check.
 
 ## Commands
 

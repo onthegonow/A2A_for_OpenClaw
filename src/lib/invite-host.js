@@ -124,10 +124,10 @@ function isPublicIpHostname(hostname) {
   return false;
 }
 
-function isEphemeralTunnelHostname(hostname) {
+function isLegacyTunnelHostname(hostname) {
   const host = String(hostname || '').trim().toLowerCase();
   if (!host) return false;
-  // Quick tunnels (cloudflared) are not stable across restarts.
+  // Legacy: Cloudflare Quick Tunnel hostnames were ephemeral and are now unsupported.
   if (host.endsWith('.trycloudflare.com')) return true;
   return false;
 }
@@ -155,7 +155,8 @@ async function resolveInviteHost(options = {}) {
     : 'default';
 
   const parsed = splitHostPort(candidate);
-  const desiredPort = parsed.port ||
+  const candidateIsLegacyTunnel = candidateSource !== 'env' && isLegacyTunnelHostname(parsed.hostname);
+  const desiredPort = (candidateIsLegacyTunnel ? null : parsed.port) ||
     Number.parseInt(String(options.defaultPort || ''), 10) ||
     readIntEnv('PORT') ||
     readIntEnv('A2A_PORT') ||
@@ -169,18 +170,17 @@ async function resolveInviteHost(options = {}) {
     ? options.externalIpTtlMs
     : undefined;
 
-  const preferQuickTunnel = Boolean(options.preferQuickTunnel) ||
-    String(process.env.A2A_PREFER_QUICK_TUNNEL || '').toLowerCase() === 'true';
-  const quickTunnelDisabled = Boolean(options.disableQuickTunnel) ||
-    String(process.env.A2A_DISABLE_QUICK_TUNNEL || '').toLowerCase() === 'true';
-
-  // If a previous run persisted an ephemeral tunnel hostname into config (e.g. trycloudflare),
-  // treat it like "unroutable" so we always refresh via tunnel/external IP instead of returning
-  // a stale endpoint.
-  const candidateIsEphemeralTunnel = candidateSource !== 'env' && isEphemeralTunnelHostname(parsed.hostname);
+  // If a previous run persisted a legacy Cloudflare Quick Tunnel hostname into config (e.g. trycloudflare),
+  // treat it like "unroutable" so we don't emit stale/unsupported invite endpoints.
+  if (candidateIsLegacyTunnel) {
+    warnings.push(
+      `Detected legacy Quick Tunnel hostname "${candidateHostWithPort}". Quick Tunnel support was removed. ` +
+      `Set A2A_HOSTNAME="your-public-host:port" (or wire a reverse proxy) to enable internet-facing invites.`
+    );
+  }
 
   const shouldReplaceWithExternalIp = isLocalOrUnroutableHost(parsed.hostname) ||
-    candidateIsEphemeralTunnel || (
+    candidateIsLegacyTunnel || (
       options.refreshExternalIp && isPublicIpHostname(parsed.hostname)
     );
 
@@ -191,28 +191,6 @@ async function resolveInviteHost(options = {}) {
       originalHost: candidateHostWithPort,
       warnings
     };
-  }
-
-  if (preferQuickTunnel && !quickTunnelDisabled) {
-    try {
-      const { ensureQuickTunnel } = require('./quick-tunnel');
-      const tunnel = await ensureQuickTunnel({
-        localPort: desiredPort
-      });
-      if (tunnel && tunnel.host) {
-        const tunnelParsed = splitHostPort(tunnel.host);
-        const finalHost = formatHostPort(tunnelParsed.hostname, tunnelParsed.port || 443);
-        warnings.push(`Using secure Quick Tunnel endpoint "${finalHost}" for internet-facing invites.`);
-        return {
-          host: finalHost,
-          source: 'quick_tunnel',
-          originalHost: candidateHostWithPort,
-          warnings
-        };
-      }
-    } catch (err) {
-      warnings.push(`Quick Tunnel unavailable (${err.message}). Falling back to external IP host detection.`);
-    }
   }
 
   const external = await getExternalIp({
