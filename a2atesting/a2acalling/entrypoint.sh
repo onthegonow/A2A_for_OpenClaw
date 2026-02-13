@@ -39,6 +39,9 @@ case "$LANE" in
   internet)
     node "$WORK_DIR/internet-lane.js" "$REPO_DIR"
     ;;
+  public-port)
+    node "$WORK_DIR/public-port-lane.js" "$REPO_DIR"
+    ;;
   nightly-real)
     node "$WORK_DIR/nightly-real-lane.js" "$REPO_DIR"
     ;;

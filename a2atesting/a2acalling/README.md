@@ -5,6 +5,7 @@ This harness runs end-to-end tests in an ephemeral Docker container using a pack
 Lanes:
 - `smoke`: deterministic PR-safe black-box flow (two local A2A servers)
 - `internet`: forced subagent hop + Cloudflare Quick Tunnel round-trip (A->B and B->C both traverse the internet)
+- `public-port`: remote probe lane (GitHub runner calls your server on its real public URL/port; asserts trace logs and forced subagent marker)
 - `nightly-real`: optional real-runtime canary lane (external integration)
 
 ## Run Locally
@@ -15,6 +16,9 @@ Lanes:
 
 # internet round-trip (downloads cloudflared on first run)
 ./a2atesting/a2acalling/run-lane.sh internet
+
+# public port probe (requires env vars)
+A2A_PUBLIC_BASE_URL="http://your-public-host:3001" A2A_PUBLIC_ADMIN_TOKEN="..." ./a2atesting/a2acalling/run-lane.sh public-port
 
 # nightly-real (requires env vars)
 A2A_REAL_INVITE_URL="a2a://host/token" ./a2atesting/a2acalling/run-lane.sh nightly-real
@@ -27,6 +31,10 @@ A2A_REAL_INVITE_URL="a2a://host/token" ./a2atesting/a2acalling/run-lane.sh night
 Optional:
 - `A2A_REAL_MESSAGE` - custom prompt message
 - `A2A_REAL_TIMEOUT_MS` - client timeout override
+
+## Required Env (public-port)
+
+- `A2A_PUBLIC_BASE_URL` - public base URL of the server under test (example: `http://your-host:3001` or `https://a2a.example.com`)\n+- `A2A_PUBLIC_ADMIN_TOKEN` - admin token configured on that server (sent as `x-admin-token`)\n+\nOptional:\n+- `A2A_PUBLIC_EXPECT_MARKER` - marker string required in the invoke response (default: `SUBAGENT_OK`)\n+- `A2A_PUBLIC_REQUIRED` - set `1` to fail instead of skipping when vars are missing
 
 ## What Smoke Verifies
 

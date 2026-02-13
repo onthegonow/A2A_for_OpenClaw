@@ -15,6 +15,7 @@ on:
         options:
           - smoke
           - internet
+          - public-port
           - nightly-real
   schedule:
     - cron: "23 3 * * *"
@@ -48,3 +49,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run internet lane
         run: ./a2atesting/a2acalling/run-lane.sh internet
+
+  public-port:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'public-port'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run public-port lane
+        env:
+          A2A_PUBLIC_BASE_URL: ${{ secrets.A2A_PUBLIC_BASE_URL }}
+          A2A_PUBLIC_ADMIN_TOKEN: ${{ secrets.A2A_PUBLIC_ADMIN_TOKEN }}
+          A2A_PUBLIC_EXPECT_MARKER: ${{ secrets.A2A_PUBLIC_EXPECT_MARKER }}
+          A2A_PUBLIC_REQUIRED: ${{ secrets.A2A_PUBLIC_REQUIRED }}
+        run: ./a2atesting/a2acalling/run-lane.sh public-port

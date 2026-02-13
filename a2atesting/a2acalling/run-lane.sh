@@ -3,9 +3,9 @@ set -euo pipefail
 
 LANE="${1:-smoke}"
 case "$LANE" in
-  smoke|internet|nightly-real) ;;
+  smoke|internet|public-port|nightly-real) ;;
   *)
-    echo "Usage: $0 <smoke|internet|nightly-real>"
+    echo "Usage: $0 <smoke|internet|public-port|nightly-real>"
     exit 1
     ;;
 esac
@@ -32,5 +32,9 @@ docker run --rm \
   -e A2A_REAL_MESSAGE="${A2A_REAL_MESSAGE:-}" \
   -e A2A_REAL_TIMEOUT_MS="${A2A_REAL_TIMEOUT_MS:-}" \
   -e A2A_REAL_REQUIRED="${A2A_REAL_REQUIRED:-}" \
+  -e A2A_PUBLIC_BASE_URL="${A2A_PUBLIC_BASE_URL:-}" \
+  -e A2A_PUBLIC_ADMIN_TOKEN="${A2A_PUBLIC_ADMIN_TOKEN:-}" \
+  -e A2A_PUBLIC_REQUIRED="${A2A_PUBLIC_REQUIRED:-}" \
+  -e A2A_PUBLIC_EXPECT_MARKER="${A2A_PUBLIC_EXPECT_MARKER:-}" \
   -v "$ROOT_DIR:/workspace/a2acalling:rw" \
   "$IMAGE_TAG"
