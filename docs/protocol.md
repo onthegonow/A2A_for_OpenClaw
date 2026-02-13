@@ -259,13 +259,16 @@ Owner can reply to inject into the conversation.
 
 ## OpenClaw Integration
 
-### Gateway Route Registration
+### Gateway Proxy (Recommended)
 
-Add to gateway routes:
-```javascript
-const a2a = require('./skills/a2a/scripts/server');
-app.use('/api/a2a', a2a);
-```
+Run A2A Calling as its own server (separate process), and let the OpenClaw gateway proxy to it:
+
+- A2A backend (separate): `a2a server --port 3001`
+- OpenClaw gateway path(s):
+  - `/a2a` proxies to the A2A dashboard UI (`/dashboard`)
+  - `/api/a2a/*` proxies to the A2A backend API
+
+This keeps the A2A server decoupled from OpenClaw's gateway runtime while still allowing the gateway to be the single public entry point.
 
 ### Agent Context
 

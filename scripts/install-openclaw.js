@@ -4,7 +4,7 @@
  *
  * Supports automatic setup:
  * - If OpenClaw gateway is detected, install a gateway HTTP proxy plugin
- *   so dashboard is accessible at /a2a on gateway.
+ *   so dashboard and A2A API are accessible at /a2a and /api/a2a on gateway.
  * - If gateway is not detected, dashboard runs on standalone A2A server.
  * - If OpenClaw is not installed, bootstrap standalone runtime templates.
  * - If no public hostname is configured, default to secure Quick Tunnel
@@ -287,8 +287,8 @@ echo "a2a notify: $payload" >&2
 
 const DASHBOARD_PLUGIN_MANIFEST = {
   id: DASHBOARD_PLUGIN_ID,
-  name: 'A2A Dashboard Proxy',
-  description: 'Proxy A2A dashboard routes through OpenClaw gateway',
+  name: 'A2A Gateway Proxy',
+  description: 'Proxy A2A API + dashboard routes through OpenClaw gateway (backend runs separately)',
   version: '1.0.0',
   configSchema: {
     type: 'object',
@@ -309,7 +309,7 @@ import https from "node:https";
 
 const PLUGIN_ID = "a2a-dashboard-proxy";
 const UI_PREFIX = "/a2a";
-const API_PREFIX = "/api/a2a/dashboard";
+const API_PREFIX = "/api/a2a";
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
@@ -364,8 +364,8 @@ function rewriteUiPath(pathname: string): string {
 
 const plugin = {
   id: PLUGIN_ID,
-  name: "A2A Dashboard Proxy",
-  description: "Proxy A2A dashboard routes through OpenClaw gateway",
+  name: "A2A Gateway Proxy",
+  description: "Proxy A2A API + dashboard routes through OpenClaw gateway (backend runs separately)",
   configSchema: {
     type: "object" as const,
     additionalProperties: false,
@@ -426,8 +426,8 @@ const plugin = {
         if (isApi) {
           sendJson(res, 502, {
             success: false,
-            error: "dashboard_backend_unreachable",
-            message: \`Could not reach A2A server at \${backend}: \${err.message}\`
+            error: "a2a_backend_unreachable",
+            message: \`Could not reach A2A backend at \${backend}: \${err.message}\`
           });
           return;
         }
@@ -663,7 +663,7 @@ Mode: ${dashboardMode === 'gateway' ? green('gateway') : yellow('standalone')}
 Dashboard URL: ${green(dashboardUrl)}
 
 ${dashboardMode === 'gateway'
-  ? `Gateway path /a2a is now proxied to ${backendUrl}.`
+  ? `Gateway paths /a2a and /api/a2a/* are now proxied to ${backendUrl}.`
   : 'No gateway detected. Dashboard is served directly from the A2A server.'}
 
 ${bold('━━━ Runtime Setup ━━━')}

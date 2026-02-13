@@ -74,7 +74,7 @@ node scripts/install-openclaw.js setup
 
 Setup behavior:
 - Runtime auto-detects OpenClaw when available and falls back to generic mode if unavailable.
-- If OpenClaw gateway is detected, dashboard is exposed on gateway at `/a2a` (proxied to A2A backend).
+- If OpenClaw gateway is detected, dashboard is exposed on gateway at `/a2a` and A2A API at `/api/a2a/*` (proxied to A2A backend).
 - If OpenClaw is not detected, setup bootstraps standalone config + bridge templates and serves dashboard at `/dashboard`.
 - If no public hostname is configured, setup defaults to secure Cloudflare Quick Tunnel for internet-facing invites.
 - Setup prints the exact dashboard URL at the end.
