@@ -494,10 +494,6 @@ function readExistingConfiguredInviteHost() {
     if (!parsed.hostname || isLocalOrUnroutableHost(parsed.hostname)) {
       return '';
     }
-    // Legacy: Cloudflare quick tunnels are ephemeral and no longer supported.
-    if (String(parsed.hostname).toLowerCase().endsWith('.trycloudflare.com')) {
-      return '';
-    }
     return existing;
   } catch (err) {
     return '';

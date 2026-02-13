@@ -124,14 +124,6 @@ function isPublicIpHostname(hostname) {
   return false;
 }
 
-function isLegacyTunnelHostname(hostname) {
-  const host = String(hostname || '').trim().toLowerCase();
-  if (!host) return false;
-  // Legacy: Cloudflare Quick Tunnel hostnames were ephemeral and are now unsupported.
-  if (host.endsWith('.trycloudflare.com')) return true;
-  return false;
-}
-
 async function resolveInviteHost(options = {}) {
   const config = options.config || null;
 
@@ -155,8 +147,7 @@ async function resolveInviteHost(options = {}) {
     : 'default';
 
   const parsed = splitHostPort(candidate);
-  const candidateIsLegacyTunnel = candidateSource !== 'env' && isLegacyTunnelHostname(parsed.hostname);
-  const desiredPort = (candidateIsLegacyTunnel ? null : parsed.port) ||
+  const desiredPort = parsed.port ||
     Number.parseInt(String(options.defaultPort || ''), 10) ||
     readIntEnv('PORT') ||
     readIntEnv('A2A_PORT') ||
@@ -170,17 +161,8 @@ async function resolveInviteHost(options = {}) {
     ? options.externalIpTtlMs
     : undefined;
 
-  // If a previous run persisted a legacy Cloudflare Quick Tunnel hostname into config (e.g. trycloudflare),
-  // treat it like "unroutable" so we don't emit stale/unsupported invite endpoints.
-  if (candidateIsLegacyTunnel) {
-    warnings.push(
-      `Detected legacy Quick Tunnel hostname "${candidateHostWithPort}". Quick Tunnel support was removed. ` +
-      `Set A2A_HOSTNAME="your-public-host:port" (or wire a reverse proxy) to enable internet-facing invites.`
-    );
-  }
-
   const shouldReplaceWithExternalIp = isLocalOrUnroutableHost(parsed.hostname) ||
-    candidateIsLegacyTunnel || (
+    (
       options.refreshExternalIp && isPublicIpHostname(parsed.hostname)
     );
 
