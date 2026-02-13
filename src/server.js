@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { createRoutes } = require('./routes/a2a');
 const { createDashboardApiRouter, createDashboardUiRouter } = require('./routes/dashboard');
+const { createCallbookRouter } = require('./routes/callbook');
 const { TokenStore } = require('./lib/tokens');
 const { createRuntimeAdapter } = require('./lib/runtime-adapter');
 const { getTopicsForTier, formatTopicsForPrompt, loadManifest } = require('./lib/disclosure');
@@ -714,6 +715,9 @@ app.use('/dashboard', createDashboardUiRouter({
   tokenStore,
   logger: logger.child({ component: 'a2a.dashboard' })
 }));
+
+// Callbook Remote pairing flow (public install page).
+app.use('/callbook', createCallbookRouter());
 
 app.use('/api/a2a', createRoutes({
   tokenStore,

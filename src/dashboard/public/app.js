@@ -1,5 +1,7 @@
 const state = {
   settings: null,
+  dashboardStatus: null,
+  callbookDevices: [],
   contacts: [],
   calls: [],
   invites: [],
@@ -58,6 +60,32 @@ function esc(text) {
     .replaceAll("'", '&#039;');
 }
 
+async function copyText(value) {
+  const text = String(value || '');
+  if (!text) return false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (err) {
+    // fall back
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
 function bindTabs() {
   const activateTab = (tab, options = {}) => {
     const target = String(tab || '').replace(/^#/, '').trim();
@@ -102,8 +130,25 @@ function renderContacts() {
       <td>${contact.status || '-'}</td>
       <td>${contact.call_count || 0}</td>
       <td>${(contact.last_summary || contact.last_owner_summary || '-').slice(0, 120)}</td>
+      <td><button data-remove="${esc(contact.id)}">Remove</button></td>
     `;
     tr.addEventListener('click', () => loadCallsForContact(contact.id, contact.name));
+    const removeBtn = tr.querySelector('button[data-remove]');
+    if (removeBtn) {
+      removeBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        removeBtn.disabled = true;
+        try {
+          await request(`/contacts/${encodeURIComponent(contact.id)}`, { method: 'DELETE' });
+          showNotice('Contact removed');
+          await loadContacts();
+        } catch (err) {
+          showNotice(err.message);
+          removeBtn.disabled = false;
+        }
+      });
+    }
     tbody.appendChild(tr);
   });
 }
@@ -112,6 +157,39 @@ async function loadContacts() {
   const payload = await request('/contacts');
   state.contacts = payload.contacts || [];
   renderContacts();
+}
+
+function bindContactsActions() {
+  const form = document.getElementById('add-contact-form');
+  if (!form) return;
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const url = document.getElementById('add-contact-url').value.trim();
+    const name = document.getElementById('add-contact-name').value.trim();
+    const owner = document.getElementById('add-contact-owner').value.trim();
+    const tagsRaw = document.getElementById('add-contact-tags').value.trim();
+    const tags = tagsRaw
+      ? tagsRaw.split(',').map(v => v.trim()).filter(Boolean).slice(0, 30)
+      : [];
+
+    try {
+      await request('/contacts', {
+        method: 'POST',
+        body: JSON.stringify({
+          invite_url: url,
+          name: name || undefined,
+          owner: owner || undefined,
+          tags
+        })
+      });
+      showNotice('Contact added');
+      form.reset();
+      await loadContacts();
+    } catch (err) {
+      showNotice(err.message);
+    }
+  });
 }
 
 function renderCalls() {
@@ -428,6 +506,146 @@ async function loadSettings() {
   document.getElementById('defaults-max-calls').value = payload.defaults?.maxCalls || 100;
 }
 
+function renderCallbookStatus() {
+  const el = document.getElementById('callbook-status');
+  if (!el) return;
+
+  const s = state.dashboardStatus;
+  if (!s) {
+    el.textContent = 'Loading…';
+    return;
+  }
+
+  const warnings = Array.isArray(s.warnings) ? s.warnings : [];
+  const publicUrl = s.public_dashboard_url || '-';
+  const enabled = Boolean(s.callbook && s.callbook.enabled);
+  const deviceCount = s.callbook && Number.isFinite(s.callbook.device_count) ? s.callbook.device_count : 0;
+
+  el.innerHTML = `
+    <div><strong>Public dashboard URL:</strong> <span class="mono">${esc(publicUrl)}</span></div>
+    <div><strong>Callbook session storage:</strong> ${enabled ? 'enabled' : 'disabled'}</div>
+    <div><strong>Paired devices:</strong> ${deviceCount}</div>
+    ${warnings.length ? `<div style="margin-top:0.5rem;"><strong>Warnings:</strong><br>${warnings.map(w => esc(w)).join('<br>')}</div>` : ''}
+  `;
+}
+
+async function loadDashboardStatus() {
+  const payload = await request('/status');
+  state.dashboardStatus = payload;
+  renderCallbookStatus();
+}
+
+function renderCallbookDevices() {
+  const tbody = document.querySelector('#callbook-devices-table tbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  const devices = Array.isArray(state.callbookDevices) ? state.callbookDevices : [];
+  if (devices.length === 0) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td colspan="6">No devices found.</td>';
+    tbody.appendChild(tr);
+    return;
+  }
+
+  devices.forEach(dev => {
+    const tr = document.createElement('tr');
+    const revoked = Boolean(dev.revoked_at);
+    const sessions = dev.active_sessions ?? '-';
+    tr.innerHTML = `
+      <td>${esc(dev.label || dev.id || '-')}</td>
+      <td>${esc(fmtDate(dev.created_at))}</td>
+      <td>${esc(fmtDate(dev.last_used_at))}</td>
+      <td>${esc(String(sessions))}</td>
+      <td>${revoked ? esc(fmtDate(dev.revoked_at)) : '-'}</td>
+      <td>
+        <button data-revoke="${esc(dev.id)}" ${revoked ? 'disabled' : ''}>Revoke</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll('button[data-revoke]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const deviceId = btn.dataset.revoke;
+      if (!deviceId) return;
+      btn.disabled = true;
+      try {
+        await request(`/callbook/devices/${encodeURIComponent(deviceId)}/revoke`, { method: 'POST' });
+        showNotice('Device revoked');
+        await loadCallbookDevices();
+      } catch (err) {
+        showNotice(err.message);
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+async function loadCallbookDevices() {
+  const payload = await request('/callbook/devices?include_revoked=true');
+  state.callbookDevices = payload.devices || [];
+  renderCallbookDevices();
+}
+
+function bindCallbookActions() {
+  const form = document.getElementById('callbook-provision-form');
+  if (!form) return;
+
+  const urlEl = document.getElementById('callbook-install-url');
+  const labelEl = document.getElementById('callbook-label');
+  const warningsEl = document.getElementById('callbook-warnings');
+
+  document.getElementById('callbook-refresh')?.addEventListener('click', () => {
+    Promise.all([loadDashboardStatus(), loadCallbookDevices()]).catch(err => showNotice(err.message));
+  });
+
+  document.getElementById('callbook-refresh-devices')?.addEventListener('click', () => {
+    loadCallbookDevices().catch(err => showNotice(err.message));
+  });
+
+  document.getElementById('callbook-logout')?.addEventListener('click', async () => {
+    try {
+      await request('/callbook/logout', { method: 'POST' });
+      showNotice('Logged out (cookie cleared)');
+    } catch (err) {
+      showNotice(err.message);
+    }
+  });
+
+  document.getElementById('callbook-copy-url')?.addEventListener('click', async () => {
+    const ok = await copyText(urlEl?.value || '');
+    showNotice(ok ? 'Copied' : 'Copy failed');
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (warningsEl) warningsEl.textContent = '';
+    if (urlEl) urlEl.value = '';
+
+    const body = {
+      label: labelEl ? labelEl.value : 'Callbook Remote',
+      ttl_hours: 24
+    };
+
+    try {
+      const result = await request('/callbook/provision', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+      if (urlEl) urlEl.value = result.install_url || '';
+      const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+      const expiresAt = result.expires_at ? `Expires: ${fmtDate(result.expires_at)}` : '';
+      if (warningsEl) {
+        warningsEl.textContent = [expiresAt, ...warnings].filter(Boolean).join('\n');
+      }
+      showNotice('Install link created');
+    } catch (err) {
+      showNotice(err.message);
+    }
+  });
+}
+
 function renderInvites() {
   const tbody = document.querySelector('#invites-table tbody');
   tbody.innerHTML = '';
@@ -518,12 +736,23 @@ function bindRefreshButtons() {
 
 async function bootstrap() {
   bindTabs();
+  bindContactsActions();
   bindSettingsActions();
+  bindCallbookActions();
   bindInviteActions();
   bindRefreshButtons();
 
   try {
-    await Promise.all([loadSettings(), loadContacts(), loadCalls(), loadInvites(), loadLogStats(), loadLogs()]);
+    await Promise.all([
+      loadSettings(),
+      loadDashboardStatus(),
+      loadCallbookDevices(),
+      loadContacts(),
+      loadCalls(),
+      loadInvites(),
+      loadLogStats(),
+      loadLogs()
+    ]);
     showNotice('Dashboard loaded');
   } catch (err) {
     showNotice(err.message);

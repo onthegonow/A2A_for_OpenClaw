@@ -16,6 +16,7 @@ const { ConversationStore } = require('../lib/conversations');
 const { A2AConfig } = require('../lib/config');
 const { loadManifest, saveManifest } = require('../lib/disclosure');
 const { resolveInviteHost } = require('../lib/invite-host');
+const { CallbookStore } = require('../lib/callbook');
 const { createLogger } = require('../lib/logger');
 
 const DASHBOARD_STATIC_DIR = path.join(__dirname, '..', 'dashboard', 'public');
@@ -26,6 +27,63 @@ function isLoopbackAddress(ip) {
     return true;
   }
   return ip.startsWith('::ffff:127.');
+}
+
+function parseCookieHeader(headerValue) {
+  const raw = String(headerValue || '').trim();
+  if (!raw) return {};
+  const cookies = {};
+  for (const part of raw.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (!key) continue;
+    cookies[key] = decodeURIComponent(value);
+  }
+  return cookies;
+}
+
+function isDirectLocalRequest(req) {
+  const ip = (req && req.socket && req.socket.remoteAddress) ? req.socket.remoteAddress : req.ip;
+  if (!isLoopbackAddress(ip)) return false;
+  const host = String(req.headers.host || '').toLowerCase();
+  const isLocalHost = host.startsWith('localhost') ||
+    host.startsWith('127.0.0.1') ||
+    host.startsWith('[::1]') ||
+    host.startsWith('::1');
+  if (!isLocalHost) return false;
+  // Avoid treating proxy-forwarded traffic as "local".
+  const forwarded = req.headers['x-forwarded-for'] ||
+    req.headers['x-forwarded-proto'] ||
+    req.headers['x-forwarded-host'] ||
+    req.headers['cf-connecting-ip'] ||
+    req.headers['x-forwarded-by'];
+  if (forwarded) return false;
+  return true;
+}
+
+function isHttpsRequest(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  if (proto === 'https') return true;
+  if (req && req.socket && req.socket.encrypted) return true;
+  return false;
+}
+
+function buildSetCookie(name, value, options = {}) {
+  const parts = [];
+  parts.push(`${name}=${encodeURIComponent(String(value || ''))}`);
+  parts.push('Path=/');
+  if (options.httpOnly !== false) parts.push('HttpOnly');
+  if (options.sameSite) parts.push(`SameSite=${options.sameSite}`);
+  if (options.secure) parts.push('Secure');
+  if (Number.isFinite(options.maxAgeSeconds)) {
+    parts.push(`Max-Age=${Math.max(0, Math.floor(options.maxAgeSeconds))}`);
+  }
+  return parts.join('; ');
 }
 
 function sanitizeString(value, maxLength = 200) {
@@ -108,6 +166,7 @@ function buildContext(options = {}) {
   const tokenStore = options.tokenStore || new TokenStore();
   const config = options.config || new A2AConfig();
   const logger = options.logger || createLogger({ component: 'a2a.dashboard' });
+  const callbookStore = options.callbookStore || new CallbookStore(tokenStore.configDir);
   let convStore = options.convStore || null;
   if (!convStore) {
     try {
@@ -124,6 +183,7 @@ function buildContext(options = {}) {
     tokenStore,
     config,
     convStore,
+    callbookStore,
     logger,
     staticDir: DASHBOARD_STATIC_DIR
   };
@@ -165,24 +225,65 @@ function resolveConversationContact(conversation, contactIndex) {
   return null;
 }
 
-function ensureDashboardAccess(req, res, next) {
-  const adminToken = process.env.A2A_ADMIN_TOKEN;
-  const headerToken = req.headers['x-admin-token'];
-  const queryToken = req.query?.admin_token;
-  if (isLoopbackAddress(req.ip)) {
-    return next();
-  }
-  if (!adminToken) {
+function makeEnsureDashboardAccess(context) {
+  return function ensureDashboardAccess(req, res, next) {
+    const adminToken = process.env.A2A_ADMIN_TOKEN;
+    const headerToken = req.headers['x-admin-token'];
+    const queryToken = req.query?.admin_token;
+
+    if (isDirectLocalRequest(req)) {
+      return next();
+    }
+
+    if (adminToken && (headerToken === adminToken || queryToken === adminToken)) {
+      return next();
+    }
+
+    const cookies = parseCookieHeader(req.headers.cookie || '');
+    const sessionToken = cookies.a2a_callbook_session || null;
+    if (sessionToken && context.callbookStore && context.callbookStore.isAvailable()) {
+      const session = context.callbookStore.validateSession(sessionToken);
+      if (session && session.valid) {
+        req.callbook = session;
+        return next();
+      }
+    }
+
+    const wantsHtml = String(req.headers.accept || '').includes('text/html');
+    if (wantsHtml) {
+      return res.status(401).send(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>A2A Dashboard</title>
+  </head>
+  <body style="font-family: system-ui, -apple-system, Segoe UI, sans-serif; padding: 2rem;">
+    <h1>A2A Dashboard Locked</h1>
+    <p>This dashboard requires owner access.</p>
+    <ul>
+      <li>Local access: open <code>http://127.0.0.1:PORT/dashboard/</code> on the server</li>
+      <li>Remote access: generate a Callbook Remote install link on the server, then open it on your Mac</li>
+      <li>Break-glass: set <code>A2A_ADMIN_TOKEN</code> and send <code>x-admin-token</code> header</li>
+    </ul>
+  </body>
+</html>`);
+    }
+
+    if (!adminToken && !(context.callbookStore && context.callbookStore.isAvailable())) {
+      return res.status(401).json({
+        success: false,
+        error: 'admin_token_required',
+        message: 'Set A2A_ADMIN_TOKEN (or enable callbook session storage) to access dashboard from non-local addresses'
+      });
+    }
+
     return res.status(401).json({
       success: false,
-      error: 'admin_token_required',
-      message: 'Set A2A_ADMIN_TOKEN to access dashboard from non-local addresses'
+      error: 'unauthorized',
+      message: 'Admin token or callbook session required'
     });
-  }
-  if (headerToken === adminToken || queryToken === adminToken) {
-    return next();
-  }
-  return res.status(401).json({ success: false, error: 'unauthorized', message: 'Admin token required' });
+  };
 }
 
 function summarizeDebugLogs(logs) {
@@ -252,17 +353,190 @@ function createDashboardApiRouter(options = {}) {
   const router = express.Router();
   const context = buildContext(options);
   router.use(express.json());
+  const ensureDashboardAccess = makeEnsureDashboardAccess(context);
+
+  // Callbook Remote: exchange a short-lived provisioning code for a long-lived session cookie.
+  // This route must be reachable BEFORE dashboard access is established.
+  router.post('/callbook/exchange', (req, res) => {
+    const body = req.body || {};
+    const code = sanitizeString(body.code || '', 500);
+    const label = sanitizeString(body.label || '', 120) || null;
+
+    if (!context.callbookStore || !context.callbookStore.isAvailable()) {
+      return res.status(500).json({
+        success: false,
+        error: 'callbook_storage_unavailable',
+        message: 'Callbook session storage is not available on this server.',
+        hint: context.callbookStore ? context.callbookStore.getDbError() : 'missing_callbook_store'
+      });
+    }
+
+    const result = context.callbookStore.exchangeProvisionCode(code, { label });
+    if (!result.success) {
+      return res.status(401).json({
+        success: false,
+        error: result.error || 'invalid_code',
+        message: 'Callbook install code is invalid, expired, or already used.'
+      });
+    }
+
+    // "Never expires" in DB; for browsers we set a very long cookie lifetime.
+    // (Browsers may still evict cookies; owner can always re-provision.)
+    const maxAgeSeconds = 10 * 365 * 24 * 60 * 60; // ~10 years
+    const cookie = buildSetCookie('a2a_callbook_session', result.sessionToken, {
+      httpOnly: true,
+      sameSite: 'Lax',
+      secure: isHttpsRequest(req),
+      maxAgeSeconds
+    });
+    res.setHeader('Set-Cookie', cookie);
+
+    return res.json({
+      success: true,
+      device: result.device,
+      dashboard_path: '/dashboard/'
+    });
+  });
+
+  // All other dashboard API routes require owner access.
   router.use(ensureDashboardAccess);
 
-  router.get('/status', (req, res) => {
+  router.get('/status', async (req, res) => {
     context.logger.debug('Dashboard status requested', { event: 'dashboard_status' });
-    res.json({
+    const refreshIp = String(req.query.refresh_ip || 'false') === 'true';
+    let resolvedHost = null;
+    let warnings = [];
+    try {
+      const resolved = await resolveInviteHost({
+        config: context.config,
+        fallbackHost: req.headers.host || process.env.HOSTNAME || 'localhost',
+        defaultPort: process.env.PORT || process.env.A2A_PORT || 3001,
+        refreshExternalIp: refreshIp,
+        forceRefreshExternalIp: refreshIp
+      });
+      resolvedHost = resolved.host;
+      warnings = resolved.warnings || [];
+    } catch (err) {
+      // Non-fatal: still return base status.
+    }
+
+    const schemeOverride = String(process.env.A2A_PUBLIC_SCHEME || '').trim();
+    const inferredScheme = schemeOverride || (isHttpsRequest(req) ? 'https' : 'http');
+    const publicBaseUrl = resolvedHost ? `${inferredScheme}://${resolvedHost}` : null;
+
+    const devices = (context.callbookStore && context.callbookStore.isAvailable())
+      ? context.callbookStore.listDevices({ includeRevoked: true, limit: 200 }).devices
+      : [];
+
+    return res.json({
       success: true,
       dashboard: true,
       conversations_enabled: Boolean(context.convStore),
       config_file: require('../lib/config').CONFIG_FILE,
-      manifest_file: require('../lib/disclosure').MANIFEST_FILE
+      manifest_file: require('../lib/disclosure').MANIFEST_FILE,
+      public_base_url: publicBaseUrl,
+      public_dashboard_url: publicBaseUrl ? `${publicBaseUrl}/dashboard/` : null,
+      callbook_install_base: publicBaseUrl ? `${publicBaseUrl}/callbook/install` : null,
+      warnings,
+      callbook: {
+        enabled: Boolean(context.callbookStore && context.callbookStore.isAvailable()),
+        device_count: Array.isArray(devices) ? devices.length : 0
+      }
     });
+  });
+
+  // Callbook Remote: create a short-lived install link (24h by default).
+  router.post('/callbook/provision', async (req, res) => {
+    const body = req.body || {};
+    const label = sanitizeString(body.label || 'Callbook Remote', 120) || null;
+    const ttlHoursRaw = body.ttl_hours !== undefined ? body.ttl_hours : body.ttlHours;
+    const ttlHours = Math.max(1, Math.min(168, Number.parseInt(String(ttlHoursRaw || '24'), 10) || 24));
+    const ttlMs = ttlHours * 60 * 60 * 1000;
+
+    if (!context.callbookStore || !context.callbookStore.isAvailable()) {
+      return res.status(500).json({
+        success: false,
+        error: 'callbook_storage_unavailable',
+        message: 'Callbook session storage is not available on this server.',
+        hint: context.callbookStore ? context.callbookStore.getDbError() : 'missing_callbook_store'
+      });
+    }
+
+    const created = context.callbookStore.createProvisionCode({ label, ttlMs });
+    if (!created.success) {
+      return res.status(500).json({
+        success: false,
+        error: created.error || 'callbook_provision_failed',
+        message: created.message || 'Failed to create Callbook Remote install link.'
+      });
+    }
+
+    let resolvedHost = null;
+    let warnings = [];
+    try {
+      const resolved = await resolveInviteHost({
+        config: context.config,
+        fallbackHost: req.headers.host || process.env.HOSTNAME || 'localhost',
+        defaultPort: process.env.PORT || process.env.A2A_PORT || 3001,
+        refreshExternalIp: true,
+        forceRefreshExternalIp: true
+      });
+      resolvedHost = resolved.host;
+      warnings = resolved.warnings || [];
+    } catch (err) {
+      // Non-fatal: we can still return the code; owner can assemble URL manually.
+    }
+
+    const schemeOverride = String(process.env.A2A_PUBLIC_SCHEME || '').trim();
+    const scheme = schemeOverride || (isHttpsRequest(req) ? 'https' : 'http');
+    const baseUrl = resolvedHost ? `${scheme}://${resolvedHost}` : null;
+    const installUrl = baseUrl ? `${baseUrl}/callbook/install#code=${created.code}` : null;
+
+    return res.json({
+      success: true,
+      install_url: installUrl,
+      expires_at: created.record.expires_at,
+      token: {
+        id: created.record.id,
+        label: created.record.label
+      },
+      warnings
+    });
+  });
+
+  router.get('/callbook/devices', (req, res) => {
+    if (!context.callbookStore || !context.callbookStore.isAvailable()) {
+      return res.json({ success: true, devices: [], message: 'Callbook storage not available' });
+    }
+    const includeRevoked = String(req.query.include_revoked || 'false') === 'true';
+    const result = context.callbookStore.listDevices({ includeRevoked, limit: req.query.limit || 200 });
+    if (!result.success) {
+      return res.status(500).json({ success: false, error: result.error || 'callbook_list_failed', message: result.message });
+    }
+    return res.json({ success: true, devices: result.devices });
+  });
+
+  router.post('/callbook/devices/:deviceId/revoke', (req, res) => {
+    if (!context.callbookStore || !context.callbookStore.isAvailable()) {
+      return res.status(500).json({ success: false, error: 'callbook_storage_unavailable' });
+    }
+    const deviceId = sanitizeString(req.params.deviceId, 120);
+    const result = context.callbookStore.revokeDevice(deviceId);
+    if (!result.success) {
+      return res.status(404).json({ success: false, error: result.error || 'device_not_found' });
+    }
+    return res.json({ success: true, device: result.device });
+  });
+
+  router.post('/callbook/logout', (req, res) => {
+    const cookie = buildSetCookie('a2a_callbook_session', '', {
+      httpOnly: true,
+      sameSite: 'Lax',
+      secure: isHttpsRequest(req),
+      maxAgeSeconds: 0
+    });
+    res.setHeader('Set-Cookie', cookie);
+    return res.json({ success: true });
   });
 
   router.get('/logs', (req, res) => {
@@ -399,6 +673,75 @@ function createDashboardApiRouter(options = {}) {
     });
 
     res.json({ success: true, contacts: result });
+  });
+
+  router.post('/contacts', (req, res) => {
+    const body = req.body || {};
+    const inviteUrl = sanitizeString(body.invite_url || body.inviteUrl || body.url || '', 600);
+    const name = sanitizeString(body.name || '', 120) || null;
+    const owner = sanitizeString(body.owner || '', 120) || null;
+    const notes = sanitizeString(body.notes || '', 800) || null;
+    const tags = sanitizeStringArray(body.tags || [], 30, 40);
+
+    if (!inviteUrl) {
+      return res.status(400).json({ success: false, error: 'invite_url_required' });
+    }
+
+    try {
+      const result = context.tokenStore.addRemote(inviteUrl, {
+        name: name || undefined,
+        owner: owner || undefined,
+        notes: notes || undefined,
+        tags: tags || undefined
+      });
+      if (!result.success) {
+        return res.status(409).json({ success: false, error: result.error || 'contact_add_failed', contact: result.existing || null });
+      }
+      return res.json({ success: true, contact: result.remote });
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_invite_url',
+        message: err.message || 'Invalid invite URL'
+      });
+    }
+  });
+
+  router.put('/contacts/:contactId', (req, res) => {
+    const contactId = sanitizeString(req.params.contactId, 120);
+    if (!contactId) {
+      return res.status(400).json({ success: false, error: 'contact_id_required' });
+    }
+
+    const body = req.body || {};
+    const updates = {};
+    if (body.name !== undefined) updates.name = sanitizeString(body.name, 120);
+    if (body.owner !== undefined) updates.owner = sanitizeString(body.owner, 120);
+    if (body.notes !== undefined) updates.notes = sanitizeString(body.notes, 800);
+    if (body.tags !== undefined) updates.tags = sanitizeStringArray(body.tags, 30, 40);
+    if (body.linked_token_id !== undefined) updates.linked_token_id = sanitizeString(body.linked_token_id, 80);
+    if (body.linkedTokenId !== undefined) updates.linked_token_id = sanitizeString(body.linkedTokenId, 80);
+
+    const result = context.tokenStore.updateRemote(contactId, updates);
+    if (!result.success) {
+      return res.status(404).json({ success: false, error: result.error || 'contact_not_found' });
+    }
+
+    return res.json({ success: true, contact: result.remote });
+  });
+
+  router.delete('/contacts/:contactId', (req, res) => {
+    const contactId = sanitizeString(req.params.contactId, 120);
+    if (!contactId) {
+      return res.status(400).json({ success: false, error: 'contact_id_required' });
+    }
+
+    const result = context.tokenStore.removeRemote(contactId);
+    if (!result.success) {
+      return res.status(404).json({ success: false, error: result.error || 'contact_not_found' });
+    }
+
+    return res.json({ success: true, contact: result.remote });
   });
 
   router.get('/contacts/:contactId/calls', (req, res) => {
@@ -672,8 +1015,9 @@ function createDashboardApiRouter(options = {}) {
 
     const resolvedHost = await resolveInviteHost({
       config: context.config,
+      fallbackHost: req.headers.host || process.env.HOSTNAME || 'localhost',
       defaultPort: process.env.PORT || process.env.A2A_PORT || 3001,
-      preferQuickTunnel: true
+      refreshExternalIp: true
     });
     const host = resolvedHost.host;
     const inviteUrl = `a2a://${host}/${token}`;
@@ -716,6 +1060,7 @@ function createDashboardApiRouter(options = {}) {
 function createDashboardUiRouter(options = {}) {
   const router = express.Router();
   const context = buildContext(options);
+  const ensureDashboardAccess = makeEnsureDashboardAccess(context);
   router.use(ensureDashboardAccess);
 
   router.use((req, res, next) => {

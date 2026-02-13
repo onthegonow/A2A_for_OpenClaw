@@ -26,6 +26,20 @@
         <h2>Contacts</h2>
         <button id="refresh-contacts">Refresh</button>
       </div>
+
+      <div class="card">
+        <h3>Add Contact</h3>
+        <form id="add-contact-form">
+          <label>Invite URL <input id="add-contact-url" type="text" placeholder="a2a://host/token" required></label>
+          <label>Name <input id="add-contact-name" type="text" placeholder="Agent name (optional)"></label>
+          <label>Owner <input id="add-contact-owner" type="text" placeholder="Human owner (optional)"></label>
+          <label>Tags <input id="add-contact-tags" type="text" placeholder="comma,separated (optional)"></label>
+          <div class="row">
+            <button type="submit">Add</button>
+          </div>
+        </form>
+      </div>
+
       <table id="contacts-table">
         <thead>
           <tr>
@@ -34,6 +48,7 @@
             <th>Status</th>
             <th>Calls</th>
             <th>Last Summary</th>
+            <th>Action</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -160,6 +175,43 @@
           <button type="submit">Create Tier</button>
         </div>
       </form>
+
+      <h3>Remote Callbook</h3>
+      <div id="callbook-status" class="card"></div>
+
+      <form id="callbook-provision-form" class="card">
+        <div class="row">
+          <button type="submit">Create Install Link (24h)</button>
+          <button id="callbook-refresh" type="button">Refresh</button>
+          <button id="callbook-logout" type="button">Logout This Browser</button>
+        </div>
+        <label>Device label <input id="callbook-label" type="text" value="Callbook Remote"></label>
+        <label>Install URL<textarea id="callbook-install-url" rows="3" readonly></textarea></label>
+        <div class="row">
+          <button id="callbook-copy-url" type="button">Copy Link</button>
+        </div>
+        <div id="callbook-warnings" class="mono"></div>
+      </form>
+
+      <div class="card">
+        <div class="row">
+          <strong>Paired Devices</strong>
+          <button id="callbook-refresh-devices" type="button">Refresh Devices</button>
+        </div>
+        <table id="callbook-devices-table">
+          <thead>
+            <tr>
+              <th>Label</th>
+              <th>Created</th>
+              <th>Last Used</th>
+              <th>Sessions</th>
+              <th>Revoked</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
     </section>
 
     <section id="tab-invites" class="panel">

@@ -196,6 +196,20 @@ Dashboard paths:
 - Standalone A2A server: `http://<host>:<port>/dashboard`
 - OpenClaw gateway mode: `http://<gateway>/a2a`
 
+### Remote Callbook (Mac / Remote Browser)
+
+If the owner wants to manage A2A from a different machine (ex: their MacBook), you can pair a browser session using a one-time install link:
+
+1. Open the dashboard on the server (local): `http://127.0.0.1:<port>/dashboard/`
+2. Go to `Settings` -> `Remote Callbook`
+3. Click `Create Install Link (24h)` and copy the URL
+4. Open that link on the Mac. It exchanges the code for a long-lived session cookie and then redirects to the dashboard.
+
+Notes:
+- The install link expires after 24 hours and is one-time use.
+- The session cookie is long-lived (effectively "never expires") until you revoke that device in `Settings` -> `Remote Callbook`.
+- Callbook session storage DB: `~/.config/openclaw/a2a-callbook.db` (or `$A2A_CONFIG_DIR/a2a-callbook.db`).
+
 ### Traceability and Logs
 
 All runtime logs are persisted in SQLite and also emitted to stdout:

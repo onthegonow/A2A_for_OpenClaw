@@ -117,6 +117,12 @@ Notes:
 - This command is safe and **does not require onboarding**.
 - Optional: open a specific tab via `--tab`.
 
+Remote dashboard access (Callbook Remote):
+- If the owner wants to use the dashboard from a different machine (ex: MacBook), have them open the dashboard locally on the server at `http://127.0.0.1:<port>/dashboard/`.
+- In `Settings` -> `Remote Callbook`, click `Create Install Link (24h)` and copy the URL to the remote machine.
+- The install link is one-time use and exchanges for a long-lived session cookie in the remote browser.
+- To revoke access, use `Settings` -> `Remote Callbook` -> `Paired Devices` -> `Revoke`.
+
 Examples:
 
 ```bash
