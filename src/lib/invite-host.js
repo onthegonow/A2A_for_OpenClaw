@@ -127,12 +127,8 @@ function isPublicIpHostname(hostname) {
 function isEphemeralTunnelHostname(hostname) {
   const host = String(hostname || '').trim().toLowerCase();
   if (!host) return false;
-  // Quick tunnels (cloudflared) and default ngrok domains are not stable across restarts.
+  // Quick tunnels (cloudflared) are not stable across restarts.
   if (host.endsWith('.trycloudflare.com')) return true;
-  if (host.endsWith('.ngrok-free.app')) return true;
-  if (host.endsWith('.ngrok.io')) return true;
-  if (host.endsWith('.ngrok.app')) return true;
-  if (host.endsWith('.ngrok.dev')) return true;
   return false;
 }
 
@@ -199,27 +195,23 @@ async function resolveInviteHost(options = {}) {
 
   if (preferQuickTunnel && !quickTunnelDisabled) {
     try {
-      const { ensureTunnel } = require('./tunnel');
-      const tunnel = await ensureTunnel({
+      const { ensureQuickTunnel } = require('./quick-tunnel');
+      const tunnel = await ensureQuickTunnel({
         localPort: desiredPort
       });
       if (tunnel && tunnel.host) {
         const tunnelParsed = splitHostPort(tunnel.host);
         const finalHost = formatHostPort(tunnelParsed.hostname, tunnelParsed.port || 443);
-        const providerLabel = tunnel.provider === 'ngrok' ? 'ngrok' : 'Quick Tunnel';
-        warnings.push(`Using secure ${providerLabel} endpoint "${finalHost}" for internet-facing invites.`);
-        if (Array.isArray(tunnel.warnings) && tunnel.warnings.length) {
-          warnings.push(...tunnel.warnings);
-        }
+        warnings.push(`Using secure Quick Tunnel endpoint "${finalHost}" for internet-facing invites.`);
         return {
           host: finalHost,
-          source: tunnel.provider === 'ngrok' ? 'ngrok_tunnel' : 'quick_tunnel',
+          source: 'quick_tunnel',
           originalHost: candidateHostWithPort,
           warnings
         };
       }
     } catch (err) {
-      warnings.push(`Tunnel unavailable (${err.message}). Falling back to external IP host detection.`);
+      warnings.push(`Quick Tunnel unavailable (${err.message}). Falling back to external IP host detection.`);
     }
   }
 
