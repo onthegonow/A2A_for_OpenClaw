@@ -77,6 +77,53 @@ function loadOpenClawConfig() {
   }
 }
 
+function normalizeDashboardPluginEntry(rawEntry, backendUrl) {
+  const issues = [];
+  const normalized = {
+    enabled: true,
+    config: {}
+  };
+  const entry = (rawEntry && typeof rawEntry === 'object') ? rawEntry : {};
+
+  const legacyBackendUrl = (typeof entry.backendUrl === 'string' && entry.backendUrl.trim())
+    ? entry.backendUrl.trim()
+    : null;
+  const rawConfig = (entry.config && typeof entry.config === 'object') ? entry.config : null;
+
+  if (!entry || typeof entry !== 'object') {
+    issues.push('plugin entry is missing or invalid');
+  }
+
+  if (entry && typeof entry.enabled === 'boolean') {
+    normalized.enabled = entry.enabled;
+  }
+
+  if (rawConfig) {
+    normalized.config = { ...rawConfig };
+  } else if (entry.config !== undefined) {
+    issues.push('plugin entry has non-object config; replacing with empty object');
+  }
+
+  if (legacyBackendUrl) {
+    issues.push(`legacy key detected: plugins.entries.${DASHBOARD_PLUGIN_ID}.backendUrl (using backendUrl migration)`);
+    normalized.config.backendUrl = backendUrl || legacyBackendUrl;
+  } else if (typeof normalized.config.backendUrl === 'string' && normalized.config.backendUrl.trim()) {
+    normalized.config.backendUrl = normalized.config.backendUrl.trim();
+  } else if (typeof backendUrl === 'string' && backendUrl.trim()) {
+    normalized.config.backendUrl = backendUrl.trim();
+  } else {
+    issues.push('backendUrl could not be determined; plugin may fail to route dashboard traffic');
+  }
+
+  return {
+    normalized,
+    issues,
+    changed: issues.length > 0,
+    legacyBackendUrl,
+    summary: `a2a-dashboard-proxy config => ${normalized.enabled ? 'enabled' : 'disabled'}, backendUrl=${normalized.config.backendUrl || 'missing'}`
+  };
+}
+
 function writeOpenClawConfig(config) {
   const backupPath = `${OPENCLAW_CONFIG}.backup.${Date.now()}`;
   fs.copyFileSync(OPENCLAW_CONFIG, backupPath);
@@ -573,20 +620,17 @@ async function install() {
       config.plugins = config.plugins || {};
       config.plugins.entries = config.plugins.entries || {};
       const rawEntry = config.plugins.entries[DASHBOARD_PLUGIN_ID];
-      const existingEntry = (rawEntry && typeof rawEntry === 'object') ? rawEntry : {};
-      const existingConfig = (existingEntry.config && typeof existingEntry.config === 'object')
-        ? existingEntry.config
-        : {};
-      if (typeof existingEntry.backendUrl === 'string' && existingEntry.backendUrl) {
-        log(`Migrated legacy plugin key plugins.entries.${DASHBOARD_PLUGIN_ID}.backendUrl -> plugins.entries.${DASHBOARD_PLUGIN_ID}.config.backendUrl`);
+      const audit = normalizeDashboardPluginEntry(rawEntry, backendUrl);
+      for (const issue of audit.issues) {
+        warn(`a2a-dashboard-proxy config issue: ${issue}`);
       }
-      config.plugins.entries[DASHBOARD_PLUGIN_ID] = {
-        enabled: true,
-        config: {
-          ...existingConfig,
-          backendUrl
-        }
-      };
+      if (audit.legacyBackendUrl) {
+        warn(`Auto-fixing legacy key: plugins.entries.${DASHBOARD_PLUGIN_ID}.backendUrl`);
+      }
+      if (audit.changed) {
+        log(`Migrated dashboard plugin config: ${audit.summary}`);
+      }
+      config.plugins.entries[DASHBOARD_PLUGIN_ID] = audit.normalized;
       configUpdated = true;
       log(`Configured gateway plugin entry: ${DASHBOARD_PLUGIN_ID}`);
     }
