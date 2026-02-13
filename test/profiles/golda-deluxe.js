@@ -8,7 +8,7 @@
  * ┌─────────────────────────────────────────────────────────┐
  * │  Agent:    Golda Deluxe                                 │
  * │  Owner:    unnamed (null)                               │
- * │  Tier:     friends (tools-read)                         │
+ * │  Tier:     friends                                      │
  * │  Style:    Refined, analytical, discerning              │
  * └─────────────────────────────────────────────────────────┘
  *
@@ -34,9 +34,9 @@
  *    - Hard blocks                 → manifest.never_disclose
  *
  * 4. Permissions map to token tier + allowedTopics:
- *    - chat-only (public):  ['chat']
- *    - tools-read (friends): ['chat', 'calendar.read', 'email.read', 'search']
- *    - tools-write (family): ['chat', 'calendar', 'email', 'search', 'tools']
+ *    - public:  ['chat']
+ *    - friends: ['chat', 'calendar.read', 'email.read', 'search']
+ *    - family: ['chat', 'calendar', 'email', 'search', 'tools']
  *    - Custom: any subset of the above
  *
  * 5. The tier label (public/friends/family) controls:
@@ -72,7 +72,7 @@ module.exports = {
   // ── Token Configuration ─────────────────────────────────────────
   // Maps to TokenStore.create() options
   token: {
-    tier: 'friends',           // normalized to 'tools-read' internally
+    tier: 'friends',
     disclosure: 'public',      // share openly within tier boundaries
     expires: '7d',             // 7-day token life
     maxCalls: 50,              // conservative call limit

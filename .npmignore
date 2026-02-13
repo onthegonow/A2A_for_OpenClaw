@@ -1,6 +1,8 @@
 .git
 .gitignore
+# Secrets - NEVER publish (DO NOT REMOVE; tests enforce this)
 .env
+.env.*
 node_modules
 *.log
 .DS_Store

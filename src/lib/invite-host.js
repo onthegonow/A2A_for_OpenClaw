@@ -166,24 +166,23 @@ async function resolveInviteHost(options = {}) {
       options.refreshExternalIp && isPublicIpHostname(parsed.hostname)
     );
 
-  if (!shouldReplaceWithExternalIp) {
-    return {
-      host: candidateHostWithPort,
-      source: candidateSource,
-      originalHost: candidateHostWithPort,
-      warnings
-    };
-  }
+  const alwaysLookupExternalIp = Boolean(options.alwaysLookupExternalIp);
+  const wantsExternalIp = shouldReplaceWithExternalIp || alwaysLookupExternalIp;
+  const warnOnExternalIpFailure = options.warnOnExternalIpFailure !== undefined
+    ? Boolean(options.warnOnExternalIpFailure)
+    : shouldReplaceWithExternalIp;
 
-  const external = await getExternalIp({
-    ttlMs,
-    timeoutMs: options.externalIpTimeoutMs,
-    services: options.externalIpServices,
-    cacheFile: options.externalIpCacheFile,
-    forceRefresh: Boolean(options.forceRefreshExternalIp)
-  });
+  const external = wantsExternalIp
+    ? await getExternalIp({
+      ttlMs,
+      timeoutMs: options.externalIpTimeoutMs,
+      services: options.externalIpServices,
+      cacheFile: options.externalIpCacheFile,
+      forceRefresh: Boolean(options.forceRefreshExternalIp)
+    })
+    : null;
 
-  if (external && external.ip) {
+  if (shouldReplaceWithExternalIp && external && external.ip) {
     const finalHost = formatHostPort(external.ip, desiredPort);
     if (finalHost !== candidateHostWithPort) {
       warnings.push(
@@ -195,17 +194,21 @@ async function resolveInviteHost(options = {}) {
       source: 'external_ip',
       originalHost: candidateHostWithPort,
       externalIp: external.ip,
+      externalIpInfo: external,
       warnings
     };
   }
 
-  warnings.push(
-    `Invite host "${candidateHostWithPort}" may not be reachable from other machines, and external IP lookup failed. Set A2A_HOSTNAME="your-public-host:port".`
-  );
+  if (wantsExternalIp && (!external || !external.ip) && warnOnExternalIpFailure) {
+    warnings.push(
+      `Invite host "${candidateHostWithPort}" may not be reachable from other machines, and external IP lookup failed. Set A2A_HOSTNAME="your-public-host:port".`
+    );
+  }
   return {
     host: candidateHostWithPort,
     source: candidateSource,
     originalHost: candidateHostWithPort,
+    externalIpInfo: external,
     warnings
   };
 }

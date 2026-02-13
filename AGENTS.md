@@ -2,16 +2,90 @@
 
 This file is the operational source of truth for AI agents working in this repository.
 
+## Secrets (DO NOT DELETE)
+
+This repo is published as **both** a GitHub repo and an **npm package** (`a2acalling`). Most feature work should end with:
+- push to GitHub (`main`)
+- publish to npm (version bump)
+
+Local maintainer credentials live in `.env` (gitignored).
+
+Required keys in `.env`:
+- `GH_TOKEN` - GitHub PAT with access to `onthegonow/a2a_calling` (push, tags/releases, repo secrets)
+- `NPM_TOKEN` - npm publish token for the `a2acalling` package
+
+Hard rules:
+- NEVER commit `.env` or token values.
+- NEVER delete `.env` from the workspace. (Agents have deleted it before; don’t.)
+- NEVER remove `.env` / `.env.*` from `.gitignore` or `.npmignore`.
+- NEVER print tokens in command output, logs, or comments.
+
 ## GitHub Access
 
 GitHub token is stored in `.env` (gitignored). Load it before git operations:
 
 ```bash
-export GH_TOKEN=$(grep GH_TOKEN .env | cut -d= -f2)
-git remote set-url origin https://${GH_TOKEN}@github.com/onthegonow/a2a_calling.git
+set -a
+source .env
+set +a
 ```
 
-Or use `gh` CLI which reads `GH_TOKEN` automatically.
+Recommended (avoids putting tokens in git remotes):
+
+```bash
+gh auth status
+gh auth setup-git
+env -u GIT_ASKPASS -u VSCODE_GIT_ASKPASS_NODE -u VSCODE_GIT_IPC_HANDLE -u VSCODE_GIT_IPC_AUTH_TOKEN git push origin main
+```
+
+Fallback (NOT recommended; it bakes the token into `.git/config`):
+
+```bash
+git remote set-url origin https://${GH_TOKEN}@github.com/onthegonow/a2a_calling.git
+env -u GIT_ASKPASS -u VSCODE_GIT_ASKPASS_NODE -u VSCODE_GIT_IPC_HANDLE -u VSCODE_GIT_IPC_AUTH_TOKEN git push origin main
+```
+
+`gh` CLI reads `GH_TOKEN` automatically.
+
+## npm Publishing
+
+This repo publishes to npm as `a2acalling`.
+
+Local publish (set cache to avoid root cache permission issues):
+
+```bash
+npm_config_cache=/tmp/npm-cache npm publish --access public
+```
+
+CI publish (GitHub Actions):
+- repo secret `NPM_TOKEN` must be set (Actions secret)
+- workflow should export `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}`
+
+## Release Checklist (GitHub + npm Together)
+
+```bash
+# 1) bump version
+npm version patch --no-git-tag-version
+
+# 2) run tests
+npm test
+
+# 3) commit + push
+git add package.json
+git commit -m "chore: release $(node -p \"require('./package.json').version\")"
+env -u GIT_ASKPASS -u VSCODE_GIT_ASKPASS_NODE -u VSCODE_GIT_IPC_HANDLE -u VSCODE_GIT_IPC_AUTH_TOKEN git push origin main
+
+# 4) publish to npm
+npm_config_cache=/tmp/npm-cache npm publish --access public
+
+# 5) tag + GitHub release
+VERSION=$(node -p "require('./package.json').version")
+git tag "v${VERSION}"
+env -u GIT_ASKPASS -u VSCODE_GIT_ASKPASS_NODE -u VSCODE_GIT_IPC_HANDLE -u VSCODE_GIT_IPC_AUTH_TOKEN git push origin "v${VERSION}"
+gh release create "v${VERSION}" --generate-notes
+```
+
+If a GitHub Actions release workflow exists, prefer that for the final publish so GitHub + npm stay in sync.
 
 ## Project Structure
 

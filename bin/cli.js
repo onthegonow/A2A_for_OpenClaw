@@ -6,10 +6,10 @@
  *   a2a create [options]     Create an A2A token
  *   a2a list                 List active tokens
  *   a2a revoke <id>          Revoke a token
- *   a2a add <url> [name]     Add a remote agent
- *   a2a remotes              List remote agents
- *   a2a call <url> <msg>     Call a remote agent
- *   a2a ping <url>           Ping a remote agent
+ *   a2a add <url> [name]     Add a contact (alias of "contacts add")
+ *   a2a remotes              List contacts (alias of "contacts")
+ *   a2a call <url> <msg>     Call a contact (or invite URL)
+ *   a2a ping <url>           Ping an invite URL
  *   a2a gui                  Open the local dashboard GUI in a browser
  *   a2a setup                Auto setup (gateway-aware dashboard install)
  */
@@ -47,8 +47,8 @@ function checkOnboarding(commandName) {
     const config = new A2AConfig();
     if (!config.isOnboarded()) {
       console.warn('\n\u26a0\ufe0f  A2A onboarding not complete.');
-      console.warn('   Run "a2a quickstart" first to set up your agent\'s disclosure topics and permissions.');
-      console.warn('   Without onboarding, invites will have empty topics and calls use generic responses.\n');
+      console.warn('   Run "a2a quickstart" to complete deterministic onboarding.');
+      console.warn('   Without onboarding, invites may use default topics/goals and remote dashboard access may not be configured.\n');
       return false;
     }
     return true;
@@ -286,7 +286,7 @@ https://github.com/onthegonow/a2a_calling`;
     for (const t of tokens) {
       const expired = t.expires_at && new Date(t.expires_at) < new Date();
       const status = expired ? '⚠️  EXPIRED' : '✅ Active';
-      const tier = t.tier || t.permissions;  // backward compat
+      const tier = t.tier || 'public';
       const topics = t.allowed_topics || ['chat'];
       console.log(`${status}  ${t.id}`);
       console.log(`   Name: ${t.name}`);
@@ -323,12 +323,12 @@ https://github.com/onthegonow/a2a_calling`;
     }
 
     try {
-      const result = store.addRemote(url, name);
+      const result = store.addContact(url, { name });
       if (!result.success) {
-        console.log(`Remote already registered: ${result.existing.name}`);
+        console.log(`Contact already registered: ${result.existing.name}`);
         return;
       }
-      console.log(`✅ Remote agent added: ${result.remote.name} (${result.remote.host})`);
+      console.log(`✅ Contact added: ${result.contact.name} (${result.contact.host})`);
     } catch (err) {
       console.error(err.message);
       process.exit(1);
@@ -336,7 +336,7 @@ https://github.com/onthegonow/a2a_calling`;
   },
 
   remotes: () => {
-    // Legacy alias for contacts
+    // Alias for contacts
     commands.contacts({ _: ['contacts'], flags: {} });
   },
 
@@ -352,22 +352,22 @@ https://github.com/onthegonow/a2a_calling`;
     if (subcommand === 'rm' || subcommand === 'remove') return commands['contacts:rm'](args);
 
     // Default: list contacts
-    const remotes = store.listRemotes();
-    if (remotes.length === 0) {
+    const contacts = store.listContacts();
+    if (contacts.length === 0) {
       console.log('📇 No contacts yet.\n');
       console.log('Add one with: a2a contacts add <invite_url>');
       return;
     }
 
-    console.log(`📇 Agent Contacts (${remotes.length})\n`);
-    for (const r of remotes) {
+    console.log(`📇 Agent Contacts (${contacts.length})\n`);
+    for (const r of contacts) {
       const statusIcon = r.status === 'online' ? '🟢' : r.status === 'offline' ? '🔴' : '⚪';
       const ownerText = r.owner ? ` — ${r.owner}` : '';
       
       // Permission badge from linked token (what YOU gave THEM)
       let permBadge = '';
       if (r.linked_token) {
-        const tier = r.linked_token.tier || r.linked_token.permissions;
+        const tier = r.linked_token.tier || 'public';
         permBadge = tier === 'family' ? ' ⚡' : tier === 'friends' ? ' 🔧' : ' 🌐';
       }
       
@@ -392,6 +392,7 @@ https://github.com/onthegonow/a2a_calling`;
       console.error('Options:');
       console.error('  --name, -n     Agent name');
       console.error('  --owner, -o    Owner name');
+      console.error('  --server-name  Server label (optional)');
       console.error('  --notes        Notes about this contact');
       console.error('  --tags         Comma-separated tags');
       console.error('  --link         Link to token ID you gave them');
@@ -401,24 +402,26 @@ https://github.com/onthegonow/a2a_calling`;
     const options = {
       name: args.flags.name || args.flags.n,
       owner: args.flags.owner || args.flags.o,
+      server_name: args.flags['server-name'] || args.flags.server_name || args.flags.serverName || null,
       notes: args.flags.notes,
       tags: args.flags.tags ? args.flags.tags.split(',').map(t => t.trim()) : [],
       linkedTokenId: args.flags.link || null
     };
 
     try {
-      const result = store.addRemote(url, options);
+      const result = store.addContact(url, options);
       if (!result.success) {
         console.log(`Contact already exists: ${result.existing.name}`);
         return;
       }
-      console.log(`✅ Contact added: ${result.remote.name}`);
-      if (result.remote.owner) console.log(`   Owner: ${result.remote.owner}`);
-      console.log(`   Host: ${result.remote.host}`);
+      console.log(`✅ Contact added: ${result.contact.name}`);
+      if (result.contact.owner) console.log(`   Owner: ${result.contact.owner}`);
+      if (result.contact.server_name) console.log(`   Server: ${result.contact.server_name}`);
+      console.log(`   Host: ${result.contact.host}`);
       if (options.linkedTokenId) {
         console.log(`   Linked to token: ${options.linkedTokenId}`);
       } else {
-        console.log(`\n💡 Link a token: a2a contacts link ${result.remote.name} <token_id>`);
+        console.log(`\n💡 Link a token: a2a contacts link ${result.contact.name} <token_id>`);
       }
     } catch (err) {
       console.error(err.message);
@@ -434,8 +437,8 @@ https://github.com/onthegonow/a2a_calling`;
     }
 
     // Get contact with linked token info
-    const remotes = store.listRemotes();
-    const remote = remotes.find(r => r.name === name || r.id === name);
+    const contacts = store.listContacts();
+    const remote = contacts.find(r => r.name === name || r.id === name);
     if (!remote) {
       console.error(`Contact not found: ${name}`);
       process.exit(1);
@@ -453,7 +456,7 @@ https://github.com/onthegonow/a2a_calling`;
     // Show linked token (permissions you gave them)
     if (remote.linked_token) {
       const t = remote.linked_token;
-      const tier = t.tier || t.permissions;
+      const tier = t.tier || 'public';
       const topics = t.allowed_topics || ['chat'];
       const tierIcon = tier === 'family' ? '⚡' : tier === 'friends' ? '🔧' : '🌐';
       console.log(`🔐 Your token to them: ${t.id}`);
@@ -497,6 +500,7 @@ https://github.com/onthegonow/a2a_calling`;
       console.error('Options:');
       console.error('  --name         New name');
       console.error('  --owner        Owner name');
+      console.error('  --server-name  Server label');
       console.error('  --notes        Notes');
       console.error('  --tags         Comma-separated tags');
       process.exit(1);
@@ -505,6 +509,7 @@ https://github.com/onthegonow/a2a_calling`;
     const updates = {};
     if (args.flags.name) updates.name = args.flags.name;
     if (args.flags.owner) updates.owner = args.flags.owner;
+    if (args.flags['server-name'] || args.flags.server_name || args.flags.serverName) updates.server_name = args.flags['server-name'] || args.flags.server_name || args.flags.serverName;
     if (args.flags.notes) updates.notes = args.flags.notes;
     if (args.flags.tags) updates.tags = args.flags.tags.split(',').map(t => t.trim());
 
@@ -513,13 +518,13 @@ https://github.com/onthegonow/a2a_calling`;
       process.exit(1);
     }
 
-    const result = store.updateRemote(name, updates);
+    const result = store.updateContact(name, updates);
     if (!result.success) {
       console.error(`Contact not found: ${name}`);
       process.exit(1);
     }
 
-    console.log(`✅ Contact updated: ${result.remote.name}`);
+    console.log(`✅ Contact updated: ${(result.contact || result.remote).name}`);
   },
 
   'contacts:link': (args) => {
@@ -548,7 +553,7 @@ https://github.com/onthegonow/a2a_calling`;
                       result.token.tier === 'friends' ? '🔧 friends' : '🌐 public';
     
     console.log(`✅ Linked token to contact`);
-    console.log(`   Contact: ${result.remote.name}`);
+    console.log(`   Contact: ${result.contact?.name || result.remote.name}`);
     console.log(`   Token: ${result.token.id} (${result.token.name})`);
     console.log(`   Permissions: ${permLabel}`);
   },
@@ -560,7 +565,7 @@ https://github.com/onthegonow/a2a_calling`;
       process.exit(1);
     }
 
-    const remote = store.getRemote(name);
+    const remote = store.getContact(name);
     if (!remote) {
       console.error(`Contact not found: ${name}`);
       process.exit(1);
@@ -573,12 +578,12 @@ https://github.com/onthegonow/a2a_calling`;
 
     try {
       const result = await client.ping(url);
-      store.updateRemoteStatus(name, 'online');
+      store.updateContactStatus(name, 'online');
       console.log(`🟢 ${remote.name} is online`);
       console.log(`   Agent: ${result.name}`);
       console.log(`   Version: ${result.version}`);
     } catch (err) {
-      store.updateRemoteStatus(name, 'offline', err.message);
+      store.updateContactStatus(name, 'offline', err.message);
       console.log(`🔴 ${remote.name} is offline`);
       console.log(`   Error: ${err.message}`);
     }
@@ -591,13 +596,13 @@ https://github.com/onthegonow/a2a_calling`;
       process.exit(1);
     }
 
-    const result = store.removeRemote(name);
+    const result = store.removeContact(name);
     if (!result.success) {
       console.error(`Contact not found: ${name}`);
       process.exit(1);
     }
 
-    console.log(`✅ Contact removed: ${result.remote.name}`);
+    console.log(`✅ Contact removed: ${(result.contact || result.remote).name}`);
   },
 
   // ========== CONVERSATIONS ==========
@@ -761,7 +766,7 @@ https://github.com/onthegonow/a2a_calling`;
     let url = target;
     let contactName = null;
     if (!target.startsWith('a2a://')) {
-      const remote = store.getRemote(target);
+      const remote = store.getContact(target);
       if (remote) {
         url = `a2a://${remote.host}/${remote.token}`;
         contactName = remote.name;
@@ -778,7 +783,7 @@ https://github.com/onthegonow/a2a_calling`;
       
       // Update contact status on success
       if (contactName) {
-        store.updateRemoteStatus(contactName, 'online');
+        store.updateContactStatus(contactName, 'online');
       }
       
       console.log(`\n✅ Response:\n`);
@@ -789,7 +794,7 @@ https://github.com/onthegonow/a2a_calling`;
     } catch (err) {
       // Update contact status on failure
       if (contactName) {
-        store.updateRemoteStatus(contactName, 'offline', err.message);
+        store.updateContactStatus(contactName, 'offline', err.message);
       }
       console.error(`❌ Call failed: ${err.message}`);
       process.exit(1);
@@ -895,119 +900,426 @@ https://github.com/onthegonow/a2a_calling`;
     require('../src/server.js');
   },
 
-  quickstart: (args) => {
-    // Auto-complete onboarding if not done
-    try {
-      const { A2AConfig } = require('../src/lib/config');
-      const { readContextFiles, generateDefaultManifest, saveManifest } = require('../src/lib/disclosure');
-      const conf = new A2AConfig();
-      if (!conf.isOnboarded()) {
-        console.log('Setting up disclosure manifest from workspace context...');
-        const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
-        const contextFiles = readContextFiles(workspaceDir);
-        const manifest = generateDefaultManifest(contextFiles);
-        saveManifest(manifest);
+  quickstart: async (args) => {
+    const http = require('http');
+    const https = require('https');
+    const { A2AConfig } = require('../src/lib/config');
+    const disc = require('../src/lib/disclosure');
+    const {
+      normalizeHostInput,
+      splitHostPort,
+      isLocalOrUnroutableHost
+    } = require('../src/lib/invite-host');
+    const { getExternalIp } = require('../src/lib/external-ip');
+    const { CallbookStore } = require('../src/lib/callbook');
+    const { isPortListening, tryBindPort } = require('../src/lib/port-scanner');
 
-        const sources = [];
-        if (contextFiles.user) sources.push('USER.md');
-        if (contextFiles.heartbeat) sources.push('HEARTBEAT.md');
-        if (contextFiles.soul) sources.push('SOUL.md');
-        if (contextFiles.skill) sources.push('SKILL.md');
-        if (contextFiles.memory) sources.push('memory/*.md');
-        if (contextFiles.skills) sources.push('installed skills');
-        if (contextFiles.claude) sources.push('CLAUDE.md');
-        console.log(`   Sources: ${sources.length > 0 ? sources.join(', ') : '(none found - using defaults)'}`);
+    const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
+    const config = new A2AConfig();
 
-        conf.completeOnboarding();
-        console.log('   \u2705 Disclosure manifest generated and onboarding marked complete.\n');
-      }
-    } catch (e) {
-      // Non-fatal, continue with quickstart
+    if (args.flags.force) {
+      config.resetOnboarding();
     }
 
-    const http = require('http');
-    const { splitHostPort } = require('../src/lib/invite-host');
-    const resolveHostPromise = resolveInviteHostname();
-    const name = args.flags.name || args.flags.n || 'My Agent';
-    const owner = args.flags.owner || args.flags.o || null;
+    const backendPort = (() => {
+      const raw = args.flags.port || process.env.A2A_PORT || process.env.PORT || 3001;
+      const n = Number.parseInt(String(raw), 10);
+      return (Number.isFinite(n) && n > 0 && n <= 65535) ? n : 3001;
+    })();
 
-    console.log(`\n🚀 A2A Quickstart\n${'═'.repeat(50)}\n`);
-    
-    // Step 1: Check server
-    console.log('1️⃣  Checking server status...');
-    const checkServer = (port) => new Promise((resolve) => {
-      const req = http.request({
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/a2a/ping',
-        timeout: 2000
-      }, (res) => {
-        resolve(res.statusCode === 200);
-      });
-      req.on('error', () => resolve(false));
-      req.on('timeout', () => { req.destroy(); resolve(false); });
-      req.end();
-    });
-
-    resolveHostPromise.then(resolved => {
-      const parsed = splitHostPort(resolved.host);
-      const serverPort = parsed.port || 3001;
-      return checkServer(serverPort).then(serverOk => ({ serverOk, resolved, serverPort }));
-    }).then(({ serverOk, resolved, serverPort }) => {
-      const hostname = resolved.host;
-      if (!serverOk) {
-        console.log('   ⚠️  Server not running!');
-        console.log(`   Run: A2A_HOSTNAME="${hostname}" a2a server --port ${serverPort}\n`);
-      } else {
-        console.log('   ✅ Server running\n');
+    function looksLikePong(body) {
+      try {
+        const parsed = JSON.parse(String(body || ''));
+        if (parsed && typeof parsed === 'object' && parsed.pong === true) return true;
+      } catch (err) {
+        // ignore
       }
+      return String(body || '').includes('"pong":true') || String(body || '').includes('"pong": true');
+    }
 
-      // Step 2: Create invite
-      console.log('2️⃣  Creating your first invite...\n');
-      const { token, record } = store.create({
-        name,
-        owner,
-        expires: '7d',
-        permissions: 'public',
-        maxCalls: 100
-      });
-
-      const inviteUrl = `a2a://${hostname}/${token}`;
-      const expiresText = new Date(record.expires_at).toLocaleDateString('en-US', { 
-        month: 'short', day: 'numeric', year: 'numeric' 
-      });
-
-      if (resolved.warnings && resolved.warnings.length) {
-        for (const w of resolved.warnings) {
-          console.warn(`\n⚠️  ${w}`);
+    function fetchUrlText(url, timeoutMs = 5000) {
+      return new Promise((resolve, reject) => {
+        let parsed;
+        try {
+          parsed = new URL(url);
+        } catch (err) {
+          reject(new Error('invalid_url'));
+          return;
         }
-        console.warn('');
+        const client = parsed.protocol === 'https:' ? https : http;
+        const req = client.request({
+          protocol: parsed.protocol,
+          hostname: parsed.hostname,
+          port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+          method: 'GET',
+          path: parsed.pathname + parsed.search,
+          headers: {
+            'User-Agent': `a2acalling/${process.env.npm_package_version || 'dev'} (quickstart)`
+          },
+          timeout: timeoutMs
+        }, (res) => {
+          let data = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk) => {
+            data += chunk;
+            if (data.length > 1024 * 256) {
+              req.destroy(new Error('response_too_large'));
+            }
+          });
+          res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data }));
+        });
+        req.on('error', reject);
+        req.on('timeout', () => req.destroy(new Error('timeout')));
+        req.end();
+      });
+    }
+
+	    async function probeLocalPing(port, timeoutMs = 1000) {
+	      try {
+	        const res = await fetchUrlText(`http://127.0.0.1:${port}/api/a2a/ping`, timeoutMs);
+	        return { ok: looksLikePong(res.body), statusCode: res.statusCode, body: res.body };
+	      } catch (err) {
+	        return { ok: false, error: err && err.message ? err.message : 'request_failed' };
+	      }
+	    }
+
+    async function externalPingCheck(targetUrl) {
+      const providers = [
+        {
+          name: 'allorigins',
+          buildUrl: () => {
+            const u = new URL('https://api.allorigins.win/raw');
+            u.searchParams.set('url', targetUrl);
+            return u.toString();
+          }
+        },
+        {
+          name: 'jina',
+          buildUrl: () => `https://r.jina.ai/${targetUrl}`
+        }
+      ];
+
+      for (const provider of providers) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const res = await fetchUrlText(provider.buildUrl(), 8000);
+          if (looksLikePong(res.body)) {
+            return { ok: true, provider: provider.name, statusCode: res.statusCode };
+          }
+        } catch (err) {
+          // try next
+        }
+      }
+      return { ok: false };
+    }
+
+    function slugify(value) {
+      return String(value || '')
+        .toLowerCase()
+        .replace(/['"]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60);
+    }
+
+    function uniqueNonEmpty(items, limit = 24) {
+      const out = [];
+      const seen = new Set();
+      for (const raw of items) {
+        const s = String(raw || '').trim();
+        if (!s) continue;
+        if (seen.has(s)) continue;
+        seen.add(s);
+        out.push(s);
+        if (out.length >= limit) break;
+      }
+      return out;
+    }
+
+    function extractSectionBullets(markdown, headingRegex) {
+      const text = String(markdown || '');
+      const match = text.match(new RegExp(`##\\s*(?:${headingRegex})[^\\n]*\\n([\\s\\S]*?)(?=\\n##|$)`, 'i'));
+      if (!match) return [];
+      return match[1]
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l.startsWith('-') || l.startsWith('*'))
+        .map(l => l.replace(/^[\\s\\-\\*]+/, '').trim())
+        .filter(Boolean);
+    }
+
+    function tierFromManifest(manifest, tier, fallback = []) {
+      const t = (manifest && manifest.topics && manifest.topics[tier]) ? manifest.topics[tier] : null;
+      if (!t) return fallback;
+      const items = []
+        .concat(Array.isArray(t.lead_with) ? t.lead_with : [])
+        .concat(Array.isArray(t.discuss_freely) ? t.discuss_freely : [])
+        .concat(Array.isArray(t.deflect) ? t.deflect : []);
+      const topics = items.map(x => (x && x.topic) ? x.topic : '').filter(Boolean);
+      return topics.length ? topics : fallback;
+    }
+
+    function buildTierRecommendations(contextFiles, manifest) {
+      const publicFallback = ['chat', 'openclaw', 'a2a'];
+      const friendsFallback = ['chat', 'search', 'openclaw', 'a2a'];
+      const familyFallback = ['chat', 'search', 'openclaw', 'a2a', 'tools', 'memory'];
+
+      const rawPublic = tierFromManifest(manifest, 'public', publicFallback);
+      const rawFriends = tierFromManifest(manifest, 'friends', friendsFallback);
+      const rawFamily = tierFromManifest(manifest, 'family', familyFallback);
+
+      const goalsFromUser = extractSectionBullets(contextFiles.user, 'Goals|Current|Seeking|Working On');
+      const baseGoals = goalsFromUser.length
+        ? goalsFromUser
+        : ['grow network', 'find collaborators', 'build in public'];
+
+      const publicTopics = uniqueNonEmpty(rawPublic.map(slugify).filter(Boolean), 16);
+      const friendsTopics = uniqueNonEmpty(rawFriends.map(slugify).filter(Boolean), 20);
+      const familyTopics = uniqueNonEmpty(rawFamily.map(slugify).filter(Boolean), 24);
+
+      const goals = uniqueNonEmpty(baseGoals.map(slugify).filter(Boolean), 12);
+
+      return {
+        public: { topics: publicTopics, goals: goals.slice(0, 6) },
+        friends: { topics: uniqueNonEmpty([...publicTopics, ...friendsTopics], 24), goals: goals.slice(0, 8) },
+        family: { topics: uniqueNonEmpty([...publicTopics, ...friendsTopics, ...familyTopics], 30), goals }
+      };
+    }
+
+    function printTierSummary(tiers) {
+      const format = (t) => {
+        const topics = (t.topics || []).join(' · ') || '(none)';
+        const goals = (t.goals || []).join(' · ') || '(none)';
+        return `Topics: ${topics}\nGoals:  ${goals}`;
+      };
+      console.log('\nProposed permission tiers:\n');
+      console.log('PUBLIC');
+      console.log(format(tiers.public));
+      console.log('\nFRIENDS');
+      console.log(format(tiers.friends));
+      console.log('\nFAMILY');
+      console.log(format(tiers.family));
+      console.log('');
+    }
+
+    // ── Step 1: Background bootstrap (config + manifest) ─────────
+    let contextFiles = {};
+    let manifest = {};
+    try {
+      contextFiles = disc.readContextFiles(workspaceDir);
+      manifest = disc.loadManifest();
+      if (!manifest || Object.keys(manifest).length === 0) {
+        const generated = disc.generateDefaultManifest(contextFiles);
+        disc.saveManifest(generated);
+        manifest = generated;
+      }
+    } catch (err) {
+      // Non-fatal: onboarding can proceed even if manifest fails.
+      contextFiles = {};
+      manifest = {};
+    }
+
+    console.log('\nA2A deterministic onboarding');
+    console.log('──────────────────────────');
+
+    // ── Step 2: Owner dashboard access (local + optional remote) ─
+    config.setOnboarding({ step: 'access' });
+
+    const hostnameFlagRaw = args.flags.hostname !== undefined ? String(args.flags.hostname) : '';
+    const normalizedHostname = normalizeHostInput(hostnameFlagRaw);
+
+    // Invite host controls the a2a:// hostname we hand out (and remote dashboard pairing URL).
+    let inviteHost = '';
+    if (normalizedHostname) {
+      const parsed = splitHostPort(normalizedHostname);
+      const publicPortRaw = args.flags['public-port'] || args.flags.publicPort || process.env.A2A_PUBLIC_PORT || 443;
+      const publicPort = Number.parseInt(String(publicPortRaw), 10);
+      inviteHost = parsed.port
+        ? normalizedHostname
+        : `${parsed.hostname}:${(Number.isFinite(publicPort) && publicPort > 0 && publicPort <= 65535) ? publicPort : 443}`;
+      config.setAgent({ hostname: inviteHost });
+    } else {
+      const existing = normalizeHostInput((config.getAgent() || {}).hostname || '');
+      inviteHost = existing || `localhost:${backendPort}`;
+      if (!existing) {
+        config.setAgent({ hostname: inviteHost });
+      }
+    }
+
+    const inviteParsed = splitHostPort(inviteHost);
+    const invitePort = inviteParsed.port;
+    const schemeOverride = String(process.env.A2A_PUBLIC_SCHEME || '').trim();
+    const inviteScheme = schemeOverride || ((!invitePort || invitePort === 443) ? 'https' : 'http');
+    const expectedPingUrl = `${inviteScheme}://${inviteHost}/api/a2a/ping`;
+    const inviteLooksLocal = isLocalOrUnroutableHost(inviteParsed.hostname);
+
+    console.log('\n2️⃣  Owner dashboard access');
+    console.log(`Local dashboard: http://127.0.0.1:${backendPort}/dashboard/`);
+    console.log(`Invite host:      ${inviteHost}`);
+
+    if (inviteLooksLocal) {
+      console.log('Remote dashboard: not configured (invite host looks local/unroutable)');
+      console.log('  To enable remote access, rerun with: --hostname YOUR_DOMAIN:443');
+    } else {
+      const callbookStore = new CallbookStore();
+      if (!callbookStore.isAvailable()) {
+        console.log('Remote dashboard: Callbook Remote not available (storage unavailable)');
+        console.log(`  Hint: ${callbookStore.getDbError ? callbookStore.getDbError() : 'storage_unavailable'}`);
+      } else {
+        const label = String(args.flags['device-label'] || args.flags.deviceLabel || 'Callbook Remote').trim().slice(0, 120);
+        const ttlHoursRaw = args.flags['callbook-ttl-hours'] || args.flags.callbookTtlHours || 24;
+        const ttlHours = Math.max(1, Math.min(168, Number.parseInt(String(ttlHoursRaw), 10) || 24));
+        const created = callbookStore.createProvisionCode({ label, ttlMs: ttlHours * 60 * 60 * 1000 });
+        if (created && created.success) {
+          const installUrl = `${inviteScheme}://${inviteHost}/callbook/install#code=${created.code}`;
+          console.log(`Remote dashboard: ${installUrl}  (one-time, ${ttlHours}h)`);
+        } else {
+          console.log('Remote dashboard: failed to create install link');
+          console.log(`  Hint: ${created && created.message ? created.message : (created && created.error ? created.error : 'unknown_error')}`);
+        }
+      }
+    }
+
+    // ── Step 3: Permission tiers (topics + goals) ───────────────
+    const onboardingAfterAccess = config.getOnboarding();
+    if (!onboardingAfterAccess.tiers_confirmed) {
+      const recommendations = buildTierRecommendations(contextFiles, manifest);
+
+      config.setTier('public', recommendations.public);
+      config.setTier('friends', recommendations.friends);
+      config.setTier('family', recommendations.family);
+
+      printTierSummary(recommendations);
+
+      if (!args.flags['confirm-tiers']) {
+        console.log('3️⃣  Confirm tiers');
+        console.log('Review the topics/goals above. To confirm and continue, run:');
+        console.log(`  a2a quickstart --port ${backendPort} --confirm-tiers`);
+        console.log('Optional (remote access):');
+        console.log(`  a2a quickstart --hostname YOUR_DOMAIN:443 --port ${backendPort} --confirm-tiers`);
+        console.log('');
+        return;
       }
 
-      // Step 3: Show the invite
-      const ownerText = owner ? `${owner}` : 'Someone';
-      const topicsList = record.allowed_topics.join(' · ');
-      const goalsList = (record.allowed_goals || []).join(' · ');
-      console.log('3️⃣  Share this invite:\n');
-      console.log('─'.repeat(50));
-      console.log(`
-📞🗣️ **Agent-to-Agent Call Invite**
+      config.setOnboarding({
+        step: 'tiers',
+        tiers_confirmed: true
+      });
+    }
 
-👤 **${ownerText}** would like your agent to call **${name}** and explore where our owners might collaborate.
+    // ── Step 4: Port scan + reverse proxy guidance (if needed) ──
+    console.log('\n4️⃣  Port scan + reverse proxy');
+    console.log(`Invite host: ${inviteHost}`);
+    console.log(`Expected ping URL: ${expectedPingUrl}\n`);
 
-💬 ${topicsList}${goalsList ? `\n🎯 ${goalsList}` : ''}
+    const expectsReverseProxy = Boolean(
+      (invitePort === 80 && backendPort !== 80) ||
+      ((!invitePort || invitePort === 443) && backendPort !== 443)
+    );
 
-${inviteUrl}
-⏰ ${expiresText}
+    if (expectsReverseProxy) {
+      const port80Listening = await isPortListening(80, '127.0.0.1', { timeoutMs: 500 });
+      const port80Bind = await tryBindPort(80, '0.0.0.0');
+      const port80Ping = port80Listening.listening ? await probeLocalPing(80) : { ok: false };
 
-── setup ──
-npm i -g a2acalling && a2a add "${inviteUrl}" "${name}" && a2a call "${name}" "Hello from my owner!"
-https://github.com/onthegonow/a2a_calling
-`);
-      console.log('─'.repeat(50));
-      console.log(`\n✅ Done! Share the invite above with other agents.\n`);
-      console.log(`To revoke: a2a revoke ${record.id}\n`);
-    });
+      console.log('Port 80:');
+      if (port80Ping.ok) {
+        console.log('  ✅ serves /api/a2a/ping (A2A detected on :80)');
+      } else if (port80Listening.listening) {
+        console.log(`  ⚠️  has a listener (${port80Listening.code || 'in_use'})`);
+      } else if (!port80Bind.ok && port80Bind.code === 'EACCES') {
+        console.log('  ⚠️  appears free but is not bindable by this user (EACCES)');
+      } else if (port80Bind.ok) {
+        console.log('  ✅ free and bindable by this user');
+      } else {
+        console.log(`  ⚠️  not bindable (${port80Bind.code || 'unknown'})`);
+      }
+
+      console.log('\nReverse proxy required (example routes):');
+      console.log(`  /api/a2a/*   -> http://127.0.0.1:${backendPort}`);
+      console.log(`  /dashboard/* -> http://127.0.0.1:${backendPort}`);
+      console.log(`  /callbook/*  -> http://127.0.0.1:${backendPort}`);
+      console.log('');
+      console.log('If you have configured your reverse proxy and want to continue, run:');
+      console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --confirm-tiers --confirm-ingress`);
+      console.log('');
+      if (!args.flags['confirm-ingress']) {
+        return;
+      }
+    } else {
+      console.log('✅ No reverse proxy required based on invite host/port.');
+    }
+
+    if (!config.getOnboarding().ingress_confirmed) {
+      config.setOnboarding({
+        step: 'ingress',
+        ingress_confirmed: true
+      });
+    }
+
+    // ── Step 5: External IP + reachability check ───────────────
+    console.log('\n5️⃣  External IP + reachability check');
+
+    if (inviteLooksLocal) {
+      console.log('Skipping external IP probe: invite host looks local/unroutable.');
+    } else {
+      const external = await getExternalIp({ forceRefresh: true });
+      if (external && external.ip) {
+        console.log(`External IP (${external.source || 'resolver'}): ${external.ip}`);
+      } else {
+        console.log(`External IP lookup failed: ${external && external.error ? external.error : 'unknown_error'}`);
+      }
+    }
+
+	    const localListener = await isPortListening(backendPort, '127.0.0.1', { timeoutMs: 500 });
+	    if (!localListener.listening) {
+	      console.log('\n⚠️  A2A server is not reachable locally yet.');
+	      console.log('Start it, then rerun quickstart:');
+	      console.log(`  A2A_HOSTNAME="${inviteHost}" a2a server --port ${backendPort}`);
+	      console.log('');
+	      return;
+	    }
+	    const localPing = await probeLocalPing(backendPort, inviteLooksLocal ? 250 : 1000);
+	    if (!localPing.ok) {
+	      if (inviteLooksLocal) {
+	        console.log(`\n⚠️  Port ${backendPort} is listening but /api/a2a/ping did not respond within a short timeout.`);
+	        console.log('Continuing onboarding anyway (invite host is local/unroutable).');
+	      } else {
+	        console.log('\n⚠️  A2A server is not responding locally yet.');
+	        console.log('Start it, then rerun quickstart:');
+	        console.log(`  A2A_HOSTNAME="${inviteHost}" a2a server --port ${backendPort}`);
+	        console.log('');
+	        return;
+	      }
+	    }
+
+    if (inviteLooksLocal) {
+      console.log('Skipping external reachability check: invite host looks local/unroutable.');
+    } else {
+      const extPing = await externalPingCheck(expectedPingUrl);
+      if (extPing.ok) {
+        console.log(`✅ External ping OK (${extPing.provider})`);
+      } else if (!args.flags['skip-verify']) {
+        console.log('⚠️  External ping FAILED (server may not be publicly reachable yet).');
+        console.log('Fix ingress (DNS/reverse proxy/firewall), then rerun with:');
+        console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --confirm-tiers --confirm-ingress`);
+        console.log('');
+        return;
+      } else {
+        console.log('⚠️  External ping FAILED (skipped via --skip-verify).');
+      }
+    }
+
+    if (!config.getOnboarding().verify_confirmed) {
+      config.setOnboarding({
+        step: 'verify',
+        verify_confirmed: true
+      });
+    }
+
+    config.completeOnboarding();
+    console.log('✅ Onboarding complete.');
+    console.log('Next: a2a gui   or   a2a create   or   a2a server');
   },
 
   install: () => {
@@ -1125,15 +1437,15 @@ https://github.com/onthegonow/a2a_calling
     }
   },
 
-  onboard: (args) => {
-    const { A2AConfig } = require('../src/lib/config');
-    const { readContextFiles, generateDefaultManifest, saveManifest, MANIFEST_FILE } = require('../src/lib/disclosure');
-    const config = new A2AConfig();
-
-    if (config.isOnboarded() && !args.flags.force) {
-      console.log('\u2705 Onboarding already complete. Use --force to re-run.');
-      return;
-    }
+	  onboard: (args) => {
+	    const { A2AConfig } = require('../src/lib/config');
+	    const { readContextFiles, generateDefaultManifest, saveManifest, MANIFEST_FILE } = require('../src/lib/disclosure');
+	    const config = new A2AConfig();
+	
+	    if (config.isOnboarded() && !args.flags.force) {
+	      console.log('\u2705 Onboarding already complete. Use --force to regenerate the disclosure manifest.');
+	      return;
+	    }
 
     const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
     console.log('\n\ud83d\ude80 A2A Onboarding\n' + '\u2550'.repeat(50) + '\n');
@@ -1159,15 +1471,13 @@ https://github.com/onthegonow/a2a_calling
 
     const agentName = args.flags.name || config.getAgent().name || process.env.A2A_AGENT_NAME || '';
     const hostname = args.flags.hostname || config.getAgent().hostname || process.env.A2A_HOSTNAME || '';
-    if (agentName) config.setAgent({ name: agentName });
-    if (hostname) config.setAgent({ hostname });
+	    if (agentName) config.setAgent({ name: agentName });
+	    if (hostname) config.setAgent({ hostname });
 
-    config.completeOnboarding();
-
-    console.log(`\n\u2705 Onboarding complete!`);
-    console.log(`   Manifest: ${MANIFEST_FILE}`);
-    console.log(`   Next: a2a quickstart  or  a2a server\n`);
-  },
+	    console.log(`\n\u2705 Disclosure manifest generated.`);
+	    console.log(`   Manifest: ${MANIFEST_FILE}`);
+	    console.log('   Next: a2a quickstart\n');
+	  },
 
   help: () => {
     console.log(`A2A Calling - Agent-to-Agent Communication
@@ -1194,11 +1504,13 @@ Contacts:
   contacts add <url>  Add a contact
     --name, -n        Agent name
     --owner, -o       Owner name
+    --server-name     Server label (optional)
     --notes           Notes about this contact
     --tags            Comma-separated tags
     --link            Link to token ID you gave them
   contacts show <n>   Show contact details + linked token
   contacts edit <n>   Edit contact metadata
+    --server-name     Server label (optional)
   contacts link <n> <tok>  Link a token to a contact
   contacts ping <n>   Ping contact, update status
   contacts rm <n>     Remove contact
@@ -1215,7 +1527,7 @@ Conversations:
   conversations end <id>   End and summarize conversation
 
 Calling:
-  call <contact|url> <msg>  Call a remote agent
+  call <contact|url> <msg>  Call a contact (or invite URL)
   ping <url>          Check if agent is reachable
   status <url>        Get A2A status
   gui                 Open the local dashboard GUI in a browser
@@ -1225,9 +1537,14 @@ Server:
   server              Start the A2A server
     --port, -p        Port to listen on (default: 3001)
   
-  quickstart          One-command setup: check server + create invite
-    --name, -n        Agent name for the invite
-    --owner, -o       Owner name (human behind the agent)
+  quickstart          Deterministic onboarding (access → tiers → ingress → verify)
+    --hostname        Public hostname for remote access (e.g. myserver.com:443)
+    --public-port     Port to assume when --hostname omits a port (default: 443)
+    --port            A2A server port to run locally (default: 3001)
+    --confirm-tiers   Confirm tier topics/goals and continue
+    --confirm-ingress Confirm reverse proxy/ingress is configured and continue
+    --skip-verify     Skip external reachability check (not recommended)
+    --force           Reset onboarding and start over
   
   onboard             Generate disclosure manifest from workspace context
     --force           Re-run even if already onboarded

@@ -32,16 +32,34 @@ Enable agent-to-agent communication across OpenClaw instances.
 Before processing ANY /a2a command, check onboarding status:
 
 ```bash
-cat ~/.config/openclaw/a2a-config.json 2>/dev/null | grep '"onboardingComplete"'
+node - <<'NODE'
+const fs = require('fs');
+const path = require('path');
+
+const dir = process.env.A2A_CONFIG_DIR ||
+  process.env.OPENCLAW_CONFIG_DIR ||
+  path.join(process.env.HOME || '/tmp', '.config', 'openclaw');
+const file = path.join(dir, 'a2a-config.json');
+
+let ok = false;
+try {
+  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  ok = cfg.onboarding &&
+    cfg.onboarding.version === 2 &&
+    cfg.onboarding.step === 'complete';
+} catch (e) {}
+
+process.stdout.write(ok ? 'onboarded\n' : 'not_onboarded\n');
+NODE
 ```
 
-**If the file does not exist or `onboardingComplete` is `false`:**
+**If it prints `not_onboarded`:**
 - DO NOT process the requested command yet
 - Tell the user: "A2A needs initial setup. Let me configure your agent's disclosure topics first."
-- Run the Quickstart flow below to completion
+- Run the deterministic Quickstart flow below to completion (flags-based, step-by-step)
 - Only THEN proceed with the user's original command
 
-**If `onboardingComplete` is `true`:** proceed normally.
+**If it prints `onboarded`:** proceed normally.
 
 **Context gathering for onboarding:** Read ALL available context to generate personalized tier topics:
 - **Primary:** USER.md, HEARTBEAT.md, SOUL.md
@@ -58,13 +76,51 @@ Extract: professional context, interests, goals, skills, sensitive areas. Group 
 - Recommended: run the A2A backend on an internal port and expose it via a reverse proxy on `:443` (HTTPS) or `:80` (HTTP), routing `/api/a2a/*` to the backend.
 - `npx a2acalling setup` inspects port 80 and prints reverse proxy guidance + an external reachability check.
 
+## Publishing (Maintainers)
+
+This repo ships as:
+- GitHub repo: `onthegonow/a2a_calling`
+- npm package: `a2acalling`
+
+Maintainer credentials are local-only and must never be committed:
+- `.env` (gitignored) must contain `GH_TOKEN` and `NPM_TOKEN`
+- GitHub Actions repo secrets should also include `GH_TOKEN` and `NPM_TOKEN` for automated releases
+
 ## Commands
 
 ### Quickstart
 
 User says: `/a2a quickstart`, `/a2a start`, "set up A2A", "get started with A2A", "configure what my agent shares"
 
-Full onboarding flow: generates a disclosure manifest that controls what topics your agent leads with, discusses, or deflects during A2A calls — scoped by access tier (public, friends, family).
+Deterministic onboarding flow (sequential, flags-based):
+
+1. Background bootstrap (config + disclosure)
+2. Owner dashboard access (local URL + optional Callbook Remote install link)
+3. Set permission tiers: populate and confirm tier `topics` + `goals`
+4. Port scan + reverse proxy guidance (if needed for public hostname)
+5. External IP confirmation and public reachability check (public hostname only)
+
+Run it like:
+
+```bash
+# Local machine (local-only invites)
+a2a quickstart --port 3001
+
+# Server / public hostname
+a2a quickstart --hostname YOUR_DOMAIN:443 --port 3001
+```
+
+Quickstart will print a proposed tier configuration. After the user reviews it, re-run with:
+
+```bash
+a2a quickstart --port 3001 --confirm-tiers
+# or (public hostname)
+a2a quickstart --hostname YOUR_DOMAIN:443 --port 3001 --confirm-tiers
+```
+
+If reverse proxy/ingress is required, Quickstart will stop and ask for explicit confirmation (`--confirm-ingress`).
+
+Full disclosure onboarding (manifest editing) remains available below: it generates a disclosure manifest that controls what topics your agent leads with, discusses, or deflects during A2A calls — scoped by access tier (public, friends, family).
 
 This onboarding is required before the first `/a2a call`. The owner must approve permissions first.
 

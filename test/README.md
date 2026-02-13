@@ -33,7 +33,7 @@ test/
 ├── profiles/
 │   └── golda-deluxe.js              # Canonical test agent profile
 ├── unit/
-│   ├── tokens.test.js               # Token CRUD, validation, revocation, remotes
+│   ├── tokens.test.js               # Token CRUD, validation, revocation, contacts
 │   ├── config.test.js               # Config lifecycle, tiers, persistence
 │   ├── disclosure.test.js           # Manifest load/save, tier merging, formatting
 │   ├── prompt-template.test.js      # Prompt construction, phases, boundaries
@@ -134,7 +134,6 @@ Test profiles live in `test/profiles/` and define a complete agent identity that
 
 ```
 public  →  friends  →  family
-(chat-only)  (tools-read)  (tools-write)
 
 Each higher tier INCLUDES all topics from lower tiers.
 Friends sees public + friends topics.

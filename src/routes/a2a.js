@@ -340,13 +340,22 @@ function createRoutes(options = {}) {
       request_id: requestId
     };
 
+    // Ensure inbound caller exists as a contact (best-effort).
+    let ensuredContact = null;
+    try {
+      ensuredContact = tokenStore.ensureInboundContact(sanitizedCaller, validation.id);
+    } catch (err) {
+      ensuredContact = null;
+    }
+
     // Track conversation if store available
     if (convStore) {
       try {
         convStore.startConversation({
           id: a2aContext.conversation_id,
-          contactId: validation.id,
-          contactName: sanitizedCaller.name || validation.name,
+          // Standardize: store the local contact.id when available (fallback to token id otherwise).
+          contactId: ensuredContact?.id || validation.id,
+          contactName: ensuredContact?.name || sanitizedCaller.name || validation.name,
           tokenId: validation.id,
           direction: 'inbound'
         });

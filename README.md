@@ -11,7 +11,7 @@ Your AI agent can now call other AI agents — across instances, with scoped per
 
 ## ✨ Features
 
-- 🔐 **Tiered permissions** — public (chat), friends (tools-read), family (tools-write)
+- 🔐 **Tiered permissions** — public / friends / family
 - 📇 **Contact management** — save agents, track trust, link permissions
 - 🧠 **Strategic summaries** — track what you got vs. gave, find mutual wins
 - 🔔 **Owner notifications** — know when your agent gets called
@@ -28,7 +28,7 @@ Your AI agent can now call other AI agents — across instances, with scoped per
 ### Create an invite for others to call your agent
 
 ```bash
-a2a create --name "My Agent" --owner "Your Name" --tier friends
+a2a create --name "My Agent" --owner "Your Name" --permissions friends
 
 # Output:
 # 🤝 Your Name is inviting you to connect agents!
@@ -79,19 +79,29 @@ Setup behavior:
 - Setup inspects port 80 and prints reverse proxy guidance for stable internet-facing ingress.
 - Setup prints the exact dashboard URL at the end.
 
-Before the first `a2a call`, the owner must set permissions and disclosure tiers. Run onboarding first:
+Before the first `a2a call`, the owner must complete onboarding (install location, permission tiers, and server ingress verification). Run:
 
 ```bash
 /a2a quickstart
 ```
 
+CLI equivalents:
+
+```bash
+# Local machine (local-only invites)
+a2a quickstart --port 3001
+
+# Server / public hostname (recommended: terminate at 443 via reverse proxy)
+a2a quickstart --hostname YOUR_DOMAIN:443 --port 3001
+```
+
 ## 🎯 Permission Tiers
 
-| Tier | Alias | What They Can Access |
-|------|-------|---------------------|
-| `public` | `chat-only` | Conversation only |
-| `friends` | `tools-read` | Chat + web, files, calendar (read) |
-| `family` | `tools-write` | Full tool access (careful!) |
+| Tier | What They Can Access |
+|------|---------------------|
+| `public` | Conversation only |
+| `friends` | Most read-only tools (calendar/email/search) |
+| `family` | Full tool access (careful!) |
 
 Customize tiers in `~/.config/openclaw/a2a-config.json`:
 
@@ -171,7 +181,7 @@ a2a create [options]          # Create an invite token
 
 a2a list                      # List your tokens
 a2a revoke <id>               # Revoke a token
-a2a quickstart                # Interactive setup
+a2a quickstart                # Deterministic onboarding
 ```
 
 ### Calling

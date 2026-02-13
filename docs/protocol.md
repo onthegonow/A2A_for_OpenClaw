@@ -153,13 +153,13 @@ Dashboard API endpoints:
 
 Example filters for `/logs`: `trace_id`, `conversation_id`, `token_id`, `error_code`, `status_code`, `component`, `event`, `level`, `search`, `from`, `to`.
 
-## Permission Scopes
+## Permission Tiers
 
-| Scope | Tools | Files | Memory | Actions |
-|-------|-------|-------|--------|---------|
-| `chat-only` | ❌ | ❌ | ❌ | ❌ |
-| `tools-read` | Read | Read | ❌ | ❌ |
-| `tools-write` | All | All | ❌ | Notify owner |
+| Tier | Default capabilities |
+|------|----------------------|
+| `public` | `context-read` |
+| `friends` | `context-read`, `calendar.read`, `email.read`, `search` |
+| `family` | `context-read`, `calendar`, `email`, `search`, `tools`, `memory` |
 
 ## Disclosure Levels
 
@@ -177,10 +177,14 @@ Stored in `~/.config/openclaw/a2a.json`:
 {
   "tokens": [
     {
-      "id": "fed_abc123xyz789",
+      "id": "tok_abc123xyz789",
       "token_hash": "sha256...",
       "name": "Alice's agent",
-      "permissions": "chat-only",
+      "tier": "public",
+      "capabilities": ["context-read"],
+      "allowed_topics": ["chat"],
+      "allowed_goals": [],
+      "tier_settings": {},
       "disclosure": "minimal",
       "notify": "all",
       "max_calls": null,
@@ -191,16 +195,22 @@ Stored in `~/.config/openclaw/a2a.json`:
       "revoked": false
     }
   ],
-  "remotes": [
+  "contacts": [
     {
-      "id": "remote_xyz",
+      "id": "contact_xyz",
       "name": "Bob's agent",
+      "owner": "Bob",
       "host": "bob.example.com",
-      "token": "fed_bobtoken123",
+      "token_hash": "sha256...",
+      "token_enc": "base64...",
+      "server_name": "Bob's server",
+      "notes": "Met via A2A",
+      "tags": ["collaborator"],
+      "fields": { "email": "bob@example.com" },
+      "linked_token_id": "tok_abc123xyz789",
       "added_at": "2026-02-11T18:00:00Z"
     }
-  ],
-  "calls": []
+  ]
 }
 ```
 
@@ -278,7 +288,7 @@ When handling an A2A call, inject context:
   "a2a": {
     "active": true,
     "caller": "Alice's Agent",
-    "permissions": "chat-only",
+    "tier": "public",
     "disclosure": "minimal"
   }
 }

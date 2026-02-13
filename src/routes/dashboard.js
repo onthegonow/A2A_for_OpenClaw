@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { TokenStore } = require('../lib/tokens');
 const { ConversationStore } = require('../lib/conversations');
+const { A2AClient } = require('../lib/client');
 const { A2AConfig } = require('../lib/config');
 const { loadManifest, saveManifest } = require('../lib/disclosure');
 const { resolveInviteHost } = require('../lib/invite-host');
@@ -93,6 +94,30 @@ function sanitizeString(value, maxLength = 200) {
     .slice(0, maxLength);
 }
 
+function parseBoolean(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const s = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(s)) return true;
+  if (['false', '0', 'no', 'n', 'off', ''].includes(s)) return false;
+  return Boolean(value);
+}
+
+function resolveAgentContext(options = {}) {
+  const provided = options.agentContext && typeof options.agentContext === 'object' ? options.agentContext : null;
+  const name = sanitizeString(
+    provided?.name || process.env.A2A_AGENT_NAME || process.env.AGENT_NAME || 'a2a-agent',
+    80
+  ) || 'a2a-agent';
+  const owner = sanitizeString(
+    provided?.owner || process.env.A2A_OWNER_NAME || process.env.USER || 'Agent Owner',
+    120
+  ) || 'Agent Owner';
+
+  return { name, owner };
+}
+
 function normalizeTierId(value) {
   return sanitizeString(value, 80)
     .toLowerCase()
@@ -167,6 +192,7 @@ function buildContext(options = {}) {
   const config = options.config || new A2AConfig();
   const logger = options.logger || createLogger({ component: 'a2a.dashboard' });
   const callbookStore = options.callbookStore || new CallbookStore(tokenStore.configDir);
+  const agentContext = resolveAgentContext(options);
   let convStore = options.convStore || null;
   if (!convStore) {
     try {
@@ -185,6 +211,7 @@ function buildContext(options = {}) {
     convStore,
     callbookStore,
     logger,
+    agentContext,
     staticDir: DASHBOARD_STATIC_DIR
   };
 }
@@ -223,6 +250,36 @@ function resolveConversationContact(conversation, contactIndex) {
     return contactIndex.byName.get(nameKey);
   }
   return null;
+}
+
+function toDashboardContact(contact) {
+  const canCall = Boolean(
+    contact &&
+    String(contact.host || '').trim() &&
+    contact.token_enc &&
+    contact.token_hash
+  );
+
+  return {
+    id: contact.id,
+    owner: contact.owner || null,
+    name: contact.name || null,
+    host: contact.host || null,
+    web_address: contact.host || null,
+    is_mine: Boolean(contact.is_mine),
+    server_name: contact.server_name || null,
+    notes: contact.notes || null,
+    tags: Array.isArray(contact.tags) ? contact.tags : [],
+    fields: (contact.fields && typeof contact.fields === 'object' && !Array.isArray(contact.fields)) ? contact.fields : {},
+    linked_token_id: contact.linked_token_id || null,
+    status: contact.status || 'unknown',
+    last_seen: contact.last_seen || null,
+    last_check: contact.last_check || null,
+    last_error: contact.last_error || null,
+    added_at: contact.added_at || null,
+    updated_at: contact.updated_at || null,
+    can_call: canCall
+  };
 }
 
 function makeEnsureDashboardAccess(context) {
@@ -406,14 +463,18 @@ function createDashboardApiRouter(options = {}) {
     const refreshIp = String(req.query.refresh_ip || 'false') === 'true';
     let resolvedHost = null;
     let warnings = [];
+    let inviteResolution = null;
     try {
       const resolved = await resolveInviteHost({
         config: context.config,
         fallbackHost: req.headers.host || process.env.HOSTNAME || 'localhost',
         defaultPort: process.env.PORT || process.env.A2A_PORT || 3001,
         refreshExternalIp: refreshIp,
-        forceRefreshExternalIp: refreshIp
+        forceRefreshExternalIp: refreshIp,
+        alwaysLookupExternalIp: true,
+        warnOnExternalIpFailure: refreshIp
       });
+      inviteResolution = resolved;
       resolvedHost = resolved.host;
       warnings = resolved.warnings || [];
     } catch (err) {
@@ -432,11 +493,30 @@ function createDashboardApiRouter(options = {}) {
       success: true,
       dashboard: true,
       conversations_enabled: Boolean(context.convStore),
+      agent: {
+        name: context.agentContext?.name || null,
+        owner_name: context.agentContext?.owner || null,
+        server_name: sanitizeString(context.config.getAgent?.().server_name || context.config.getAgent?.().serverName || '', 120) || null
+      },
       config_file: require('../lib/config').CONFIG_FILE,
       manifest_file: require('../lib/disclosure').MANIFEST_FILE,
       public_base_url: publicBaseUrl,
       public_dashboard_url: publicBaseUrl ? `${publicBaseUrl}/dashboard/` : null,
       callbook_install_base: publicBaseUrl ? `${publicBaseUrl}/callbook/install` : null,
+      invite_host: inviteResolution ? {
+        host: inviteResolution.host,
+        source: inviteResolution.source || null,
+        original_host: inviteResolution.originalHost || null
+      } : null,
+      external_ip: inviteResolution && inviteResolution.externalIpInfo ? {
+        ip: inviteResolution.externalIpInfo.ip || null,
+        checked_at: inviteResolution.externalIpInfo.checkedAt || null,
+        source: inviteResolution.externalIpInfo.source || null,
+        from_cache: Boolean(inviteResolution.externalIpInfo.fromCache),
+        stale: Boolean(inviteResolution.externalIpInfo.stale),
+        error: inviteResolution.externalIpInfo.error || null,
+        attempts: inviteResolution.externalIpInfo.attempts || null
+      } : null,
       warnings,
       callbook: {
         enabled: Boolean(context.callbookStore && context.callbookStore.isAvailable()),
@@ -636,7 +716,7 @@ function createDashboardApiRouter(options = {}) {
   });
 
   router.get('/contacts', (req, res) => {
-    const contacts = context.tokenStore.listRemotes();
+    const contacts = context.tokenStore.listContacts({ includeLinkedToken: true, includeSecrets: true });
     const contactIndex = buildContactIndex(contacts);
     const conversations = context.convStore
       ? context.convStore.listConversations({
@@ -663,10 +743,12 @@ function createDashboardApiRouter(options = {}) {
         return String(b.last_message_at || '').localeCompare(String(a.last_message_at || ''));
       });
       const latest = calls[0] || null;
+
       return {
-        ...contact,
+        ...toDashboardContact(contact),
         call_count: calls.length,
         last_call_at: latest?.last_message_at || null,
+        last_call_id: latest?.id || null,
         last_summary: latest?.summary || null,
         last_owner_summary: latest?.owner_summary || null
       };
@@ -677,27 +759,38 @@ function createDashboardApiRouter(options = {}) {
 
   router.post('/contacts', (req, res) => {
     const body = req.body || {};
-    const inviteUrl = sanitizeString(body.invite_url || body.inviteUrl || body.url || '', 600);
+    const inviteUrl = sanitizeString(
+      body.invite_url || body.inviteUrl || body.web_address || body.webAddress || body.url || '',
+      600
+    );
     const name = sanitizeString(body.name || '', 120) || null;
     const owner = sanitizeString(body.owner || '', 120) || null;
+    const isMine = parseBoolean(body.is_mine !== undefined ? body.is_mine : body.isMine);
+    const serverName = sanitizeString(body.server_name || body.serverName || '', 120) || null;
     const notes = sanitizeString(body.notes || '', 800) || null;
     const tags = sanitizeStringArray(body.tags || [], 30, 40);
+    const fields = (body.fields && typeof body.fields === 'object' && !Array.isArray(body.fields)) ? body.fields : {};
 
     if (!inviteUrl) {
       return res.status(400).json({ success: false, error: 'invite_url_required' });
     }
 
     try {
-      const result = context.tokenStore.addRemote(inviteUrl, {
+      const result = context.tokenStore.addContact(inviteUrl, {
         name: name || undefined,
         owner: owner || undefined,
+        is_mine: isMine,
+        server_name: serverName || undefined,
         notes: notes || undefined,
-        tags: tags || undefined
+        tags: tags || undefined,
+        fields: fields || undefined
       });
       if (!result.success) {
         return res.status(409).json({ success: false, error: result.error || 'contact_add_failed', contact: result.existing || null });
       }
-      return res.json({ success: true, contact: result.remote });
+      const stored = context.tokenStore.listContacts({ includeLinkedToken: false, includeSecrets: true })
+        .find(c => c.id === result.contact.id);
+      return res.json({ success: true, contact: stored ? toDashboardContact(stored) : toDashboardContact(result.contact) });
     } catch (err) {
       return res.status(400).json({
         success: false,
@@ -717,17 +810,24 @@ function createDashboardApiRouter(options = {}) {
     const updates = {};
     if (body.name !== undefined) updates.name = sanitizeString(body.name, 120);
     if (body.owner !== undefined) updates.owner = sanitizeString(body.owner, 120);
+    if (body.is_mine !== undefined) updates.is_mine = parseBoolean(body.is_mine);
+    if (body.isMine !== undefined) updates.is_mine = parseBoolean(body.isMine);
+    if (body.server_name !== undefined) updates.server_name = sanitizeString(body.server_name, 120);
+    if (body.serverName !== undefined) updates.server_name = sanitizeString(body.serverName, 120);
     if (body.notes !== undefined) updates.notes = sanitizeString(body.notes, 800);
     if (body.tags !== undefined) updates.tags = sanitizeStringArray(body.tags, 30, 40);
+    if (body.fields !== undefined) updates.fields = body.fields;
     if (body.linked_token_id !== undefined) updates.linked_token_id = sanitizeString(body.linked_token_id, 80);
     if (body.linkedTokenId !== undefined) updates.linked_token_id = sanitizeString(body.linkedTokenId, 80);
 
-    const result = context.tokenStore.updateRemote(contactId, updates);
+    const result = context.tokenStore.updateContact(contactId, updates);
     if (!result.success) {
       return res.status(404).json({ success: false, error: result.error || 'contact_not_found' });
     }
 
-    return res.json({ success: true, contact: result.remote });
+    const stored = context.tokenStore.listContacts({ includeLinkedToken: false, includeSecrets: true })
+      .find(c => c.id === contactId);
+    return res.json({ success: true, contact: stored ? toDashboardContact(stored) : toDashboardContact(result.contact) });
   });
 
   router.delete('/contacts/:contactId', (req, res) => {
@@ -736,12 +836,99 @@ function createDashboardApiRouter(options = {}) {
       return res.status(400).json({ success: false, error: 'contact_id_required' });
     }
 
-    const result = context.tokenStore.removeRemote(contactId);
+    const result = context.tokenStore.removeContact(contactId);
     if (!result.success) {
       return res.status(404).json({ success: false, error: result.error || 'contact_not_found' });
     }
 
-    return res.json({ success: true, contact: result.remote });
+    return res.json({ success: true, contact: toDashboardContact(result.contact) });
+  });
+
+  router.post('/contacts/:contactId/call', async (req, res) => {
+    const contactId = sanitizeString(req.params.contactId, 120);
+    if (!contactId) {
+      return res.status(400).json({ success: false, error: 'contact_id_required' });
+    }
+
+    const body = req.body || {};
+    const message = sanitizeString(body.message || body.msg || '', 10000);
+    const timeoutSeconds = Math.max(5, Math.min(300, Number.parseInt(String(body.timeout_seconds || body.timeoutSeconds || '60'), 10) || 60));
+    if (!message) {
+      return res.status(400).json({ success: false, error: 'message_required', message: 'Message is required' });
+    }
+
+    const contact = context.tokenStore.getContact(contactId);
+    if (!contact) {
+      return res.status(404).json({ success: false, error: 'contact_not_found' });
+    }
+    if (!contact.host || !contact.token) {
+      return res.status(400).json({ success: false, error: 'contact_not_callable', message: 'This contact has no callable A2A endpoint stored.' });
+    }
+
+    const conversationId = ConversationStore.generateConversationId();
+    const client = new A2AClient({
+      caller: {
+        name: context.agentContext?.name || 'Dashboard',
+        owner: context.agentContext?.owner || 'Agent Owner',
+        instance: context.config.getAgent?.().hostname || null
+      }
+    });
+
+    // Track in local conversation DB (if enabled).
+    if (context.convStore) {
+      try {
+        context.convStore.startConversation({
+          id: conversationId,
+          contactId: contact.id,
+          contactName: contact.name || contact.host,
+          tokenId: null,
+          direction: 'outbound'
+        });
+        context.convStore.addMessage(conversationId, {
+          direction: 'outbound',
+          role: 'user',
+          content: message
+        });
+      } catch (err) {
+        // Best effort; call should still go through.
+      }
+    }
+
+    const url = `a2a://${contact.host}/${contact.token}`;
+    try {
+      const result = await client.call(url, message, { conversationId, timeoutSeconds });
+      context.tokenStore.updateContactStatus(contact.id, 'online');
+
+      if (context.convStore) {
+        try {
+          context.convStore.addMessage(conversationId, {
+            direction: 'inbound',
+            role: 'assistant',
+            content: String(result?.response || '')
+          });
+          // One-shot outbound dashboard calls should be considered concluded.
+          await context.convStore.concludeConversation(conversationId, {});
+        } catch (err) {
+          // ignore
+        }
+      }
+
+      return res.json({
+        success: true,
+        conversation_id: conversationId,
+        response: result?.response || '',
+        remote_trace_id: result?.trace_id || null,
+        remote_request_id: result?.request_id || null,
+        can_continue: result?.can_continue !== false
+      });
+    } catch (err) {
+      context.tokenStore.updateContactStatus(contact.id, 'offline', err.message);
+      return res.status(502).json({
+        success: false,
+        error: 'contact_call_failed',
+        message: err.message || 'Call failed'
+      });
+    }
   });
 
   router.get('/contacts/:contactId/calls', (req, res) => {
@@ -750,7 +937,7 @@ function createDashboardApiRouter(options = {}) {
     }
 
     const contactId = req.params.contactId;
-    const contacts = context.tokenStore.listRemotes();
+    const contacts = context.tokenStore.listContacts({ includeLinkedToken: false, includeSecrets: false });
     const contactIndex = buildContactIndex(contacts);
     const contact = contactIndex.byId.get(contactId);
     if (!contact) {
@@ -789,7 +976,7 @@ function createDashboardApiRouter(options = {}) {
       includeMessages: false
     });
 
-    const contacts = context.tokenStore.listRemotes();
+    const contacts = context.tokenStore.listContacts({ includeLinkedToken: false, includeSecrets: false });
     const contactIndex = buildContactIndex(contacts);
     const enriched = calls.map(conv => ({
       ...conv,
@@ -816,7 +1003,7 @@ function createDashboardApiRouter(options = {}) {
       return res.status(404).json({ success: false, error: 'conversation_not_found' });
     }
 
-    const contacts = context.tokenStore.listRemotes();
+    const contacts = context.tokenStore.listContacts({ includeLinkedToken: false, includeSecrets: false });
     const contactIndex = buildContactIndex(contacts);
     const contact = resolveConversationContact({
       contact_name: contextData.contact
@@ -854,7 +1041,7 @@ function createDashboardApiRouter(options = {}) {
 
     res.json({
       success: true,
-      onboarding_complete: cfg.onboardingComplete === true,
+      onboarding_complete: context.config.isOnboarded(),
       defaults: cfg.defaults || {},
       agent: cfg.agent || {},
       tiers,

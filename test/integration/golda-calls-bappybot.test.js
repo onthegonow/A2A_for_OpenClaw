@@ -96,7 +96,7 @@ module.exports = function (test, assert, helpers) {
     const { token, record } = tokenStore.create({
       name: profile.agent.name,
       owner: profile.agent.owner,   // null (unnamed)
-      permissions: 'friends',        // friends tier → tools-read
+      permissions: 'friends',
       disclosure: 'public',
       expires: '7d',
       maxCalls: 50,
@@ -138,15 +138,15 @@ module.exports = function (test, assert, helpers) {
     // ── ensureContact — replicates src/server.js:50-90 ────────
     function ensureContact(caller, tokenId) {
       if (!caller?.name) return null;
-      const remotes = tokenStore.listRemotes();
-      const existing = remotes.find(r =>
+      const contacts = tokenStore.listContacts();
+      const existing = contacts.find(r =>
         r.name === caller.name ||
         (caller.owner && r.owner === caller.owner)
       );
       if (existing) return existing;
 
       const db = JSON.parse(fs.readFileSync(tokenStore.dbPath, 'utf8'));
-      db.remotes = db.remotes || [];
+      db.contacts = db.contacts || [];
       const contact = {
         id: `contact_${Date.now()}`,
         name: caller.name,
@@ -156,9 +156,9 @@ module.exports = function (test, assert, helpers) {
         notes: `Inbound caller via token ${tokenId}`,
         tags: ['inbound'],
         status: 'unknown',
-        linkedTokenId: tokenId
+        linked_token_id: tokenId
       };
-      db.remotes.push(contact);
+      db.contacts.push(contact);
       fs.writeFileSync(tokenStore.dbPath, JSON.stringify(db, null, 2));
       return contact;
     }
@@ -358,7 +358,7 @@ module.exports = function (test, assert, helpers) {
     assert.ok(endRes.body.success);
 
     // ── Verify contacts ───────────────────────────────────────
-    const contacts = tokenStore.listRemotes();
+    const contacts = tokenStore.listContacts();
     const goldaContact = contacts.find(r => r.name === 'Golda Deluxe');
 
     assert.ok(goldaContact, 'Golda Deluxe should be in contacts after the call');

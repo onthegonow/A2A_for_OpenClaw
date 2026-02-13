@@ -153,18 +153,11 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('legacy tier values mapped to labels on create', () => {
+  test('create throws on invalid tier', () => {
     const store = freshStore();
-
-    const pub = store.create({ permissions: 'chat-only' });
-    assert.equal(pub.record.tier, 'public');
-
-    const friend = store.create({ permissions: 'tools-read' });
-    assert.equal(friend.record.tier, 'friends');
-
-    const family = store.create({ permissions: 'tools-write' });
-    assert.equal(family.record.tier, 'family');
-
+    assert.throws(() => store.create({ permissions: 'chat-only' }));
+    assert.throws(() => store.create({ permissions: 'tools-read' }));
+    assert.throws(() => store.create({ permissions: 'tools-write' }));
     tmp.cleanup();
   });
 
@@ -340,41 +333,41 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  // ── Remote Management ─────────────────────────────────────────
+  // ── Contact Management ────────────────────────────────────────
 
-  test('addRemote parses a2a:// URL', () => {
+  test('addContact parses a2a:// URL', () => {
     const store = freshStore();
-    const result = store.addRemote('a2a://remote.example.com/fed_abc123', {
+    const result = store.addContact('a2a://remote.example.com/fed_abc123', {
       name: 'Remote Agent',
       owner: 'Alice',
       tags: ['collaborator']
     });
 
     assert.ok(result.success);
-    assert.equal(result.remote.name, 'Remote Agent');
+    assert.equal(result.contact.name, 'Remote Agent');
     tmp.cleanup();
   });
 
-  test('addRemote rejects invalid URL', () => {
+  test('addContact rejects invalid URL', () => {
     const store = freshStore();
-    assert.throws(() => store.addRemote('https://bad.com/nope'));
+    assert.throws(() => store.addContact('https://bad.com/nope'));
     tmp.cleanup();
   });
 
-  test('addRemote detects duplicates', () => {
+  test('addContact detects duplicates', () => {
     const store = freshStore();
-    store.addRemote('a2a://host.com/fed_token1', { name: 'First' });
-    const dup = store.addRemote('a2a://host.com/fed_token1', { name: 'Second' });
+    store.addContact('a2a://host.com/fed_token1', { name: 'First' });
+    const dup = store.addContact('a2a://host.com/fed_token1', { name: 'Second' });
     assert.equal(dup.success, false);
     assert.equal(dup.error, 'duplicate');
     tmp.cleanup();
   });
 
-  test('getRemote decrypts token', () => {
+  test('getContact decrypts token', () => {
     const store = freshStore();
-    store.addRemote('a2a://remote.test/fed_secrettoken123', { name: 'Encrypted' });
+    store.addContact('a2a://remote.test/fed_secrettoken123', { name: 'Encrypted' });
 
-    const remote = store.getRemote('Encrypted');
+    const remote = store.getContact('Encrypted');
     assert.ok(remote);
     assert.equal(remote.token, 'fed_secrettoken123');
     assert.equal(remote.token_enc, undefined); // should be stripped
@@ -384,40 +377,40 @@ module.exports = function (test, assert, helpers) {
   test('linkTokenToContact binds token to remote', () => {
     const store = freshStore();
     const { record } = store.create({ name: 'SharedToken' });
-    store.addRemote('a2a://friend.com/fed_xxx', { name: 'Friend' });
+    store.addContact('a2a://friend.com/fed_xxx', { name: 'Friend' });
 
     const result = store.linkTokenToContact('Friend', record.id);
     assert.ok(result.success);
 
-    const remotes = store.listRemotes();
-    const linked = remotes.find(r => r.name === 'Friend');
+    const contacts = store.listContacts();
+    const linked = contacts.find(r => r.name === 'Friend');
     assert.ok(linked.linked_token);
     assert.equal(linked.linked_token.name, 'SharedToken');
     tmp.cleanup();
   });
 
-  test('updateRemote changes metadata', () => {
+  test('updateContact changes metadata', () => {
     const store = freshStore();
-    store.addRemote('a2a://host.com/fed_x', { name: 'ToUpdate' });
+    store.addContact('a2a://host.com/fed_x', { name: 'ToUpdate' });
 
-    const result = store.updateRemote('ToUpdate', {
+    const result = store.updateContact('ToUpdate', {
       notes: 'Updated notes',
       tags: ['updated']
     });
 
     assert.ok(result.success);
-    const remote = store.getRemote('ToUpdate');
+    const remote = store.getContact('ToUpdate');
     assert.equal(remote.notes, 'Updated notes');
     assert.deepEqual(remote.tags, ['updated']);
     tmp.cleanup();
   });
 
-  test('removeRemote deletes contact', () => {
+  test('removeContact deletes contact', () => {
     const store = freshStore();
-    store.addRemote('a2a://host.com/fed_x', { name: 'ToRemove' });
-    const result = store.removeRemote('ToRemove');
+    store.addContact('a2a://host.com/fed_x', { name: 'ToRemove' });
+    const result = store.removeContact('ToRemove');
     assert.ok(result.success);
-    assert.equal(store.getRemote('ToRemove'), null);
+    assert.equal(store.getContact('ToRemove'), null);
     tmp.cleanup();
   });
 
@@ -432,7 +425,7 @@ module.exports = function (test, assert, helpers) {
     const db = store._load();
 
     assert.deepEqual(db.tokens, []);
-    assert.deepEqual(db.remotes, []);
+    assert.deepEqual(db.contacts, []);
 
     // A backup should exist
     const backups = fs.readdirSync(tmp.dir).filter(f => f.includes('.corrupt.'));

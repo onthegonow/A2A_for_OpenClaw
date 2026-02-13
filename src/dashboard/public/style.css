@@ -140,6 +140,18 @@ button:hover {
   color: var(--accent);
 }
 
+.btn-link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.btn-link:hover {
+  text-decoration: underline;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -157,6 +169,10 @@ td {
 
 th {
   background: #f8fafc;
+}
+
+tr[data-selected="1"] td {
+  background: #f0f7ff;
 }
 
 .summary {

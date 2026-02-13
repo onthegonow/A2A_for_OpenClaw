@@ -22,10 +22,11 @@ module.exports = function (test, assert, helpers) {
     const config = freshConfig();
     const all = config.getAll();
 
-    assert.equal(all.onboardingComplete, false);
+    assert.equal(all.onboarding.version, 2);
+    assert.equal(all.onboarding.step, 'not_started');
     assert.ok(all.tiers.public);
     assert.ok(all.tiers.friends);
-    assert.ok(all.tiers.private);
+    assert.ok(all.tiers.family);
     assert.ok(all.tiers.custom);
     assert.equal(all.defaults.maxCalls, 100);
     assert.equal(all.defaults.rateLimit.perMinute, 10);
@@ -55,7 +56,7 @@ module.exports = function (test, assert, helpers) {
 
     assert.equal(tiers.public.name, 'Public');
     assert.equal(tiers.friends.name, 'Friends');
-    assert.equal(tiers.private.name, 'Private');
+    assert.equal(tiers.family.name, 'Family');
     tmp.cleanup();
   });
 
@@ -80,8 +81,8 @@ module.exports = function (test, assert, helpers) {
     assert.deepEqual(tiers.public.capabilities, ['context-read']);
     assert.includes(tiers.friends.capabilities, 'context-read');
     assert.includes(tiers.friends.capabilities, 'calendar.read');
-    assert.includes(tiers.private.capabilities, 'tools');
-    assert.includes(tiers.private.capabilities, 'memory');
+    assert.includes(tiers.family.capabilities, 'tools');
+    assert.includes(tiers.family.capabilities, 'memory');
     assert.deepEqual(tiers.custom.capabilities, ['context-read']);
     tmp.cleanup();
   });
@@ -90,12 +91,15 @@ module.exports = function (test, assert, helpers) {
     const config = freshConfig();
     const tiers = config.getTiers();
 
-    assert.deepEqual(tiers.public.topics, []);
+    assert.ok(Array.isArray(tiers.public.topics));
+    assert.ok(tiers.public.topics.length > 0);
     assert.deepEqual(tiers.public.goals, []);
-    assert.deepEqual(tiers.friends.topics, []);
+    assert.ok(Array.isArray(tiers.friends.topics));
+    assert.ok(tiers.friends.topics.length > 0);
     assert.deepEqual(tiers.friends.goals, []);
-    assert.deepEqual(tiers.private.topics, []);
-    assert.deepEqual(tiers.private.goals, []);
+    assert.ok(Array.isArray(tiers.family.topics));
+    assert.ok(tiers.family.topics.length > 0);
+    assert.deepEqual(tiers.family.goals, []);
     tmp.cleanup();
   });
 
@@ -171,7 +175,7 @@ module.exports = function (test, assert, helpers) {
     assert.ok(exported.tiers);
     assert.ok(exported.defaults);
     assert.ok(exported.agent);
-    assert.equal(exported.onboardingComplete, undefined); // private field excluded
+    assert.equal(exported.onboarding, undefined); // private field excluded
     tmp.cleanup();
   });
 };

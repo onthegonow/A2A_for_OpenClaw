@@ -79,53 +79,6 @@ function loadOpenClawConfig() {
   }
 }
 
-function normalizeDashboardPluginEntry(rawEntry, backendUrl) {
-  const issues = [];
-  const normalized = {
-    enabled: true,
-    config: {}
-  };
-  const entry = (rawEntry && typeof rawEntry === 'object') ? rawEntry : {};
-
-  const legacyBackendUrl = (typeof entry.backendUrl === 'string' && entry.backendUrl.trim())
-    ? entry.backendUrl.trim()
-    : null;
-  const rawConfig = (entry.config && typeof entry.config === 'object') ? entry.config : null;
-
-  if (!entry || typeof entry !== 'object') {
-    issues.push('plugin entry is missing or invalid');
-  }
-
-  if (entry && typeof entry.enabled === 'boolean') {
-    normalized.enabled = entry.enabled;
-  }
-
-  if (rawConfig) {
-    normalized.config = { ...rawConfig };
-  } else if (entry.config !== undefined) {
-    issues.push('plugin entry has non-object config; replacing with empty object');
-  }
-
-  if (legacyBackendUrl) {
-    issues.push(`legacy key detected: plugins.entries.${DASHBOARD_PLUGIN_ID}.backendUrl (using backendUrl migration)`);
-    normalized.config.backendUrl = backendUrl || legacyBackendUrl;
-  } else if (typeof normalized.config.backendUrl === 'string' && normalized.config.backendUrl.trim()) {
-    normalized.config.backendUrl = normalized.config.backendUrl.trim();
-  } else if (typeof backendUrl === 'string' && backendUrl.trim()) {
-    normalized.config.backendUrl = backendUrl.trim();
-  } else {
-    issues.push('backendUrl could not be determined; plugin may fail to route dashboard traffic');
-  }
-
-  return {
-    normalized,
-    issues,
-    changed: issues.length > 0,
-    legacyBackendUrl,
-    summary: `a2a-dashboard-proxy config => ${normalized.enabled ? 'enabled' : 'disabled'}, backendUrl=${normalized.config.backendUrl || 'missing'}`
-  };
-}
-
 function writeOpenClawConfig(config) {
   const backupPath = `${OPENCLAW_CONFIG}.backup.${Date.now()}`;
   fs.copyFileSync(OPENCLAW_CONFIG, backupPath);
@@ -345,8 +298,6 @@ function resolveBackendUrl(api: OpenClawPluginApi): URL {
     const entryConfig = (pluginEntry.config || {}) as Record<string, unknown>;
     const candidate = typeof entryConfig.backendUrl === "string" && entryConfig.backendUrl
       ? entryConfig.backendUrl
-      : typeof pluginEntry.backendUrl === "string" && pluginEntry.backendUrl
-      ? pluginEntry.backendUrl
       : fallback;
     return new URL(candidate);
   } catch {
@@ -699,6 +650,27 @@ async function install() {
     warn(w);
   }
 
+  // Network diagnostics: fetch the current egress IP via the same mechanism used for invite host resolution.
+  // This is extremely useful during install to separate "networking/ingress" issues from "code" issues.
+  let externalIpProbe = null;
+  try {
+    const { getExternalIp } = require('../src/lib/external-ip');
+    // Force refresh so we can surface "blocked outbound HTTPS/DNS" problems during setup.
+    externalIpProbe = await getExternalIp({ timeoutMs: 2500, forceRefresh: true });
+  } catch (err) {
+    externalIpProbe = {
+      ip: null,
+      error: err && err.message ? err.message : 'external_ip_probe_failed'
+    };
+  }
+  const externalIpSummary = (externalIpProbe && externalIpProbe.ip)
+    ? `${externalIpProbe.ip}${externalIpProbe.source ? ` (source: ${externalIpProbe.source})` : ''}` +
+      `${externalIpProbe.fromCache ? ' [cache]' : ''}${externalIpProbe.stale ? ' [stale]' : ''}`
+    : `FAILED${externalIpProbe && externalIpProbe.error ? ` (${externalIpProbe.error})` : ''}`;
+  const externalIpAttempts = (externalIpProbe && Array.isArray(externalIpProbe.attempts))
+    ? externalIpProbe.attempts
+    : [];
+
   const forceStandalone = Boolean(flags.standalone) || String(process.env.A2A_FORCE_STANDALONE || '').toLowerCase() === 'true';
   const hasOpenClawBinary = commandExists('openclaw');
   const hasOpenClawConfig = fs.existsSync(OPENCLAW_CONFIG);
@@ -771,17 +743,15 @@ async function install() {
       config.plugins = config.plugins || {};
       config.plugins.entries = config.plugins.entries || {};
       const rawEntry = config.plugins.entries[DASHBOARD_PLUGIN_ID];
-      const audit = normalizeDashboardPluginEntry(rawEntry, backendUrl);
-      for (const issue of audit.issues) {
-        warn(`a2a-dashboard-proxy config issue: ${issue}`);
-      }
-      if (audit.legacyBackendUrl) {
-        warn(`Auto-fixing legacy key: plugins.entries.${DASHBOARD_PLUGIN_ID}.backendUrl`);
-      }
-      if (audit.changed) {
-        log(`Migrated dashboard plugin config: ${audit.summary}`);
-      }
-      config.plugins.entries[DASHBOARD_PLUGIN_ID] = audit.normalized;
+      const existingEnabled = (rawEntry && typeof rawEntry.enabled === 'boolean') ? rawEntry.enabled : true;
+      const existingConfig = (rawEntry && rawEntry.config && typeof rawEntry.config === 'object') ? rawEntry.config : {};
+      config.plugins.entries[DASHBOARD_PLUGIN_ID] = {
+        enabled: existingEnabled,
+        config: {
+          ...existingConfig,
+          backendUrl
+        }
+      };
       configUpdated = true;
       log(`Configured gateway plugin entry: ${DASHBOARD_PLUGIN_ID}`);
     }
@@ -829,6 +799,21 @@ ${bold('━━━ Ingress Setup ━━━')}
 Invite host: ${green(inviteHost)}
 Expected ping URL: ${green(invitePingUrl)}
 
+External IP probe (egress):
+  ${externalIpProbe && externalIpProbe.source && String(externalIpProbe.source).includes('ifconfig.me')
+    ? green('ifconfig.me')
+    : 'external-ip resolver'} → ${externalIpProbe && externalIpProbe.ip ? green(externalIpSummary) : yellow(externalIpSummary)}
+${externalIpAttempts.length
+  ? `  Attempts:
+${externalIpAttempts.map(a => {
+  const service = a && a.service ? String(a.service) : '-';
+  const ok = Boolean(a && a.ok);
+  const status = a && a.statusCode ? ` (${a.statusCode})` : '';
+  const err = a && a.error ? ` (${a.error})` : '';
+  return `    - ${service}: ${ok ? 'ok' + status : 'failed' + err}`;
+}).join('\n')}`
+  : ''}
+
 Port 80 scan:
   ${port80.a2aPingOk
     ? green('Port 80 responds to /api/a2a/ping (A2A ready on :80)')
@@ -872,6 +857,18 @@ ${inviteLooksLocal
   ? green(`External ping OK via ${externalPing.provider}`)
   : yellow(`External ping FAILED (expected if the server is not running yet, or ingress is not publicly reachable).`)}
 
+${bold('━━━ Debug Quick Checks ━━━')}
+
+On the server:
+  ${green(`curl -s http://127.0.0.1:${backendPort}/api/a2a/status`)}
+  ${green('curl -s https://ifconfig.me/ip')}
+
+From a remote machine (tests ingress):
+  ${green(`curl -s ${inviteScheme}://${inviteHost}/api/a2a/status`)}
+
+If calls fail, check the dashboard logs:
+  Open ${green(dashboardUrl)} -> Logs
+
 ${bold('━━━ Dashboard Setup ━━━')}
 
 Mode: ${dashboardMode === 'gateway' ? green('gateway') : yellow('standalone')}
@@ -908,8 +905,8 @@ In your chat app, use:
   /a2a invite         Create an invitation token
   /a2a list           List active tokens
   /a2a revoke <id>    Revoke a token
-  /a2a add <url>      Add a remote agent
-  /a2a call <url> <msg>  Call a remote agent
+  /a2a add <url>      Add a contact
+  /a2a call <url> <msg>  Call a contact
 
 ${bold('━━━ Done! ━━━')}
 

@@ -7,10 +7,39 @@ A2A Calling enables agent-to-agent communication across OpenClaw instances. User
 ## GitHub Access
 
 ```bash
-# Token in .env (gitignored)
+# Maintainer tokens live in .env (gitignored). DO NOT COMMIT or delete this file.
+set -a
 source .env
-# Or for git operations:
-git remote set-url origin https://${GH_TOKEN}@github.com/onthegonow/a2a_calling.git
+set +a
+
+# Recommended: use gh for git auth (avoid embedding tokens in remotes)
+gh auth status
+gh auth setup-git
+```
+
+## Publishing (GitHub + npm Together)
+
+This repo is published as both:
+- GitHub: `onthegonow/a2a_calling`
+- npm: `a2acalling`
+
+Required `.env` keys (gitignored):
+- `GH_TOKEN` (GitHub PAT)
+- `NPM_TOKEN` (npm publish token)
+
+Quick release checklist:
+
+```bash
+npm version patch --no-git-tag-version
+npm test
+git add package.json
+git commit -m "chore: release $(node -p \"require('./package.json').version\")"
+env -u GIT_ASKPASS -u VSCODE_GIT_ASKPASS_NODE -u VSCODE_GIT_IPC_HANDLE -u VSCODE_GIT_IPC_AUTH_TOKEN git push origin main
+npm_config_cache=/tmp/npm-cache npm publish --access public
+VERSION=$(node -p "require('./package.json').version")
+git tag "v${VERSION}"
+env -u GIT_ASKPASS -u VSCODE_GIT_ASKPASS_NODE -u VSCODE_GIT_IPC_HANDLE -u VSCODE_GIT_IPC_AUTH_TOKEN git push origin "v${VERSION}"
+gh release create "v${VERSION}" --generate-notes
 ```
 
 ## What This Does

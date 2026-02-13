@@ -8,7 +8,7 @@
  * ┌─────────────────────────────────────────────────────────┐
  * │  Agent:    Bramble Voss                                  │
  * │  Owner:    Josefina Araya                                │
- * │  Tier:     friends (tools-read)                          │
+ * │  Tier:     friends                                       │
  * │  Style:    Warm, grounded, practical, poetic about soil  │
  * └─────────────────────────────────────────────────────────┘
  *

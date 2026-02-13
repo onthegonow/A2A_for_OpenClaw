@@ -3,7 +3,7 @@ module.exports = function(test, assert, helpers) {
   const path = require('path');
   const { execSync } = require('child_process');
 
-  test('installer migrates legacy a2a-dashboard-proxy backendUrl into config.backendUrl', () => {
+  test('installer writes a2a-dashboard-proxy backendUrl into entry.config.backendUrl', () => {
     const tmp = helpers.tmpConfigDir('a2a-install-migrate');
 
     const installRoot = tmp.dir;
@@ -54,16 +54,13 @@ module.exports = function(test, assert, helpers) {
         }
       );
 
-      assert.includes(output, 'a2a-dashboard-proxy config issue: legacy key detected');
-      assert.includes(output, 'Auto-fixing legacy key: plugins.entries.a2a-dashboard-proxy.backendUrl');
-
       const updated = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       const entry = updated?.plugins?.entries?.['a2a-dashboard-proxy'];
       assert.ok(entry, 'a2a-dashboard-proxy entry exists');
       assert.equal(entry.enabled, true);
       assert.equal(typeof entry.config, 'object');
       assert.equal(entry.config.backendUrl, 'http://127.0.0.1:3001');
-      assert.ok(!('backendUrl' in entry), 'legacy root backendUrl should be removed');
+      assert.ok(!('backendUrl' in entry), 'root backendUrl should be removed');
 
       const telegramCommand = updated?.channels?.telegram?.customCommands?.find((c) => c && c.command === 'a2a');
       assert.ok(telegramCommand, 'telegram /a2a command exists');

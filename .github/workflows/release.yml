@@ -1,0 +1,62 @@
+name: Release (npm + GitHub)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install
+        run: npm install
+
+      - name: Test
+        run: npm test
+
+      - name: Determine Versions
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOCAL="$(node -p "require('./package.json').version")"
+          PUBLISHED="$(npm view a2acalling version 2>/dev/null || true)"
+          echo "local=${LOCAL}" >> "$GITHUB_OUTPUT"
+          echo "published=${PUBLISHED}" >> "$GITHUB_OUTPUT"
+          echo "local=${LOCAL}"
+          echo "published=${PUBLISHED:-<none>}"
+
+      - name: Publish To npm
+        if: steps.versions.outputs.local != steps.versions.outputs.published
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Create GitHub Release (Tag + Notes)
+        if: steps.versions.outputs.local != steps.versions.outputs.published
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.versions.outputs.local }}"
+          TAG="v${VERSION}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release already exists: ${TAG}"
+            exit 0
+          fi
+          gh release create "${TAG}" --generate-notes --target "${GITHUB_SHA}"

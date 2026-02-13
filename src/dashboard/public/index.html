@@ -31,29 +31,21 @@
         <h3>Add Contact</h3>
         <form id="add-contact-form">
           <label>Invite URL <input id="add-contact-url" type="text" placeholder="a2a://host/token" required></label>
-          <label>Name <input id="add-contact-name" type="text" placeholder="Agent name (optional)"></label>
-          <label>Owner <input id="add-contact-owner" type="text" placeholder="Human owner (optional)"></label>
+          <label>Agent name <input id="add-contact-name" type="text" placeholder="Agent name (optional)"></label>
+          <label>Owner name <input id="add-contact-owner" type="text" placeholder="Human owner (optional)"></label>
+          <label><input id="add-contact-mine" type="checkbox"> Mark as mine (personal agent)</label>
+          <label>Server name (my agents only) <input id="add-contact-server-name" type="text" placeholder="Server label (optional)"></label>
           <label>Tags <input id="add-contact-tags" type="text" placeholder="comma,separated (optional)"></label>
+          <label>Notes <textarea id="add-contact-notes" rows="3" placeholder="Notes (optional)"></textarea></label>
+          <label>Fields (JSON) <textarea id="add-contact-fields" rows="4" placeholder='{"email":"...","company":"..."} (optional)'></textarea></label>
           <div class="row">
             <button type="submit">Add</button>
           </div>
         </form>
       </div>
 
-      <table id="contacts-table">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Owner</th>
-            <th>Status</th>
-            <th>Calls</th>
-            <th>Last Summary</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-      <div id="contact-calls"></div>
+      <div id="contacts-sections"></div>
+      <div id="contact-detail" class="card"></div>
     </section>
 
     <section id="tab-calls" class="panel">

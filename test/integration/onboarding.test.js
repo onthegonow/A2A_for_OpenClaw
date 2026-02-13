@@ -127,7 +127,7 @@ module.exports = function (test, assert, helpers) {
 
     // ── Step 6: Register as remote contact ─────────────────────
     const inviteUrl = `a2a://golda.test.local/${token}`;
-    const result = store.addRemote(inviteUrl, {
+    const result = store.addContact(inviteUrl, {
       name: 'Golda Deluxe',
       owner: null,
       notes: 'Test agent — luxury goods and market analysis',
@@ -137,24 +137,24 @@ module.exports = function (test, assert, helpers) {
     assert.ok(result.success);
 
     // Verify contact is listed
-    const remotes = store.listRemotes();
-    assert.equal(remotes.length, 1);
-    assert.equal(remotes[0].name, 'Golda Deluxe');
-    assert.deepEqual(remotes[0].tags, ['test', 'luxury', 'market-analysis']);
+    const contacts = store.listContacts();
+    assert.equal(contacts.length, 1);
+    assert.equal(contacts[0].name, 'Golda Deluxe');
+    assert.deepEqual(contacts[0].tags, ['test', 'luxury', 'market-analysis']);
 
     // Link the token to the contact
     const linkResult = store.linkTokenToContact('Golda Deluxe', record.id);
     assert.ok(linkResult.success);
 
     // Verify linked token shows up
-    const linkedRemotes = store.listRemotes();
-    const golda = linkedRemotes.find(r => r.name === 'Golda Deluxe');
+    const linkedContacts = store.listContacts();
+    const golda = linkedContacts.find(r => r.name === 'Golda Deluxe');
     assert.ok(golda.linked_token);
     assert.equal(golda.linked_token.name, 'Golda Deluxe');
 
     // ── Step 7: Verify data integrity ──────────────────────────
     // All pieces should reference each other correctly
-    const remoteDetail = store.getRemote('Golda Deluxe');
+    const remoteDetail = store.getContact('Golda Deluxe');
     assert.equal(remoteDetail.host, 'golda.test.local');
     assert.equal(remoteDetail.token, token);
 
@@ -214,33 +214,57 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('quickstart auto-completes onboarding when not done', () => {
+  test('quickstart is deterministic: requires tier confirmation before completing', async () => {
     tmp = helpers.tmpConfigDir('onboard-quickstart');
-    delete require.cache[require.resolve('../../src/lib/config')];
-    delete require.cache[require.resolve('../../src/lib/disclosure')];
-    const { A2AConfig } = require('../../src/lib/config');
-    const { readContextFiles, generateDefaultManifest, saveManifest, loadManifest } = require('../../src/lib/disclosure');
-
-    const config = new A2AConfig();
-    assert.equal(config.isOnboarded(), false);
-
-    // Simulate what quickstart does
-    const workspaceDir = tmp.dir;
     const fs = require('fs');
     const path = require('path');
+    const http = require('http');
+    const { execFileSync } = require('child_process');
+
+    const workspaceDir = path.join(tmp.dir, 'ws');
+    fs.mkdirSync(workspaceDir, { recursive: true });
     fs.writeFileSync(path.join(workspaceDir, 'USER.md'), '## Goals\n- Build cool tools\n');
 
-    const contextFiles = readContextFiles(workspaceDir);
-    const manifest = generateDefaultManifest(contextFiles);
-    saveManifest(manifest);
-    config.completeOnboarding();
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir, A2A_WORKSPACE: workspaceDir };
 
-    assert.equal(config.isOnboarded(), true);
-    const loaded = loadManifest();
-    assert.ok(loaded.version);
-    assert.ok(loaded.topics);
+    // Start a minimal local server that responds to /api/a2a/ping for step 5.
+    const server = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/api/a2a/ping') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ pong: true }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const backendPort = String(server.address().port);
 
-    tmp.cleanup();
+    try {
+      execFileSync(process.execPath, [cliPath, 'quickstart', '--port', backendPort], {
+        env,
+        stdio: 'ignore'
+      });
+
+      delete require.cache[require.resolve('../../src/lib/config')];
+      const { A2AConfig } = require('../../src/lib/config');
+      const config1 = new A2AConfig();
+      assert.equal(config1.isOnboarded(), false);
+
+      execFileSync(process.execPath, [cliPath, 'quickstart', '--port', backendPort, '--confirm-tiers'], {
+        env,
+        stdio: 'ignore'
+      });
+
+      delete require.cache[require.resolve('../../src/lib/config')];
+      const { A2AConfig: A2AConfig2 } = require('../../src/lib/config');
+      const config2 = new A2AConfig2();
+      assert.equal(config2.isOnboarded(), true);
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+      tmp.cleanup();
+    }
   });
 
   test('Golda profile exercises all tier levels correctly', () => {

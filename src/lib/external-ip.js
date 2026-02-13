@@ -22,6 +22,7 @@ const CONFIG_DIR = process.env.A2A_CONFIG_DIR ||
 const EXTERNAL_IP_CACHE_FILE = path.join(CONFIG_DIR, 'a2a-external-ip.json');
 
 const DEFAULT_SERVICES = [
+  'https://ifconfig.me/ip',
   'https://api.ipify.org',
   'https://checkip.amazonaws.com/',
   'https://icanhazip.com/'
@@ -113,6 +114,7 @@ async function fetchExternalIp(options = {}) {
     ? options.services
     : DEFAULT_SERVICES;
 
+  const attempts = [];
   let lastError = null;
   for (const serviceUrl of services) {
     try {
@@ -124,14 +126,18 @@ async function fetchExternalIp(options = {}) {
       if (!ip) {
         throw new Error('invalid_ip');
       }
-      return { ip, source: serviceUrl };
+      attempts.push({ service: serviceUrl, ok: true, statusCode: res.statusCode, ip });
+      return { ip, source: serviceUrl, attempts };
     } catch (err) {
       lastError = err;
+      attempts.push({ service: serviceUrl, ok: false, error: err && err.message ? err.message : 'request_failed' });
     }
   }
 
   const msg = lastError ? lastError.message : 'unavailable';
-  throw new Error(`external_ip_unavailable:${msg}`);
+  const failure = new Error(`external_ip_unavailable:${msg}`);
+  failure.attempts = attempts;
+  throw failure;
 }
 
 /**
@@ -168,13 +174,13 @@ async function getExternalIp(options = {}) {
   }
 
   try {
-    const { ip, source } = await fetchExternalIp({
+    const { ip, source, attempts } = await fetchExternalIp({
       timeoutMs: options.timeoutMs,
       services: options.services
     });
     const checkedAt = new Date(nowMs).toISOString();
     atomicWriteJson(cacheFile, { ip, checked_at: checkedAt, source });
-    return { ip, checkedAt, source, fromCache: false, stale: false };
+    return { ip, checkedAt, source, fromCache: false, stale: false, attempts: Array.isArray(attempts) ? attempts : null };
   } catch (err) {
     if (cached && cached.ip) {
       const cachedIp = parseIp(cached.ip);
@@ -184,11 +190,17 @@ async function getExternalIp(options = {}) {
           checkedAt: cached.checked_at || null,
           source: cached.source || 'cache',
           fromCache: true,
-          stale: true
+          stale: true,
+          error: err && err.message ? err.message : 'external_ip_unavailable',
+          attempts: err && Array.isArray(err.attempts) ? err.attempts : null
         };
       }
     }
-    return { ip: null, error: err.message };
+    return {
+      ip: null,
+      error: err && err.message ? err.message : 'external_ip_unavailable',
+      attempts: err && Array.isArray(err.attempts) ? err.attempts : null
+    };
   }
 }
 
@@ -197,4 +209,3 @@ module.exports = {
   fetchExternalIp,
   getExternalIp
 };
-

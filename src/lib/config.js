@@ -15,9 +15,31 @@ const CONFIG_DIR = process.env.A2A_CONFIG_DIR ||
 const CONFIG_FILE = path.join(CONFIG_DIR, 'a2a-config.json');
 const logger = createLogger({ component: 'a2a.config' });
 
+function deepMerge(base, override) {
+  const baseIsObject = base && typeof base === 'object' && !Array.isArray(base);
+  const overrideIsObject = override && typeof override === 'object' && !Array.isArray(override);
+  if (!overrideIsObject) {
+    return override === undefined ? base : override;
+  }
+  const out = baseIsObject ? { ...base } : {};
+  for (const [key, value] of Object.entries(override)) {
+    const baseValue = baseIsObject ? base[key] : undefined;
+    const bothObjects = baseValue && typeof baseValue === 'object' && !Array.isArray(baseValue) &&
+      value && typeof value === 'object' && !Array.isArray(value);
+    out[key] = bothObjects ? deepMerge(baseValue, value) : value;
+  }
+  return out;
+}
+
 const DEFAULT_CONFIG = {
-  // Has the user completed onboarding?
-  onboardingComplete: false,
+  onboarding: {
+    version: 2,
+    step: 'not_started', // not_started|tiers|ingress|verify|complete
+    tiers_confirmed: false,
+    ingress_confirmed: false,
+    verify_confirmed: false,
+    last_run_at: null
+  },
   
   // Permission tiers
   tiers: {
@@ -25,7 +47,7 @@ const DEFAULT_CONFIG = {
       name: 'Public',
       description: 'Basic networking - safe for anyone',
       capabilities: ['context-read'],
-      topics: [],
+      topics: ['chat'],
       goals: [],
       disclosure: 'minimal',
       examples: ['calendar availability', 'public social posts', 'general questions']
@@ -34,19 +56,19 @@ const DEFAULT_CONFIG = {
       name: 'Friends',
       description: 'Most capabilities, no sensitive financial data',
       capabilities: ['context-read', 'calendar.read', 'email.read', 'search'],
-      topics: [],
+      topics: ['chat', 'search', 'openclaw', 'a2a'],
       goals: [],
       disclosure: 'public',
       examples: ['email summaries', 'schedule meetings', 'project discussions']
     },
-    private: {
-      name: 'Private',
-      description: 'Full access - only for you',
+    family: {
+      name: 'Family',
+      description: 'Full access - only for your inner circle',
       capabilities: ['context-read', 'calendar', 'email', 'search', 'tools', 'memory'],
-      topics: [],
+      topics: ['chat', 'search', 'openclaw', 'a2a', 'tools', 'memory'],
       goals: [],
       disclosure: 'public',
-      examples: ['financial data', 'personal notes', 'private conversations']
+      examples: ['deep collaboration', 'private project context', 'personal notes']
     },
     custom: {
       name: 'Custom',
@@ -99,7 +121,7 @@ class A2AConfig {
     if (fs.existsSync(CONFIG_FILE)) {
       try {
         const saved = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-        return { ...DEFAULT_CONFIG, ...saved };
+        return deepMerge(JSON.parse(JSON.stringify(DEFAULT_CONFIG)), saved);
       } catch (e) {
         logger.error('A2A config is corrupted, using defaults', {
           event: 'a2a_config_corrupt',
@@ -110,10 +132,10 @@ class A2AConfig {
             config_file: CONFIG_FILE
           }
         });
-        return { ...DEFAULT_CONFIG };
+        return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
       }
     }
-    return { ...DEFAULT_CONFIG };
+    return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   }
 
   _save() {
@@ -133,18 +155,48 @@ class A2AConfig {
 
   // Check if onboarding is complete
   isOnboarded() {
-    return this.config.onboardingComplete === true;
+    return this.config.onboarding &&
+      this.config.onboarding.version === 2 &&
+      this.config.onboarding.step === 'complete';
   }
 
   // Mark onboarding complete
   completeOnboarding() {
-    this.config.onboardingComplete = true;
+    this.config.onboarding = this.config.onboarding || {};
+    this.config.onboarding.version = 2;
+    this.config.onboarding.step = 'complete';
+    this.config.onboarding.tiers_confirmed = true;
+    this.config.onboarding.ingress_confirmed = true;
+    this.config.onboarding.verify_confirmed = true;
+    this.config.onboarding.last_run_at = new Date().toISOString();
     this._save();
   }
 
   // Reset to run onboarding again
   resetOnboarding() {
-    this.config.onboardingComplete = false;
+    this.config.onboarding = this.config.onboarding || {};
+    this.config.onboarding.version = 2;
+    this.config.onboarding.step = 'not_started';
+    this.config.onboarding.tiers_confirmed = false;
+    this.config.onboarding.ingress_confirmed = false;
+    this.config.onboarding.verify_confirmed = false;
+    this.config.onboarding.last_run_at = new Date().toISOString();
+    this._save();
+  }
+
+  getOnboarding() {
+    const ob = (this.config && this.config.onboarding && typeof this.config.onboarding === 'object')
+      ? this.config.onboarding
+      : {};
+    return deepMerge(DEFAULT_CONFIG.onboarding, ob);
+  }
+
+  setOnboarding(patch = {}) {
+    const current = this.getOnboarding();
+    const merged = deepMerge(current, patch);
+    merged.version = 2;
+    merged.last_run_at = new Date().toISOString();
+    this.config.onboarding = merged;
     this._save();
   }
 

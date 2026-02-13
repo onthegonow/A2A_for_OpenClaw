@@ -3,7 +3,7 @@
  *
  * A decentralized science (DeSci) agent that exercises a different
  * slice of the data architecture from Golda Deluxe:
- *   - PUBLIC tier (chat-only) instead of friends
+ *   - Public tier instead of friends
  *   - Named owner (Dr. Sarai Okonkwo)
  *   - Academic/research personality
  *   - Open-science vs proprietary tension with bappybot
@@ -11,7 +11,7 @@
  * ┌─────────────────────────────────────────────────────────┐
  * │  Agent:    Nyx Meridian                                 │
  * │  Owner:    Dr. Sarai Okonkwo                            │
- * │  Tier:     public (chat-only)                           │
+ * │  Tier:     public                                       │
  * │  Style:    Rigorous, direct, values openness            │
  * └─────────────────────────────────────────────────────────┘
  *
@@ -45,7 +45,7 @@ module.exports = {
 
   // ── Token Configuration ─────────────────────────────────────────
   token: {
-    tier: 'public',              // chat-only — first contact, cautious
+    tier: 'public',              // first contact, cautious
     disclosure: 'minimal',       // guarded — don't overshare on first call
     expires: '1d',               // short-lived exploratory token
     maxCalls: 20,                // low limit — feel-out call

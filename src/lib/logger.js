@@ -129,7 +129,28 @@ class LogStore {
       } catch (err) {
         // best effort
       }
-      this._migrate();
+      const ok = this._ensureSchema();
+      if (!ok) {
+        // Prototyping mode: do not attempt DB migrations; keep the old file and start fresh.
+        const backupPath = `${this.dbPath}.legacy.${Date.now()}`;
+        try {
+          this.db.close();
+        } catch (err) {
+          // ignore
+        }
+        fs.renameSync(this.dbPath, backupPath);
+        this.db = new Database(this.dbPath);
+        try {
+          fs.chmodSync(this.dbPath, 0o600);
+        } catch (err) {
+          // best effort
+        }
+        const ok2 = this._ensureSchema();
+        if (!ok2) {
+          this._dbError = 'failed_to_initialize_log_db_schema';
+          return null;
+        }
+      }
       this._prepareStatements();
       return this.db;
     } catch (err) {
@@ -138,7 +159,7 @@ class LogStore {
     }
   }
 
-  _migrate() {
+  _ensureSchema() {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,18 +188,9 @@ class LogStore {
     `);
 
     const columns = this.db.prepare(`PRAGMA table_info(logs)`).all();
-    const hasErrorCode = columns.some(c => c.name === 'error_code');
-    const hasStatusCode = columns.some(c => c.name === 'status_code');
-    const hasHint = columns.some(c => c.name === 'hint');
-    if (!hasErrorCode) {
-      this.db.exec(`ALTER TABLE logs ADD COLUMN error_code TEXT`);
-    }
-    if (!hasStatusCode) {
-      this.db.exec(`ALTER TABLE logs ADD COLUMN status_code INTEGER`);
-    }
-    if (!hasHint) {
-      this.db.exec(`ALTER TABLE logs ADD COLUMN hint TEXT`);
-    }
+    const names = new Set(columns.map(c => c && c.name).filter(Boolean));
+    const required = ['timestamp', 'level', 'component', 'message', 'error_code', 'status_code', 'hint', 'data'];
+    return required.every((name) => names.has(name));
   }
 
   _prepareStatements() {

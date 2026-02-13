@@ -709,10 +709,12 @@ app.use(express.json());
 // Minimal owner dashboard (local by default unless A2A_ADMIN_TOKEN is provided)
 app.use('/api/a2a/dashboard', createDashboardApiRouter({
   tokenStore,
+  agentContext,
   logger: logger.child({ component: 'a2a.dashboard' })
 }));
 app.use('/dashboard', createDashboardUiRouter({
   tokenStore,
+  agentContext,
   logger: logger.child({ component: 'a2a.dashboard' })
 }));
 

@@ -6,7 +6,7 @@
  * friends-tier unnamed-owner pattern.
  *
  * Key differences from golda-calls-bappybot:
- *   - Public tier (chat-only) — more restricted than friends
+ *   - Public tier — more restricted than friends
  *   - Named owner (Dr. Sarai Okonkwo) — tests owner display
  *   - Adaptive prompt with collab_state metadata extraction
  *   - 5-turn conversation (longer than Golda's 4)
@@ -101,7 +101,7 @@ module.exports = function (test, assert, helpers) {
     const { token, record } = tokenStore.create({
       name: profile.agent.name,
       owner: profile.agent.owner,     // Dr. Sarai Okonkwo (named)
-      permissions: 'public',          // public tier → chat-only
+      permissions: 'public',
       disclosure: 'minimal',
       expires: '1d',
       maxCalls: 20,
@@ -146,15 +146,15 @@ module.exports = function (test, assert, helpers) {
     // ── ensureContact ─────────────────────────────────────────
     function ensureContact(caller, tokenId) {
       if (!caller?.name) return null;
-      const remotes = tokenStore.listRemotes();
-      const existing = remotes.find(r =>
+      const contacts = tokenStore.listContacts();
+      const existing = contacts.find(r =>
         r.name === caller.name ||
         (caller.owner && r.owner === caller.owner)
       );
       if (existing) return existing;
 
       const db = JSON.parse(fs.readFileSync(tokenStore.dbPath, 'utf8'));
-      db.remotes = db.remotes || [];
+      db.contacts = db.contacts || [];
       const contact = {
         id: `contact_${Date.now()}`,
         name: caller.name,
@@ -164,9 +164,9 @@ module.exports = function (test, assert, helpers) {
         notes: `Inbound caller via token ${tokenId}`,
         tags: ['inbound'],
         status: 'unknown',
-        linkedTokenId: tokenId
+        linked_token_id: tokenId
       };
-      db.remotes.push(contact);
+      db.contacts.push(contact);
       fs.writeFileSync(tokenStore.dbPath, JSON.stringify(db, null, 2));
       return contact;
     }
@@ -477,7 +477,7 @@ module.exports = function (test, assert, helpers) {
     assert.ok(endRes.body.success);
 
     // ── Verify contacts ───────────────────────────────────────
-    const contacts = tokenStore.listRemotes();
+    const contacts = tokenStore.listContacts();
     const nyxContact = contacts.find(r => r.name === 'Nyx Meridian');
 
     assert.ok(nyxContact, 'Nyx Meridian should be in contacts after the call');

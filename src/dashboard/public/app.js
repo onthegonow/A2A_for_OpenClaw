@@ -3,6 +3,9 @@ const state = {
   dashboardStatus: null,
   callbookDevices: [],
   contacts: [],
+  selectedContactId: null,
+  selectedContactCalls: [],
+  contactCallResult: null,
   calls: [],
   invites: [],
   logs: [],
@@ -119,59 +122,213 @@ function bindTabs() {
   activateTab(window.location.hash);
 }
 
+function norm(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function getLocalOwnerName() {
+  return state.dashboardStatus?.agent?.owner_name || state.dashboardStatus?.agent?.ownerName || '';
+}
+
+function isMine(contact) {
+  return Boolean(contact?.is_mine);
+}
+
+function formatLocation(contact) {
+  const host = String(contact?.host || contact?.web_address || '').trim();
+  const server = String(contact?.server_name || contact?.serverName || '').trim();
+  if (server && host && norm(server) !== norm(host)) {
+    return `${server} (${host})`;
+  }
+  return server || host || '-';
+}
+
+function contactLabel(contact) {
+  return String(contact?.name || '').trim() || String(contact?.host || '').trim() || '-';
+}
+
 function renderContacts() {
-  const tbody = document.querySelector('#contacts-table tbody');
-  tbody.innerHTML = '';
-  state.contacts.forEach(contact => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${contact.name || '-'}</td>
-      <td>${contact.owner || '-'}</td>
-      <td>${contact.status || '-'}</td>
-      <td>${contact.call_count || 0}</td>
-      <td>${(contact.last_summary || contact.last_owner_summary || '-').slice(0, 120)}</td>
-      <td><button data-remove="${esc(contact.id)}">Remove</button></td>
-    `;
-    tr.addEventListener('click', () => loadCallsForContact(contact.id, contact.name));
-    const removeBtn = tr.querySelector('button[data-remove]');
-    if (removeBtn) {
-      removeBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        removeBtn.disabled = true;
-        try {
-          await request(`/contacts/${encodeURIComponent(contact.id)}`, { method: 'DELETE' });
-          showNotice('Contact removed');
-          await loadContacts();
-        } catch (err) {
-          showNotice(err.message);
-          removeBtn.disabled = false;
-        }
-      });
-    }
-    tbody.appendChild(tr);
+  const el = document.getElementById('contacts-sections');
+  if (!el) return;
+
+  const contacts = Array.isArray(state.contacts) ? state.contacts.slice() : [];
+  const selected = state.selectedContactId ? String(state.selectedContactId) : '';
+
+  const myAgents = contacts
+    .filter(c => isMine(c))
+    .sort((a, b) => contactLabel(a).localeCompare(contactLabel(b)));
+
+  const lastCalled = contacts
+    .filter(c => c && c.last_call_at)
+    .sort((a, b) => String(b.last_call_at || '').localeCompare(String(a.last_call_at || '')))
+    .slice(0, 12);
+
+  const groups = new Map();
+  for (const c of contacts) {
+    const owner = String(c?.owner || '').trim() || '(unknown owner)';
+    if (!groups.has(owner)) groups.set(owner, []);
+    groups.get(owner).push(c);
+  }
+
+  const owners = Array.from(groups.keys()).sort((a, b) => {
+    // Keep local owner group near the top (after the dedicated "My agents" section).
+    const local = norm(getLocalOwnerName());
+    const aIsLocal = local && norm(a) === local;
+    const bIsLocal = local && norm(b) === local;
+    if (aIsLocal && !bIsLocal) return -1;
+    if (!aIsLocal && bIsLocal) return 1;
+    if (a === '(unknown owner)' && b !== '(unknown owner)') return 1;
+    if (a !== '(unknown owner)' && b === '(unknown owner)') return -1;
+    return a.localeCompare(b);
   });
+
+  const rowHtml = (c, opts = {}) => {
+    const canCall = Boolean(c?.can_call);
+    const mine = Boolean(c?.is_mine);
+    const lastSummary = String(c?.last_owner_summary || c?.last_summary || '').trim();
+    const summaryPreview = lastSummary ? lastSummary.slice(0, 120) : '-';
+    const lastCallAt = c?.last_call_at ? fmtDate(c.last_call_at) : '-';
+    const calls = Number.isFinite(c?.call_count) ? c.call_count : (c?.call_count || 0);
+    const isSelected = selected && String(c?.id) === selected;
+
+    const actionBits = [];
+    if (c?.last_call_id) {
+      actionBits.push(`<button data-open-call="${esc(c.last_call_id)}" type="button">Transcript</button>`);
+    }
+    actionBits.push(`<button data-toggle-mine="${esc(c.id)}" type="button">${mine ? 'Unmark mine' : 'Mark mine'}</button>`);
+    actionBits.push(`<button data-remove-contact="${esc(c.id)}" type="button">Remove</button>`);
+
+    const locationCell = opts.showLocation ? `<td>${esc(formatLocation(c))}</td>` : '';
+    const ownerCell = opts.showOwner ? `<td>${esc(c?.owner || '-')}</td>` : '';
+    const summaryCell = opts.showSummary ? `<td title="${esc(lastSummary)}">${esc(summaryPreview)}</td>` : '';
+
+    return `
+      <tr ${isSelected ? 'data-selected="1"' : ''}>
+        <td>
+          <div class="row" style="margin:0;">
+            <button class="btn-link" data-contact-select="${esc(c.id)}" type="button">${esc(contactLabel(c))}</button>
+            <button data-contact-call="${esc(c.id)}" type="button" ${canCall ? '' : 'disabled'}>Call</button>
+          </div>
+        </td>
+        ${locationCell}
+        ${ownerCell}
+        <td>${esc(c?.status || '-')}</td>
+        <td>${esc(String(calls))}</td>
+        <td>${esc(lastCallAt)}</td>
+        ${summaryCell}
+        <td>${actionBits.join(' ')}</td>
+      </tr>
+    `;
+  };
+
+  const tableHtml = (rows, opts = {}) => {
+    const cols = [];
+    cols.push('<th>Agent</th>');
+    if (opts.showLocation) cols.push('<th>Location</th>');
+    if (opts.showOwner) cols.push('<th>Owner</th>');
+    cols.push('<th>Status</th>');
+    cols.push('<th>Calls</th>');
+    cols.push('<th>Last Call</th>');
+    if (opts.showSummary) cols.push('<th>Last Summary</th>');
+    cols.push('<th>Action</th>');
+
+    if (!rows.length) {
+      return `<table><thead><tr>${cols.join('')}</tr></thead><tbody><tr><td colspan="${cols.length}">(none)</td></tr></tbody></table>`;
+    }
+
+    return `<table><thead><tr>${cols.join('')}</tr></thead><tbody>${rows.map(c => rowHtml(c, opts)).join('')}</tbody></table>`;
+  };
+
+  const myAgentsSection = `
+    <div class="card">
+      <h3>My agents</h3>
+      ${tableHtml(myAgents, { showLocation: true, showOwner: false, showSummary: false })}
+    </div>
+  `;
+
+  const lastCalledSection = `
+    <div class="card">
+      <h3>Last called agents</h3>
+      ${tableHtml(lastCalled, { showLocation: false, showOwner: true, showSummary: false })}
+    </div>
+  `;
+
+  const groupedSections = owners.map(owner => {
+    const rows = (groups.get(owner) || []).slice().sort((a, b) => contactLabel(a).localeCompare(contactLabel(b)));
+    return `
+      <div class="card">
+        <h3>${esc(owner)}</h3>
+        ${tableHtml(rows, { showLocation: false, showOwner: false, showSummary: true })}
+      </div>
+    `;
+  }).join('');
+
+  el.innerHTML = `${myAgentsSection}${lastCalledSection}${groupedSections}`;
 }
 
 async function loadContacts() {
   const payload = await request('/contacts');
   state.contacts = payload.contacts || [];
   renderContacts();
+  renderContactDetail();
 }
 
 function bindContactsActions() {
   const form = document.getElementById('add-contact-form');
   if (!form) return;
 
+  const urlEl = document.getElementById('add-contact-url');
+  const mineEl = document.getElementById('add-contact-mine');
+  const serverNameEl = document.getElementById('add-contact-server-name');
+  const defaultServerNameFromUrl = () => {
+    if (!urlEl || !serverNameEl) return;
+    if (mineEl && !mineEl.checked) return;
+    if (serverNameEl.value.trim()) return;
+    const match = String(urlEl.value || '').trim().match(/^(?:a2a|oclaw):\\/\\/([^/]+)\\//);
+    if (match && match[1]) {
+      serverNameEl.value = match[1];
+    }
+  };
+  urlEl?.addEventListener('blur', defaultServerNameFromUrl);
+  urlEl?.addEventListener('change', defaultServerNameFromUrl);
+  mineEl?.addEventListener('change', () => {
+    if (!serverNameEl) return;
+    serverNameEl.disabled = !mineEl.checked;
+    if (mineEl.checked) {
+      defaultServerNameFromUrl();
+    }
+  });
+  if (serverNameEl && mineEl) {
+    serverNameEl.disabled = !mineEl.checked;
+  }
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const url = document.getElementById('add-contact-url').value.trim();
     const name = document.getElementById('add-contact-name').value.trim();
     const owner = document.getElementById('add-contact-owner').value.trim();
+    const isMine = Boolean(document.getElementById('add-contact-mine')?.checked);
+    const serverName = document.getElementById('add-contact-server-name').value.trim();
     const tagsRaw = document.getElementById('add-contact-tags').value.trim();
+    const notes = document.getElementById('add-contact-notes').value.trim();
+    const fieldsRaw = document.getElementById('add-contact-fields').value.trim();
     const tags = tagsRaw
       ? tagsRaw.split(',').map(v => v.trim()).filter(Boolean).slice(0, 30)
       : [];
+
+    let fields = {};
+    if (fieldsRaw) {
+      try {
+        const parsed = JSON.parse(fieldsRaw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('Fields must be a JSON object');
+        }
+        fields = parsed;
+      } catch (err) {
+        showNotice(`Fields JSON invalid: ${err.message}`);
+        return;
+      }
+    }
 
     try {
       await request('/contacts', {
@@ -180,7 +337,11 @@ function bindContactsActions() {
           invite_url: url,
           name: name || undefined,
           owner: owner || undefined,
-          tags
+          is_mine: isMine,
+          server_name: serverName || undefined,
+          tags,
+          notes: notes || undefined,
+          fields
         })
       });
       showNotice('Contact added');
@@ -188,6 +349,110 @@ function bindContactsActions() {
       await loadContacts();
     } catch (err) {
       showNotice(err.message);
+    }
+  });
+
+  const panel = document.getElementById('tab-contacts');
+  panel?.addEventListener('click', async (e) => {
+    const selectBtn = e.target.closest('button[data-contact-select]');
+    if (selectBtn) {
+      e.preventDefault();
+      const id = selectBtn.dataset.contactSelect;
+      if (id) {
+        await loadCallsForContact(id);
+      }
+      return;
+    }
+
+    const openBtn = e.target.closest('button[data-open-call]');
+    if (openBtn) {
+      e.preventDefault();
+      openCallTranscript(openBtn.dataset.openCall);
+      return;
+    }
+
+    const mineBtn = e.target.closest('button[data-toggle-mine]');
+    if (mineBtn) {
+      e.preventDefault();
+      const id = mineBtn.dataset.toggleMine;
+      if (!id) return;
+
+      const contact = (state.contacts || []).find(c => String(c.id) === String(id));
+      const next = contact ? !Boolean(contact.is_mine) : true;
+
+      mineBtn.disabled = true;
+      try {
+        await request(`/contacts/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ is_mine: next })
+        });
+        showNotice(next ? 'Marked as mine' : 'Unmarked');
+        await loadContacts();
+        if (state.selectedContactId && String(state.selectedContactId) === String(id)) {
+          await loadCallsForContact(id);
+        }
+      } catch (err) {
+        showNotice(err.message);
+        mineBtn.disabled = false;
+      }
+      return;
+    }
+
+    const removeBtn = e.target.closest('button[data-remove-contact]');
+    if (removeBtn) {
+      e.preventDefault();
+      const id = removeBtn.dataset.removeContact;
+      if (!id) return;
+      removeBtn.disabled = true;
+      try {
+        await request(`/contacts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        showNotice('Contact removed');
+        if (state.selectedContactId && String(state.selectedContactId) === String(id)) {
+          state.selectedContactId = null;
+          state.selectedContactCalls = [];
+          state.contactCallResult = null;
+        }
+        await loadContacts();
+      } catch (err) {
+        showNotice(err.message);
+        removeBtn.disabled = false;
+      }
+      return;
+    }
+
+    const callBtn = e.target.closest('button[data-contact-call]');
+    if (callBtn) {
+      e.preventDefault();
+      const id = callBtn.dataset.contactCall;
+      if (!id) return;
+
+      const contact = (state.contacts || []).find(c => String(c.id) === String(id));
+      if (!contact) {
+        showNotice('Contact not found');
+        return;
+      }
+      if (!contact.can_call) {
+        showNotice('This contact has no callable A2A endpoint stored.');
+        return;
+      }
+
+      // Quick-call: use existing draft message if available, else prompt.
+      let message = '';
+      const draftEl = document.getElementById('contact-call-message');
+      if (state.selectedContactId && String(state.selectedContactId) === String(id) && draftEl && draftEl.value.trim()) {
+        message = draftEl.value.trim();
+      } else {
+        const prompted = window.prompt(`Message to send to ${contactLabel(contact)}:`, 'Hello from my agent.');
+        if (prompted === null) return;
+        message = String(prompted || '').trim();
+      }
+
+      if (!message) {
+        showNotice('Message required');
+        return;
+      }
+      await callContact(id, message);
+      return;
     }
   });
 }
@@ -232,27 +497,238 @@ async function loadCallDetail(conversationId) {
   `;
 }
 
-async function loadCallsForContact(contactId, contactName) {
-  const payload = await request(`/contacts/${encodeURIComponent(contactId)}/calls?limit=100`);
-  const calls = payload.calls || [];
-  const el = document.getElementById('contact-calls');
-  const rows = calls.map(call => {
+function renderContactDetail() {
+  const el = document.getElementById('contact-detail');
+  if (!el) return;
+
+  const contactId = state.selectedContactId ? String(state.selectedContactId) : '';
+  if (!contactId) {
+    el.innerHTML = '<strong>Select a contact to view details and call history.</strong>';
+    return;
+  }
+
+  const contact = (state.contacts || []).find(c => String(c.id) === contactId) || null;
+  if (!contact) {
+    el.innerHTML = '<strong>Selected contact not found.</strong>';
+    return;
+  }
+
+  const calls = Array.isArray(state.selectedContactCalls) ? state.selectedContactCalls : [];
+  const canCall = Boolean(contact.can_call);
+
+  const tagsText = Array.isArray(contact.tags) ? contact.tags.join(', ') : '';
+  const fieldsText = (() => {
+    try {
+      const obj = (contact.fields && typeof contact.fields === 'object') ? contact.fields : {};
+      return JSON.stringify(obj, null, 2);
+    } catch (err) {
+      return '{}';
+    }
+  })();
+
+  const result = state.contactCallResult;
+  const resultHtml = result
+    ? `<div style="margin-top:0.6rem;">
+        <strong>Last call result:</strong> ${result.success ? 'success' : 'failed'}<br>
+        ${result.conversation_id ? `Conversation: <span class="mono">${esc(result.conversation_id)}</span> <button data-open-call="${esc(result.conversation_id)}" type="button">Transcript</button><br>` : ''}
+        ${result.error ? `<span class="mono">${esc(result.error)}</span><br>` : ''}
+        ${result.response ? `<pre class="summary">${esc(String(result.response))}</pre>` : ''}
+      </div>`
+    : '';
+
+  const callRows = calls.map(call => {
+    const summary = String(call.summary || call.owner_summary || '').trim();
+    const preview = summary ? summary.slice(0, 140) : '-';
     return `
       <tr>
-        <td>${call.id}</td>
-        <td>${call.status || '-'}</td>
-        <td>${fmtDate(call.last_message_at)}</td>
-        <td>${(call.summary || call.owner_summary || '-').slice(0, 140)}</td>
+        <td class="mono">${esc(call.id)}</td>
+        <td>${esc(call.status || '-')}</td>
+        <td>${esc(fmtDate(call.last_message_at))}</td>
+        <td title="${esc(summary)}">${esc(preview)}</td>
+        <td><button data-open-call="${esc(call.id)}" type="button">Transcript</button></td>
       </tr>
     `;
   }).join('');
+
   el.innerHTML = `
-    <h3>Calls with ${contactName}</h3>
-    <table>
-      <thead><tr><th>ID</th><th>Status</th><th>Updated</th><th>Summary</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="4">No calls found.</td></tr>'}</tbody>
-    </table>
+    <div class="row">
+      <h3 style="margin:0;">Contact: ${esc(contactLabel(contact))}</h3>
+      <button data-contact-call="${esc(contact.id)}" type="button" ${canCall ? '' : 'disabled'}>Call</button>
+      <button data-remove-contact="${esc(contact.id)}" type="button">Remove</button>
+    </div>
+
+	    <div class="row" style="margin-bottom:0.4rem;">
+	      <div><strong>Mine:</strong> ${contact.is_mine ? 'yes' : 'no'}</div>
+	      <div><strong>Owner:</strong> ${esc(contact.owner || '-')}</div>
+	      <div><strong>Web address:</strong> <span class="mono">${esc(contact.web_address || contact.host || '-')}</span></div>
+	      <div><strong>Server name:</strong> ${esc(contact.server_name || '-')}</div>
+	    </div>
+    <div class="row">
+      <div><strong>Status:</strong> ${esc(contact.status || '-')}</div>
+      <div><strong>Total calls:</strong> ${esc(String(contact.call_count || 0))}</div>
+      <div><strong>Last call:</strong> ${esc(contact.last_call_at ? fmtDate(contact.last_call_at) : '-')}</div>
+    </div>
+
+    ${resultHtml}
+
+    <details style="margin-top:0.8rem;" open>
+	      <summary><strong>Edit contact</strong></summary>
+	      <form id="contact-edit-form" data-contact-id="${esc(contact.id)}" style="margin-top:0.6rem;">
+	        <label>Agent name <input id="contact-edit-name" type="text" value="${esc(contact.name || '')}"></label>
+	        <label>Owner name <input id="contact-edit-owner" type="text" value="${esc(contact.owner || '')}"></label>
+	        <label><input id="contact-edit-mine" type="checkbox" ${contact.is_mine ? 'checked' : ''}> Mark as mine (personal agent)</label>
+	        <label>Server name (my agents only) <input id="contact-edit-server-name" type="text" value="${esc(contact.server_name || '')}" ${contact.is_mine ? '' : 'disabled'}></label>
+	        <label>Tags <input id="contact-edit-tags" type="text" value="${esc(tagsText)}" placeholder="comma,separated"></label>
+	        <label>Notes <textarea id="contact-edit-notes" rows="3">${esc(contact.notes || '')}</textarea></label>
+	        <label>Fields (JSON) <textarea id="contact-edit-fields" rows="5">${esc(fieldsText)}</textarea></label>
+	        <div class="row">
+	          <button type="submit">Save</button>
+	        </div>
+	      </form>
+	    </details>
+
+    <details style="margin-top:0.8rem;" open>
+      <summary><strong>Call</strong></summary>
+      <form id="contact-call-form" data-contact-id="${esc(contact.id)}" style="margin-top:0.6rem;">
+        <label>Message <textarea id="contact-call-message" rows="4" placeholder="Message to send"></textarea></label>
+        <div class="row">
+          <button type="submit" ${canCall ? '' : 'disabled'}>Call</button>
+        </div>
+      </form>
+    </details>
+
+    <details style="margin-top:0.8rem;">
+      <summary><strong>Call history</strong></summary>
+      <div style="margin-top:0.6rem;">
+        <table>
+          <thead><tr><th>ID</th><th>Status</th><th>Updated</th><th>Summary</th><th>Action</th></tr></thead>
+          <tbody>${callRows || '<tr><td colspan="5">No calls found.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </details>
   `;
+
+  const editForm = document.getElementById('contact-edit-form');
+  if (editForm) {
+    const mineEl = document.getElementById('contact-edit-mine');
+    const serverNameEl = document.getElementById('contact-edit-server-name');
+    mineEl?.addEventListener('change', () => {
+      if (!serverNameEl) return;
+      serverNameEl.disabled = !mineEl.checked;
+    });
+
+    editForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = editForm.dataset.contactId;
+      if (!id) return;
+
+      const tagsRaw = document.getElementById('contact-edit-tags').value.trim();
+      const tags = tagsRaw
+        ? tagsRaw.split(',').map(v => v.trim()).filter(Boolean).slice(0, 30)
+        : [];
+
+      let fields = {};
+      const fieldsRaw = document.getElementById('contact-edit-fields').value.trim();
+      if (fieldsRaw) {
+        try {
+          const parsed = JSON.parse(fieldsRaw);
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('Fields must be a JSON object');
+          }
+          fields = parsed;
+        } catch (err) {
+          showNotice(`Fields JSON invalid: ${err.message}`);
+          return;
+        }
+      }
+
+	      try {
+	        await request(`/contacts/${encodeURIComponent(id)}`, {
+	          method: 'PUT',
+	          body: JSON.stringify({
+	            name: document.getElementById('contact-edit-name').value,
+	            owner: document.getElementById('contact-edit-owner').value,
+	            is_mine: Boolean(document.getElementById('contact-edit-mine')?.checked),
+	            server_name: document.getElementById('contact-edit-server-name').value,
+	            notes: document.getElementById('contact-edit-notes').value,
+	            tags,
+	            fields
+	          })
+	        });
+        showNotice('Contact saved');
+        await loadContacts();
+        await loadCallsForContact(id);
+      } catch (err) {
+        showNotice(err.message);
+      }
+    });
+  }
+
+  const callForm = document.getElementById('contact-call-form');
+  if (callForm) {
+    callForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const id = callForm.dataset.contactId;
+      if (!id) return;
+      const message = document.getElementById('contact-call-message').value.trim();
+      if (!message) {
+        showNotice('Message required');
+        return;
+      }
+      await callContact(id, message);
+    });
+  }
+}
+
+function openCallTranscript(conversationId) {
+  const id = String(conversationId || '').trim();
+  if (!id) return;
+  try { window.location.hash = 'calls'; } catch (err) {}
+  // Let hashchange tab switch complete before rendering details.
+  setTimeout(() => loadCallDetail(id).catch(err => showNotice(err.message)), 50);
+}
+
+async function callContact(contactId, message) {
+  const id = String(contactId || '').trim();
+  if (!id) return;
+  state.selectedContactId = id;
+  state.contactCallResult = { success: false, error: null, response: null, conversation_id: null };
+  renderContactDetail();
+
+  try {
+    const result = await request(`/contacts/${encodeURIComponent(id)}/call`, {
+      method: 'POST',
+      body: JSON.stringify({ message })
+    });
+    state.contactCallResult = {
+      success: true,
+      response: result.response || '',
+      conversation_id: result.conversation_id || null
+    };
+    showNotice('Call complete');
+    await Promise.all([loadContacts(), loadCalls()]);
+    await loadCallsForContact(id);
+  } catch (err) {
+    state.contactCallResult = { success: false, error: err.message, response: null, conversation_id: null };
+    renderContactDetail();
+    showNotice(err.message);
+  }
+}
+
+async function loadCallsForContact(contactId, contactName) {
+  const id = String(contactId || '').trim();
+  if (!id) return;
+  state.selectedContactId = id;
+
+  try {
+    const payload = await request(`/contacts/${encodeURIComponent(id)}/calls?limit=100`);
+    state.selectedContactCalls = payload.calls || [];
+  } catch (err) {
+    state.selectedContactCalls = [];
+  }
+
+  renderContacts();
+  renderContactDetail();
 }
 
 function readLogFilters() {
@@ -520,19 +996,51 @@ function renderCallbookStatus() {
   const publicUrl = s.public_dashboard_url || '-';
   const enabled = Boolean(s.callbook && s.callbook.enabled);
   const deviceCount = s.callbook && Number.isFinite(s.callbook.device_count) ? s.callbook.device_count : 0;
+  const invite = s.invite_host || null;
+  const inviteSource = invite && invite.source ? invite.source : null;
+  const inviteResolved = invite && invite.host ? invite.host : null;
+  const ext = s.external_ip || null;
+  const extAttempts = ext && Array.isArray(ext.attempts) ? ext.attempts : [];
+  const extMeta = [];
+  if (ext && ext.source) extMeta.push(ext.source);
+  if (ext && ext.checked_at) extMeta.push(`checked ${fmtDate(ext.checked_at)}`);
+  if (ext && ext.from_cache) extMeta.push('cache');
+  if (ext && ext.stale) extMeta.push('stale');
+  const extMetaText = extMeta.length ? ` <span class="mono">(${esc(extMeta.join(', '))})</span>` : '';
+  const extErrorText = ext && ext.error ? esc(ext.error) : '';
+  const extAttemptsHtml = extAttempts.length
+    ? `<details style="margin-top:0.5rem;">
+        <summary>External IP probe</summary>
+        <div class="mono" style="margin-top:0.35rem;">
+          ${extAttempts.map(a => {
+            const service = a && a.service ? String(a.service) : '-';
+            const ok = Boolean(a && a.ok);
+            const status = a && a.statusCode ? ` (${a.statusCode})` : '';
+            const err = a && a.error ? ` (${a.error})` : '';
+            return esc(`${service}: ${ok ? 'ok' + status : 'failed' + err}`);
+          }).join('<br>')}
+        </div>
+      </details>`
+    : '';
 
   el.innerHTML = `
     <div><strong>Public dashboard URL:</strong> <span class="mono">${esc(publicUrl)}</span></div>
+    <div><strong>Invite host:</strong> <span class="mono">${esc(inviteResolved || '-')}</span>${inviteSource ? ` <span class="mono">(${esc(inviteSource)})</span>` : ''}</div>
+    <div><strong>External IP (egress):</strong> <span class="mono">${esc((ext && ext.ip) ? ext.ip : '-')}</span>${extMetaText}</div>
+    ${extErrorText ? `<div style="margin-top:0.35rem;"><strong>External IP error:</strong> <span class="mono">${extErrorText}</span></div>` : ''}
+    ${extAttemptsHtml}
     <div><strong>Callbook session storage:</strong> ${enabled ? 'enabled' : 'disabled'}</div>
     <div><strong>Paired devices:</strong> ${deviceCount}</div>
     ${warnings.length ? `<div style="margin-top:0.5rem;"><strong>Warnings:</strong><br>${warnings.map(w => esc(w)).join('<br>')}</div>` : ''}
   `;
 }
 
-async function loadDashboardStatus() {
-  const payload = await request('/status');
+async function loadDashboardStatus(refreshIp = false) {
+  const payload = await request(`/status${refreshIp ? '?refresh_ip=true' : ''}`);
   state.dashboardStatus = payload;
   renderCallbookStatus();
+  renderContacts();
+  renderContactDetail();
 }
 
 function renderCallbookDevices() {
@@ -597,7 +1105,7 @@ function bindCallbookActions() {
   const warningsEl = document.getElementById('callbook-warnings');
 
   document.getElementById('callbook-refresh')?.addEventListener('click', () => {
-    Promise.all([loadDashboardStatus(), loadCallbookDevices()]).catch(err => showNotice(err.message));
+    Promise.all([loadDashboardStatus(true), loadCallbookDevices()]).catch(err => showNotice(err.message));
   });
 
   document.getElementById('callbook-refresh-devices')?.addEventListener('click', () => {

@@ -70,6 +70,12 @@ module.exports = function (test, assert, helpers) {
       externalIpCacheFile: path.join(tmp.dir, 'a2a-external-ip.json')
     });
     assert.equal(first.host, '203.0.113.7:3001');
+    assert.ok(first.externalIpInfo);
+    assert.equal(first.externalIpInfo.ip, '203.0.113.7');
+    assert.equal(first.externalIpInfo.source, serviceUrl);
+    assert.equal(first.externalIpInfo.fromCache, false);
+    assert.equal(first.externalIpInfo.stale, false);
+    assert.equal(Array.isArray(first.externalIpInfo.attempts), true);
 
     // Close server to prove cache is used on subsequent calls.
     await new Promise((resolve) => server.close(resolve));
@@ -83,7 +89,53 @@ module.exports = function (test, assert, helpers) {
       externalIpTtlMs: 60 * 60 * 1000
     });
     assert.equal(second.host, '203.0.113.7:3001');
+    assert.ok(second.externalIpInfo);
+    assert.equal(second.externalIpInfo.ip, '203.0.113.7');
+    assert.equal(second.externalIpInfo.source, serviceUrl);
+    assert.equal(second.externalIpInfo.fromCache, true);
+    assert.equal(second.externalIpInfo.stale, false);
 
+    tmp.cleanup();
+  });
+
+  test('resolveInviteHost can include external IP diagnostics without replacing host', async () => {
+    tmp = helpers.tmpConfigDir('invite-diag');
+    const http = require('http');
+    const path = require('path');
+
+    const prev = process.env.A2A_HOSTNAME;
+    process.env.A2A_HOSTNAME = 'example.com:3001';
+
+    const server = http.createServer((req, res) => {
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'text/plain');
+      res.end('203.0.113.7\n');
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    const serviceUrl = `http://127.0.0.1:${addr.port}/`;
+
+    delete require.cache[require.resolve('../../src/lib/invite-host')];
+    const { resolveInviteHost } = require('../../src/lib/invite-host');
+    const resolved = await resolveInviteHost({
+      defaultPort: 3001,
+      alwaysLookupExternalIp: true,
+      warnOnExternalIpFailure: true,
+      forceRefreshExternalIp: true,
+      externalIpServices: [serviceUrl],
+      externalIpTimeoutMs: 1000,
+      externalIpCacheFile: path.join(tmp.dir, 'a2a-external-ip.json')
+    });
+    assert.equal(resolved.host, 'example.com:3001');
+    assert.equal(resolved.source, 'env');
+    assert.ok(resolved.externalIpInfo);
+    assert.equal(resolved.externalIpInfo.ip, '203.0.113.7');
+    assert.equal(resolved.externalIpInfo.source, serviceUrl);
+
+    await new Promise((resolve) => server.close(resolve));
+
+    if (prev === undefined) delete process.env.A2A_HOSTNAME;
+    else process.env.A2A_HOSTNAME = prev;
     tmp.cleanup();
   });
 

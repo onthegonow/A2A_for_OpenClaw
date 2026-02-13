@@ -6,7 +6,7 @@
  * world (A2A protocols, agent rights, product leadership).
  *
  * Key test dimensions:
- *   - Friends tier (tools-read) — more access than Nyx's public
+ *   - Friends tier — more access than Nyx's public
  *   - Very low domain overlap — seed preservation vs AI federation
  *   - Overlap score should stay LOW (< 0.40 through most of the call)
  *   - Adaptive mode should handle graceful mismatch
@@ -108,7 +108,7 @@ module.exports = function (test, assert, helpers) {
     const { token, record } = tokenStore.create({
       name: profile.agent.name,
       owner: profile.agent.owner,
-      permissions: 'friends',           // friends tier → tools-read
+      permissions: 'friends',
       disclosure: 'public',
       expires: '7d',
       maxCalls: 50,
@@ -142,15 +142,15 @@ module.exports = function (test, assert, helpers) {
     // ── ensureContact ─────────────────────────────────────────
     function ensureContact(caller, tokenId) {
       if (!caller?.name) return null;
-      const remotes = tokenStore.listRemotes();
-      const existing = remotes.find(r =>
+      const contacts = tokenStore.listContacts();
+      const existing = contacts.find(r =>
         r.name === caller.name ||
         (caller.owner && r.owner === caller.owner)
       );
       if (existing) return existing;
 
       const db = JSON.parse(fs.readFileSync(tokenStore.dbPath, 'utf8'));
-      db.remotes = db.remotes || [];
+      db.contacts = db.contacts || [];
       const contact = {
         id: `contact_${Date.now()}`,
         name: caller.name,
@@ -160,9 +160,9 @@ module.exports = function (test, assert, helpers) {
         notes: `Inbound caller via token ${tokenId}`,
         tags: ['inbound'],
         status: 'unknown',
-        linkedTokenId: tokenId
+        linked_token_id: tokenId
       };
-      db.remotes.push(contact);
+      db.contacts.push(contact);
       fs.writeFileSync(tokenStore.dbPath, JSON.stringify(db, null, 2));
       return contact;
     }
@@ -451,7 +451,7 @@ module.exports = function (test, assert, helpers) {
     assert.ok(endRes.body.success);
 
     // ── Verify contacts ───────────────────────────────────────
-    const contacts = tokenStore.listRemotes();
+    const contacts = tokenStore.listContacts();
     const brambleContact = contacts.find(r => r.name === 'Bramble Voss');
 
     assert.ok(brambleContact, 'Bramble Voss should be in contacts after the call');

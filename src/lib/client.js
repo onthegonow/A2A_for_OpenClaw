@@ -60,8 +60,7 @@ class A2AClient {
    * Parse an a2a:// URL
    */
   static parseInvite(inviteUrl) {
-    // Support both a2a:// and legacy oclaw:// schemes
-    const match = inviteUrl.match(/^(?:a2a|oclaw):\/\/([^/]+)\/(.+)$/);
+    const match = inviteUrl.match(/^a2a:\/\/([^/]+)\/(.+)$/);
     if (!match) {
       throw new Error(`Invalid invite URL: ${inviteUrl}`);
     }

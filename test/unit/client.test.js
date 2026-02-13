@@ -18,13 +18,12 @@ module.exports = function (test, assert, helpers) {
     assert.equal(token, 'fed_abc123');
   });
 
-  test('parseInvite supports oclaw:// legacy scheme', () => {
+  test('parseInvite rejects non-a2a schemes', () => {
     delete require.cache[require.resolve('../../src/lib/client')];
     const { A2AClient } = require('../../src/lib/client');
 
-    const { host, token } = A2AClient.parseInvite('oclaw://legacy.host/fed_token456');
-    assert.equal(host, 'legacy.host');
-    assert.equal(token, 'fed_token456');
+    assert.throws(() => A2AClient.parseInvite('oclaw://legacy.host/fed_token456'));
+    assert.throws(() => A2AClient.parseInvite('https://example.com/fed_token456'));
   });
 
   test('parseInvite handles host with port', () => {
