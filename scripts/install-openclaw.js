@@ -88,9 +88,12 @@ function writeOpenClawConfig(config) {
 }
 
 function detectGateway(config) {
-  const hasBinary = commandExists('openclaw');
   const hasGatewayBlock = Boolean(config?.gateway);
-  return hasBinary && hasGatewayBlock;
+  // Treat the presence of a gateway block in config as "gateway mode" even if
+  // the `openclaw` binary is not on PATH (e.g., CI, remote provisioning, or
+  // minimal environments). We still want to migrate config + install the proxy
+  // plugin in those cases.
+  return hasGatewayBlock;
 }
 
 function resolveGatewayBaseUrl() {
