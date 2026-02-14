@@ -2,7 +2,7 @@
  * Disclosure Manifest Tests
  *
  * Covers: manifest load/save, tier merging, topic formatting,
- * default manifest generation, and context file parsing.
+ * default manifest generation, context file reading, and disclosure validation.
  */
 
 module.exports = function (test, assert, helpers) {
@@ -168,40 +168,20 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('generateDefaultManifest extracts goals from USER.md content', () => {
+  test('generateDefaultManifest returns minimal starter regardless of context files', () => {
     const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      user: `# About Me
-## Goals
-- Build AI authentication tools
-- Launch luxury goods marketplace
-- Expand into Asian markets
-`
-    });
+    const manifest = disc.generateDefaultManifest();
 
-    // First 2 goals go to lead_with, rest to discuss_freely
-    const leadTopics = manifest.topics.public.lead_with.map(t => t.detail);
-    assert.ok(leadTopics.some(t => t.includes('AI authentication')));
-    tmp.cleanup();
-  });
-
-  test('generateDefaultManifest extracts personality from SOUL.md', () => {
-    const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      soul: `Refined and precise. Values quality above all.
-Prefers deep technical discussions over small talk.
-
-## Values
-- Craftsmanship
-- Integrity
-- Curiosity
-`
-    });
-
-    assert.includes(manifest.personality_notes, 'Refined');
-    // Values become friends-tier topics
-    const friendTopics = manifest.topics.friends.discuss_freely.map(t => t.topic);
-    assert.ok(friendTopics.some(t => t.includes('Craftsmanship')));
+    // Should return only the minimal starter
+    assert.equal(manifest.topics.public.lead_with.length, 1);
+    assert.equal(manifest.topics.public.lead_with[0].topic, 'What I do');
+    assert.equal(manifest.topics.public.discuss_freely.length, 1);
+    assert.equal(manifest.topics.public.deflect.length, 1);
+    assert.equal(manifest.topics.friends.lead_with.length, 0);
+    assert.equal(manifest.topics.friends.discuss_freely.length, 0);
+    assert.equal(manifest.topics.family.lead_with.length, 0);
+    assert.equal(manifest.topics.family.discuss_freely.length, 0);
+    assert.greaterThan(manifest.never_disclose.length, 0);
     tmp.cleanup();
   });
 
@@ -264,51 +244,264 @@ Prefers deep technical discussions over small talk.
     tmp.cleanup();
   });
 
-  // ── Expanded Manifest Generation ───────────────────────────────
+  // ── Disclosure Submission Validation ──────────────────────────
 
-  test('generateDefaultManifest ignores SKILL.md bullet lists for disclosure topics', () => {
+  test('validateDisclosureSubmission accepts valid submission', () => {
     const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      skill: `# My Skill
-- Handle API authentication
-- Process payment webhooks
-- Generate PDF reports
-`
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'AI development', detail: 'Building AI tools' }],
+          discuss_freely: [{ topic: 'Open source', detail: 'Contributing to OSS' }],
+          deflect: [{ topic: 'Personal life', detail: 'Redirect to owner' }]
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: ['API keys'],
+      personality_notes: 'Friendly and technical'
     });
-
-    const publicDiscuss = manifest.topics.public.discuss_freely.map(t => t.detail);
-    assert.equal(publicDiscuss.some(t => t.includes('API authentication')), false);
+    assert.ok(result.valid);
+    assert.equal(result.errors.length, 0);
+    assert.ok(result.manifest);
+    assert.equal(result.manifest.version, 1);
     tmp.cleanup();
   });
 
-  test('generateDefaultManifest uses memory content to add topics', () => {
+  test('validateDisclosureSubmission rejects non-object input', () => {
     const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      memory: `- Working on distributed systems architecture
-- Interested in real-time collaboration tools
-`
-    });
-
-    const friendsDiscuss = manifest.topics.friends.discuss_freely.map(t => t.detail);
-    assert.ok(friendsDiscuss.some(t => t.includes('distributed systems')));
+    const result = disc.validateDisclosureSubmission('not an object');
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.length > 0);
+    assert.ok(result.errors[0].includes('object'));
     tmp.cleanup();
   });
 
-  test('generateDefaultManifest uses CLAUDE.md context', () => {
+  test('validateDisclosureSubmission rejects missing topics', () => {
     const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      claude: `# Project
-## Quick Context
-- A2A enables agent-to-agent communication
-- Token management for scoped permissions
-`
+    const result = disc.validateDisclosureSubmission({
+      never_disclose: ['secrets'],
+      personality_notes: 'Nice'
     });
-
-    const publicDiscuss = manifest.topics.public.discuss_freely.map(t => t.detail);
-    assert.ok(publicDiscuss.some(t => t.includes('agent-to-agent')));
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('topics')));
     tmp.cleanup();
   });
 
-  // Note: SKILL.md is intentionally NOT used to generate disclosure topics, to avoid
-  // pulling in onboarding instructions or other operational bullet lists as "topics".
+  test('validateDisclosureSubmission rejects missing tier', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('friends')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects invalid topic shape', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: ['just a string'],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('topic')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects topics with technical content', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [
+            { topic: 'Run `npm test` to verify', detail: 'Code command' },
+            { topic: 'https://github.com/example', detail: 'Raw URL' }
+          ],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('technical')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission enforces max topic length', () => {
+    const disc = freshDisclosure();
+    const longTopic = 'A'.repeat(200);
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [{ topic: longTopic, detail: 'Too long topic' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('160')));
+    tmp.cleanup();
+  });
+
+  // ── Extraction Prompt Generation ──────────────────────────────
+
+  test('buildExtractionPrompt returns string with JSON schema', () => {
+    const disc = freshDisclosure();
+    const prompt = disc.buildExtractionPrompt();
+    assert.equal(typeof prompt, 'string');
+    assert.includes(prompt, 'lead_with');
+    assert.includes(prompt, 'discuss_freely');
+    assert.includes(prompt, 'deflect');
+    assert.includes(prompt, 'never_disclose');
+    assert.includes(prompt, 'personality_notes');
+    assert.includes(prompt, 'public');
+    assert.includes(prompt, 'friends');
+    assert.includes(prompt, 'family');
+    tmp.cleanup();
+  });
+
+  test('buildExtractionPrompt lists available context files', () => {
+    const disc = freshDisclosure();
+    const prompt = disc.buildExtractionPrompt({ 'USER.md': true, 'SOUL.md': true, 'HEARTBEAT.md': false });
+    assert.includes(prompt, 'USER.md');
+    assert.includes(prompt, 'SOUL.md');
+    tmp.cleanup();
+  });
+
+  test('buildExtractionPrompt includes guidance on what NOT to extract', () => {
+    const disc = freshDisclosure();
+    const prompt = disc.buildExtractionPrompt();
+    assert.includes(prompt, 'URL');
+    assert.includes(prompt, 'code');
+    tmp.cleanup();
+  });
+
+  // ── Adversarial Input Hardening Tests ──────────────────────────
+
+  test('validateDisclosureSubmission strips extra properties from topic items', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'AI development', detail: 'Building AI tools', extra: 'should be stripped' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.ok(result.valid);
+    assert.equal(result.manifest.topics.public.lead_with[0].extra, undefined);
+    assert.equal(Object.keys(result.manifest.topics.public.lead_with[0]).length, 2);
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects extra tiers', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: { lead_with: [], discuss_freely: [], deflect: [] },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] },
+        admin: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('admin')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects empty topic strings', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [{ topic: '', detail: 'Empty topic' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('empty')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission enforces array size limits', () => {
+    const disc = freshDisclosure();
+    const items = Array.from({ length: 25 }, (_, i) => ({ topic: `Topic ${i}`, detail: `Detail ${i}` }));
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: items,
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('max')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission allows proper nouns in topics', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [
+            { topic: 'iPhone app development', detail: 'Building iOS apps' },
+            { topic: 'LinkedIn networking', detail: 'Professional connections via LinkedIn' }
+          ],
+          discuss_freely: [
+            { topic: 'WordPress consulting', detail: 'WordPress site building' },
+            { topic: 'YouTube content creation', detail: 'Creating YouTube videos' }
+          ],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.ok(result.valid, 'Proper nouns should not be rejected as technical content');
+    tmp.cleanup();
+  });
 };

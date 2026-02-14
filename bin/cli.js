@@ -1118,13 +1118,15 @@ https://github.com/onthegonow/a2a_calling`;
 	      contextFiles = disc.readContextFiles(workspaceDir);
 	      const forceManifest = Boolean(args.flags.force || args.flags['regen-manifest'] || args.flags.regenManifest);
 	      if (forceManifest) {
-	        const generated = disc.generateDefaultManifest(contextFiles);
+	        // Force-regen uses minimal starter; agent-driven extraction is the
+	        // proper way to populate topics (via `a2a onboard --submit`).
+	        const generated = disc.generateDefaultManifest();
 	        disc.saveManifest(generated);
 	        manifest = generated;
 	      } else {
 	        manifest = disc.loadManifest();
 	        if (!manifest || Object.keys(manifest).length === 0) {
-	          const generated = disc.generateDefaultManifest(contextFiles);
+	          const generated = disc.generateDefaultManifest();
 	          disc.saveManifest(generated);
 	          manifest = generated;
 	        }
@@ -1508,46 +1510,73 @@ https://github.com/onthegonow/a2a_calling`;
     }
   },
 
-	  onboard: (args) => {
-	    const { A2AConfig } = require('../src/lib/config');
-	    const { readContextFiles, generateDefaultManifest, saveManifest, MANIFEST_FILE } = require('../src/lib/disclosure');
-	    const config = new A2AConfig();
-	
-	    if (config.isOnboarded() && !args.flags.force) {
-	      console.log('\u2705 Onboarding already complete. Use --force to regenerate the disclosure manifest.');
-	      return;
-	    }
+  onboard: (args) => {
+    const { A2AConfig } = require('../src/lib/config');
+    const {
+      readContextFiles,
+      buildExtractionPrompt,
+      validateDisclosureSubmission,
+      saveManifest,
+      MANIFEST_FILE
+    } = require('../src/lib/disclosure');
+    const config = new A2AConfig();
 
-    const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
-    console.log('\n\ud83d\ude80 A2A Onboarding\n' + '\u2550'.repeat(50) + '\n');
-    console.log('Scanning workspace for context...\n');
+    // ── Submit mode: agent sends structured JSON ──────────────
+    const submitRaw = args.flags.submit;
+    if (submitRaw) {
+      let parsed;
+      try {
+        parsed = JSON.parse(String(submitRaw));
+      } catch (e) {
+        console.error('\n\u274c Invalid JSON in --submit flag.');
+        console.error(`   Parse error: ${e.message}\n`);
+        process.exit(1);
+      }
 
-    const contextFiles = readContextFiles(workspaceDir);
-    // Print what was found
-	    const sources = {
-	      'USER.md': contextFiles.user,
-	      'HEARTBEAT.md': contextFiles.heartbeat,
-	      'SOUL.md': contextFiles.soul,
-	      'SKILL.md': contextFiles.skill,
-	      'CLAUDE.md': contextFiles.claude,
-	      'memory/*.md': contextFiles.memory
-	    };
-    for (const [name, content] of Object.entries(sources)) {
-      console.log(`   ${content ? '\u2705' : '\u274c'} ${name}`);
+      const result = validateDisclosureSubmission(parsed);
+      if (!result.valid) {
+        console.error('\n\u274c Disclosure submission validation failed:\n');
+        result.errors.forEach(err => console.error(`   \u2022 ${err}`));
+        console.error(`\nFix the errors above and resubmit with: a2a onboard --submit '<json>'\n`);
+        process.exit(1);
+      }
+
+      saveManifest(result.manifest);
+
+      const agentName = args.flags.name || config.getAgent().name || process.env.A2A_AGENT_NAME || '';
+      const hostname = args.flags.hostname || config.getAgent().hostname || process.env.A2A_HOSTNAME || '';
+      if (agentName) config.setAgent({ name: agentName });
+      if (hostname) config.setAgent({ hostname });
+
+      console.log('\n\u2705 Disclosure manifest saved.');
+      console.log(`   Manifest: ${MANIFEST_FILE}`);
+      console.log('   Next: a2a quickstart\n');
+      return;
     }
 
-    const manifest = generateDefaultManifest(contextFiles);
-    saveManifest(manifest);
+    // ── Prompt mode: print extraction instructions for agent ──
+    if (config.isOnboarded() && !args.flags.force) {
+      console.log('\u2705 Onboarding already complete. Use --force to regenerate.');
+      return;
+    }
 
-    const agentName = args.flags.name || config.getAgent().name || process.env.A2A_AGENT_NAME || '';
-    const hostname = args.flags.hostname || config.getAgent().hostname || process.env.A2A_HOSTNAME || '';
-	    if (agentName) config.setAgent({ name: agentName });
-	    if (hostname) config.setAgent({ hostname });
+    const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
+    const contextFiles = readContextFiles(workspaceDir);
 
-	    console.log(`\n\u2705 Disclosure manifest generated.`);
-	    console.log(`   Manifest: ${MANIFEST_FILE}`);
-	    console.log('   Next: a2a quickstart\n');
-	  },
+    const availableFiles = {
+      'USER.md': Boolean(contextFiles.user),
+      'SOUL.md': Boolean(contextFiles.soul),
+      'HEARTBEAT.md': Boolean(contextFiles.heartbeat),
+      'SKILL.md': Boolean(contextFiles.skill),
+      'CLAUDE.md': Boolean(contextFiles.claude),
+      'memory/*.md': Boolean(contextFiles.memory)
+    };
+
+    console.log(buildExtractionPrompt(availableFiles));
+    console.log('\n---');
+    console.log('After the owner confirms, submit with:');
+    console.log("  a2a onboard --submit '<json>'\n");
+  },
 
   help: () => {
     console.log(`A2A Calling - Agent-to-Agent Communication

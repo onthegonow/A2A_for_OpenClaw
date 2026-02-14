@@ -350,4 +350,102 @@ module.exports = function (test, assert, helpers) {
 
     tmp.cleanup();
   });
+
+  test('onboard --submit validates and saves agent disclosure submission', () => {
+    tmp = helpers.tmpConfigDir('onboard-submit');
+    const { execFileSync } = require('child_process');
+    const path = require('path');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    const submission = JSON.stringify({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'AI development', detail: 'Building AI-powered tools' }],
+          discuss_freely: [{ topic: 'Open source', detail: 'Contributing to OSS projects' }],
+          deflect: [{ topic: 'Personal finances', detail: 'Redirect to owner' }]
+        },
+        friends: {
+          lead_with: [{ topic: 'Current projects', detail: 'Deep work on A2A protocol' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: ['API keys', 'Passwords'],
+      personality_notes: 'Technical and direct'
+    });
+
+    const result = execFileSync(process.execPath, [cliPath, 'onboard', '--submit', submission], {
+      env,
+      encoding: 'utf8'
+    });
+
+    assert.includes(result, 'Disclosure manifest saved');
+
+    // Verify manifest was saved correctly
+    delete require.cache[require.resolve('../../src/lib/disclosure')];
+    const disc = require('../../src/lib/disclosure');
+    const manifest = disc.loadManifest();
+    assert.equal(manifest.version, 1);
+    assert.equal(manifest.topics.public.lead_with[0].topic, 'AI development');
+    assert.equal(manifest.topics.friends.lead_with[0].topic, 'Current projects');
+
+    tmp.cleanup();
+  });
+
+  test('onboard --submit rejects invalid submission with errors', () => {
+    tmp = helpers.tmpConfigDir('onboard-submit-fail');
+    const { execFileSync } = require('child_process');
+    const path = require('path');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    const badSubmission = JSON.stringify({ not: 'valid' });
+
+    let threw = false;
+    try {
+      execFileSync(process.execPath, [cliPath, 'onboard', '--submit', badSubmission], {
+        env,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+    } catch (err) {
+      threw = true;
+      const stderr = err.stderr || '';
+      const stdout = err.stdout || '';
+      const output = stderr + stdout;
+      assert.ok(output.includes('topics') || output.includes('Validation'), 'Should mention validation error');
+    }
+    assert.ok(threw, 'Should exit with non-zero code on invalid submission');
+
+    tmp.cleanup();
+  });
+
+  test('onboard without --submit prints extraction prompt', () => {
+    tmp = helpers.tmpConfigDir('onboard-prompt');
+    const fs = require('fs');
+    const path = require('path');
+    const { execFileSync } = require('child_process');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const workspaceDir = path.join(tmp.dir, 'ws');
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, 'USER.md'), '## Goals\n- Build cool tools\n');
+
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir, A2A_WORKSPACE: workspaceDir };
+
+    const result = execFileSync(process.execPath, [cliPath, 'onboard'], {
+      env,
+      encoding: 'utf8'
+    });
+
+    assert.includes(result, 'lead_with');
+    assert.includes(result, 'discuss_freely');
+    assert.includes(result, 'USER.md');
+
+    tmp.cleanup();
+  });
 };

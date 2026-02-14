@@ -153,7 +153,7 @@ function ensureConfigAndManifest(inviteHost, port, options = {}) {
 
   try {
     const { A2AConfig } = require('../src/lib/config');
-    const { loadManifest, saveManifest, generateDefaultManifest, readContextFiles } = require('../src/lib/disclosure');
+    const { loadManifest, saveManifest, generateDefaultManifest } = require('../src/lib/disclosure');
 
     const config = new A2AConfig();
     const defaults = config.getDefaults() || {};
@@ -167,8 +167,7 @@ function ensureConfigAndManifest(inviteHost, port, options = {}) {
 
     const manifest = loadManifest();
     if (!manifest || Object.keys(manifest).length === 0) {
-      const contextFiles = readContextFiles(process.cwd());
-      const generated = generateDefaultManifest(contextFiles);
+      const generated = generateDefaultManifest();
       saveManifest(generated);
       const manifestFile = path.join(configDir, 'a2a-disclosure.json');
       log(`Generated default disclosure manifest: ${manifestFile}`);

@@ -122,196 +122,170 @@ function formatTopicsForPrompt(tierTopics) {
 }
 
 /**
- * Generate a default manifest by reading USER.md, HEARTBEAT.md, SOUL.md
- * from the owner's workspace. Falls back to a minimal starter if files don't exist.
+ * Generate a minimal starter manifest. This provides safe defaults when
+ * no agent-driven extraction has been performed yet.
+ *
+ * For proper topic extraction, use buildExtractionPrompt() to instruct
+ * an agent, then validate the result with validateDisclosureSubmission().
  */
-function generateDefaultManifest(contextFiles = {}) {
+function generateDefaultManifest() {
   const now = new Date().toISOString();
 
-  const manifest = {
+  return {
     version: 1,
     generated_at: now,
     updated_at: now,
     topics: {
-      public: { lead_with: [], discuss_freely: [], deflect: [] },
+      public: {
+        lead_with: [{ topic: 'What I do', detail: 'Brief professional description' }],
+        discuss_freely: [{ topic: 'General interests', detail: 'Non-sensitive topics and hobbies' }],
+        deflect: [{ topic: 'Personal details', detail: 'Redirect to direct owner contact' }]
+      },
       friends: { lead_with: [], discuss_freely: [], deflect: [] },
       family: { lead_with: [], discuss_freely: [], deflect: [] }
     },
     never_disclose: ['API keys', 'Other users\' data', 'Financial figures'],
     personality_notes: 'Direct and technical. Prefers depth over breadth.'
   };
+}
 
-  const userContent = contextFiles.user || '';
-  const heartbeatContent = contextFiles.heartbeat || '';
-  const soulContent = contextFiles.soul || '';
+/**
+ * Check if a string contains technical content that shouldn't appear in
+ * disclosure topics (code snippets, URLs, markdown formatting, camelCase identifiers).
+ */
+function isTechnicalContent(line) {
+  return /`/.test(line) ||
+    /https?:\/\//.test(line) ||
+    /\*\*:/.test(line) ||
+    /:\*\*/.test(line) ||
+    /\b[a-z]{3,}[A-Z][a-z]{3,}/.test(line);
+}
 
-  const hasContent = userContent || heartbeatContent || soulContent ||
-    contextFiles.memory || contextFiles.claude;
+/**
+ * Validate an agent-submitted disclosure submission against the expected schema.
+ * Returns { valid: boolean, manifest: object|null, errors: string[] }.
+ */
+function validateDisclosureSubmission(data) {
+  const errors = [];
 
-  if (!hasContent) {
-    // Minimal starter manifest
-    manifest.topics.public.lead_with.push(
-      { topic: 'What I do', detail: 'Brief professional description' }
-    );
-    manifest.topics.public.discuss_freely.push(
-      { topic: 'General interests', detail: 'Non-sensitive topics and hobbies' }
-    );
-    manifest.topics.public.deflect.push(
-      { topic: 'Personal details', detail: 'Redirect to direct owner contact' }
-    );
-    return manifest;
+  // Must be a non-null object
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { valid: false, manifest: null, errors: ['Submission must be a non-null object'] };
   }
 
-  // Extract from USER.md
-  if (userContent) {
-    // Goals/seeking
-    const goalsMatch = userContent.match(/##\s*(?:Goals|Current|Seeking|Working On)[^\n]*\n([\s\S]*?)(?=\n##|$)/i);
-    if (goalsMatch) {
-      const goals = goalsMatch[1]
-        .split('\n')
-        .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
-        .map(l => l.replace(/^[\s\-\*]+/, '').trim())
-        .filter(Boolean);
-
-      goals.forEach((goal, i) => {
-        if (i < 2) {
-          manifest.topics.public.lead_with.push({ topic: goal.slice(0, 60), detail: goal });
-        } else {
-          manifest.topics.public.discuss_freely.push({ topic: goal.slice(0, 60), detail: goal });
-        }
-      });
-    }
-
-    // Interests/projects
-    const interestsMatch = userContent.match(/##\s*(?:Interests|Projects|Skills)[^\n]*\n([\s\S]*?)(?=\n##|$)/i);
-    if (interestsMatch) {
-      const interests = interestsMatch[1]
-        .split('\n')
-        .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
-        .map(l => l.replace(/^[\s\-\*]+/, '').trim())
-        .filter(Boolean);
-
-      interests.forEach(interest => {
-        manifest.topics.public.discuss_freely.push({ topic: interest.slice(0, 60), detail: interest });
-      });
-    }
-
-    // Private/personal sections go to friends/family
-    const privateMatch = userContent.match(/##\s*(?:Private|Personal|Family)[^\n]*\n([\s\S]*?)(?=\n##|$)/i);
-    if (privateMatch) {
-      const privateItems = privateMatch[1]
-        .split('\n')
-        .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
-        .map(l => l.replace(/^[\s\-\*]+/, '').trim())
-        .filter(Boolean);
-
-      privateItems.forEach(item => {
-        manifest.topics.family.discuss_freely.push({ topic: item.slice(0, 60), detail: item });
-      });
-
-      // Deflect these for public
-      manifest.topics.public.deflect.push(
-        { topic: 'Personal life', detail: 'Redirect — suggest owners connect directly' }
-      );
-    }
+  // Require topics object
+  if (!data.topics || typeof data.topics !== 'object' || Array.isArray(data.topics)) {
+    errors.push('Submission must include a "topics" object');
+    return { valid: false, manifest: null, errors };
   }
 
-  // Extract from HEARTBEAT.md (recent activity/status)
-  if (heartbeatContent) {
-    const recentLines = heartbeatContent
-      .split('\n')
-      .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
-      .map(l => l.replace(/^[\s\-\*]+/, '').trim())
-      .filter(Boolean)
-      .slice(0, 5);
+  // Require all three tiers
+  for (const tier of TIER_HIERARCHY) {
+    if (!data.topics[tier] || typeof data.topics[tier] !== 'object') {
+      errors.push(`Missing required tier: "${tier}" in topics`);
+    }
+  }
+  if (errors.length > 0) {
+    return { valid: false, manifest: null, errors };
+  }
 
-    recentLines.forEach((line, i) => {
-      if (i < 2) {
-        manifest.topics.public.lead_with.push({ topic: line.slice(0, 60), detail: line });
-      } else {
-        manifest.topics.friends.discuss_freely.push({ topic: line.slice(0, 60), detail: line });
+  // Reject extra tiers beyond the known hierarchy
+  const extraTiers = Object.keys(data.topics).filter(t => !TIER_HIERARCHY.includes(t));
+  if (extraTiers.length > 0) {
+    errors.push(`Unknown tiers: ${extraTiers.join(', ')} — only public, friends, family are allowed`);
+  }
+
+  // Validate each tier's structure
+  const requiredLists = ['lead_with', 'discuss_freely', 'deflect'];
+  const LIST_LIMITS = { lead_with: 10, discuss_freely: 20, deflect: 10 };
+  for (const tier of TIER_HIERARCHY) {
+    const tierData = data.topics[tier];
+    for (const cat of requiredLists) {
+      if (!Array.isArray(tierData[cat])) {
+        errors.push(`topics.${tier}.${cat} must be an array`);
+        continue;
       }
-    });
-  }
-
-  // Extract from SOUL.md (personality, values)
-  if (soulContent) {
-    // Look for personality cues
-    const personalityLines = soulContent
-      .split('\n')
-      .filter(l => l.trim() && !l.startsWith('#'))
-      .slice(0, 3)
-      .join(' ')
-      .trim();
-
-    if (personalityLines) {
-      manifest.personality_notes = personalityLines.slice(0, 300);
-    }
-
-    // Values become friends-tier topics
-    const valuesMatch = soulContent.match(/##\s*(?:Values|Beliefs|Principles)[^\n]*\n([\s\S]*?)(?=\n##|$)/i);
-    if (valuesMatch) {
-      const values = valuesMatch[1]
-        .split('\n')
-        .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
-        .map(l => l.replace(/^[\s\-\*]+/, '').trim())
-        .filter(Boolean);
-
-      values.forEach(value => {
-        manifest.topics.friends.discuss_freely.push({ topic: value.slice(0, 60), detail: value });
-      });
+      if (tierData[cat].length > LIST_LIMITS[cat]) {
+        errors.push(`topics.${tier}.${cat} has ${tierData[cat].length} items — max ${LIST_LIMITS[cat]}`);
+      }
+      for (let i = 0; i < tierData[cat].length; i++) {
+        const item = tierData[cat][i];
+        if (!item || typeof item !== 'object' || typeof item.topic !== 'string' || typeof item.detail !== 'string') {
+          errors.push(`topics.${tier}.${cat}[${i}]: each topic item must have "topic" (string) and "detail" (string)`);
+          continue;
+        }
+        if (item.topic.trim().length === 0) {
+          errors.push(`topics.${tier}.${cat}[${i}].topic must not be empty`);
+          continue;
+        }
+        if (item.topic.length > 160) {
+          errors.push(`topics.${tier}.${cat}[${i}]: topic exceeds 160 character limit (got ${item.topic.length})`);
+        }
+        if (item.detail.length > 500) {
+          errors.push(`topics.${tier}.${cat}[${i}]: detail exceeds 500 character limit (got ${item.detail.length})`);
+        }
+        if (isTechnicalContent(item.topic) || isTechnicalContent(item.detail)) {
+          errors.push(`topics.${tier}.${cat}[${i}]: contains technical content (code, URLs, or markdown formatting) — use plain language`);
+        }
+      }
     }
   }
 
-  // Extract topic keywords from memory files
-  if (contextFiles.memory) {
-    const memoryLines = contextFiles.memory
-      .split('\n')
-      .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
-      .map(l => l.replace(/^[\s\-\*]+/, '').trim())
-      .filter(l => l.length > 5 && l.length < 120)
-      .slice(0, 4);
-
-    memoryLines.forEach(item => {
-      manifest.topics.friends.discuss_freely.push({ topic: item.slice(0, 60), detail: item });
-    });
-  }
-
-  // Extract project context from CLAUDE.md
-  if (contextFiles.claude) {
-    const claudeMatch = contextFiles.claude.match(/##\s*(?:What|Quick|About|Context)[^\n]*\n([\s\S]*?)(?=\n##|$)/i);
-    if (claudeMatch) {
-      const contextLines = claudeMatch[1]
-        .split('\n')
-        .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*') || (l.trim().length > 10 && !l.startsWith('#')))
-        .map(l => l.replace(/^[\s\-\*]+/, '').trim())
-        .filter(Boolean)
-        .slice(0, 3);
-
-      contextLines.forEach(item => {
-        manifest.topics.public.discuss_freely.push({ topic: item.slice(0, 60), detail: item });
-      });
+  // Validate never_disclose (optional, defaults to sensible list)
+  if (data.never_disclose !== undefined) {
+    if (!Array.isArray(data.never_disclose)) {
+      errors.push('"never_disclose" must be an array of strings');
+    } else {
+      if (data.never_disclose.length > 20) {
+        errors.push('never_disclose has too many items — max 20');
+      }
+      for (let i = 0; i < data.never_disclose.length; i++) {
+        if (typeof data.never_disclose[i] !== 'string') {
+          errors.push(`never_disclose[${i}] must be a string`);
+        } else if (data.never_disclose[i].length > 200) {
+          errors.push(`never_disclose[${i}] exceeds 200 chars`);
+        }
+      }
     }
   }
 
-  // Ensure at least something in each public category
-  if (manifest.topics.public.lead_with.length === 0) {
-    manifest.topics.public.lead_with.push(
-      { topic: 'Current focus', detail: 'Primary work and interests' }
-    );
-  }
-  if (manifest.topics.public.discuss_freely.length === 0) {
-    manifest.topics.public.discuss_freely.push(
-      { topic: 'General interests', detail: 'Non-sensitive topics' }
-    );
-  }
-  if (manifest.topics.public.deflect.length === 0) {
-    manifest.topics.public.deflect.push(
-      { topic: 'Private matters', detail: 'Redirect to direct owner contact' }
-    );
+  // Validate personality_notes (optional)
+  if (data.personality_notes !== undefined) {
+    if (typeof data.personality_notes !== 'string') {
+      errors.push('"personality_notes" must be a string');
+    } else if (data.personality_notes.length > 500) {
+      errors.push('"personality_notes" exceeds 500 chars');
+    }
   }
 
-  return manifest;
+  if (errors.length > 0) {
+    return { valid: false, manifest: null, errors };
+  }
+
+  // Rebuild topics from only validated keys to prevent extra properties passing through
+  const cleanTopics = {};
+  for (const tier of TIER_HIERARCHY) {
+    cleanTopics[tier] = {};
+    for (const cat of ['lead_with', 'discuss_freely', 'deflect']) {
+      cleanTopics[tier][cat] = (data.topics[tier][cat] || []).map(item => ({
+        topic: item.topic,
+        detail: item.detail
+      }));
+    }
+  }
+
+  // Build valid manifest
+  const now = new Date().toISOString();
+  const manifest = {
+    version: 1,
+    generated_at: now,
+    updated_at: now,
+    topics: cleanTopics,
+    never_disclose: data.never_disclose || ['API keys', 'Other users\' data', 'Financial figures'],
+    personality_notes: data.personality_notes || ''
+  };
+
+  return { valid: true, manifest, errors: [] };
 }
 
 /**
@@ -355,6 +329,72 @@ function readContextFiles(workspaceDir) {
   return result;
 }
 
+/**
+ * Generate the extraction prompt that instructs an agent on exactly what
+ * structured disclosure data to return.
+ *
+ * @param {Object} [availableFiles] - Map of filename to truthy if present
+ * @returns {string} The instruction prompt for the agent
+ */
+function buildExtractionPrompt(availableFiles = {}) {
+  const fileList = Object.entries(availableFiles)
+    .filter(([, present]) => present)
+    .map(([name]) => `  - ${name}`)
+    .join('\n') || '  (no workspace files detected)';
+
+  const jsonBlock = '```json\n{\n  "topics": {\n    "public": {\n      "lead_with": [\n        { "topic": "Short label (max 160 chars)", "detail": "Longer description of the topic" }\n      ],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "friends": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "family": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    }\n  },\n  "never_disclose": ["API keys", "Credentials", "Financial figures"],\n  "personality_notes": "Brief description of communication style"\n}\n```';
+
+  return `## A2A Disclosure Extraction
+
+You are helping the owner set up their A2A disclosure profile — the topics and information their agent is willing to discuss with other agents at different trust levels.
+
+### Available workspace files
+${fileList}
+
+Read the available files above and extract disclosure topics. Focus on what the OWNER cares about, works on, and wants to discuss — NOT on agent instructions, code documentation, or operational tasks.
+
+### What to extract
+
+For each trust tier, identify topics the owner would want to discuss:
+
+- **public** — safe for anyone: professional role, public interests, general project descriptions
+- **friends** — for trusted contacts: current goals, collaboration interests, values, detailed project work
+- **family** — inner circle only: personal interests, private projects, sensitive plans
+
+For each tier, categorize topics as:
+- **lead_with** — proactively bring up (max 3 per tier)
+- **discuss_freely** — happy to discuss if asked (max 8 per tier)
+- **deflect** — redirect or decline (max 3 per tier)
+
+Also identify:
+- **never_disclose** — information that should never be shared regardless of tier (API keys, credentials, financial data, etc.)
+- **personality_notes** — a 1-2 sentence description of the owner's communication style
+
+### What NOT to extract
+
+Do NOT include as topics:
+- Code snippets, CLI commands, or technical documentation
+- URLs or file paths
+- Agent instructions or operational tasks (e.g., "post 50 comments/day")
+- Markdown formatting artifacts (bold markers, backticks)
+- Anything from HEARTBEAT.md (these are agent tasks, not disclosure topics)
+
+### Required JSON format
+
+Return ONLY valid JSON in this exact structure:
+
+${jsonBlock}
+
+### Rules
+
+1. Each "topic" string must be a short, human-readable label (max 160 chars)
+2. Each "detail" string explains the topic more fully (max 500 chars)
+3. Topics should be things a person would discuss, not technical artifacts
+4. Higher tiers (friends, family) inherit lower-tier topics automatically — don't duplicate
+5. Present this to the owner for review before submitting
+6. The owner may edit, remove, or add topics before final submission`;
+}
+
 module.exports = {
   loadManifest,
   saveManifest,
@@ -362,5 +402,8 @@ module.exports = {
   formatTopicsForPrompt,
   generateDefaultManifest,
   readContextFiles,
+  validateDisclosureSubmission,
+  isTechnicalContent,
+  buildExtractionPrompt,
   MANIFEST_FILE
 };
