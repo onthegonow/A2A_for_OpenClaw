@@ -299,17 +299,22 @@ function readWorkspaceContext(baseDir = process.cwd()) {
 }
 
 function printWorkspaceScan(context) {
-  console.log('Scanning workspace for context...');
-  console.log(`  ${context.found.USER ? '✅' : '⚠️ '} ${context.found.USER ? 'Found USER.md' : 'No USER.md'}${context.found.USER ? ' — identity hints found' : ''}`);
-  console.log(`  ${context.found.SOUL ? '✅' : '⚠️ '} ${context.found.SOUL ? 'Found SOUL.md' : 'No SOUL.md'}${context.found.SOUL ? ' — personality notes available' : ''}`);
-  console.log(`  ${context.found.HEARTBEAT ? '✅' : '⚠️ '} ${context.found.HEARTBEAT ? 'Found HEARTBEAT.md' : 'No HEARTBEAT.md (skipped)'}`);
-  console.log(`  ${context.found.SKILL ? '✅' : '⚠️ '} ${context.found.SKILL ? 'Found SKILL.md' : 'No SKILL.md (skipped)'}`
-  );
-  console.log(`  ${context.found.CLAUDE ? '✅' : '⚠️ '} ${context.found.CLAUDE ? 'Found CLAUDE.md' : 'No CLAUDE.md (skipped)'}`);
-  if (context.memoryCount > 0) {
-    console.log(`  ✅ Found ${context.memoryCount} memory file(s)`);
+  const fileLabels = {
+    USER: 'USER.md — identity hints',
+    SOUL: 'SOUL.md — personality notes',
+    HEARTBEAT: 'HEARTBEAT.md — scheduled tasks',
+    SKILL: 'SKILL.md — capabilities',
+    CLAUDE: 'CLAUDE.md — agent instructions'
+  };
+  const found = Object.entries(fileLabels)
+    .filter(([key]) => context.found[key])
+    .map(([, label]) => label);
+  if (context.memoryCount > 0) found.push(`${context.memoryCount} memory file(s)`);
+
+  if (found.length) {
+    console.log(`Workspace context: ${found.join(', ')}`);
   } else {
-    console.log('  ⚠️  No memory/*.md files');
+    console.log('Workspace context: no context files found (disclosure topics will be minimal)');
   }
 }
 
@@ -1208,6 +1213,33 @@ https://github.com/onthegonow/a2a_calling`;
     require('../src/server.js');
   },
 
+  // ==========================================================================
+  // quickstart — full onboarding flow
+  //
+  // OBJECTIVE: Walk an installing agent (or human) through every step needed
+  // to get A2A Calling running, in a single pass. The postinstall hook calls
+  // this automatically, so `npm install -g a2acalling` completes the entire
+  // setup without any follow-up commands.
+  //
+  // Every prompt auto-accepts its default when there is no TTY, so the full
+  // flow completes unattended in non-interactive environments (agents).
+  //
+  // STEPS:
+  //   Step 1 — Port selection: scan for an available port and bind it.
+  //   Step 2 — Hostname detection: look up the external IP so remote agents
+  //            know where to reach this instance.
+  //   Step 3 — Server start: launch the A2A server as a detached process,
+  //            confirm it's listening, save config, and print a verify hint.
+  //   Step 4 — Disclosure prompt: output a full agent-readable prompt that
+  //            instructs the agent to scan its own workspace files, extract
+  //            tiered disclosure topics, and submit them back via
+  //            `a2a quickstart --submit '<json>'`.
+  //
+  // The disclosure prompt does NOT pre-scan files itself — it tells the agent
+  // which files to look for (USER.md, SOUL.md, etc.) and lets the agent read
+  // them with its own tools. This is intentional: the installer runs in a
+  // subprocess where it has no access to the agent's file-reading capabilities.
+  // ==========================================================================
   quickstart: async (args) => {
     const { A2AConfig } = require('../src/lib/config');
     const { isPortListening } = require('../src/lib/port-scanner');
@@ -1217,6 +1249,8 @@ https://github.com/onthegonow/a2a_calling`;
     const config = new A2AConfig();
     const interactive = isInteractiveShell();
 
+    // Handle `quickstart --submit '<json>'` — this is the agent calling back
+    // after it has scanned its workspace and built the disclosure JSON.
     if (await handleDisclosureSubmit(args, 'quickstart')) {
       return;
     }
@@ -1231,10 +1265,9 @@ https://github.com/onthegonow/a2a_calling`;
       return;
     }
 
-    const context = readWorkspaceContext(process.env.A2A_WORKSPACE || process.cwd());
-    const availableFiles = getDisclosurePromptFiles(context);
-
-    // If server is already running and awaiting disclosure, skip to Step 2
+    // Resume point: if the server is already running and we're waiting for the
+    // agent to submit disclosure topics, skip straight to the disclosure prompt.
+    // This happens when the agent re-runs quickstart after a previous partial run.
     let currentStep = 'not_started';
     try {
       const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
@@ -1247,42 +1280,46 @@ https://github.com/onthegonow/a2a_calling`;
     if (currentStep === 'awaiting_disclosure' && !args.flags.force) {
       console.log('\nStep 1 already complete. Server is running.\n');
       console.log('Step 2 of 4: Configure disclosure topics\n');
-      console.log(buildExtractionPrompt(availableFiles));
+      console.log(buildExtractionPrompt());
       console.log('\n  Read your workspace files, extract topics, and present to your owner for review.');
       console.log("  Then submit with: a2a quickstart --submit '<json>'\n");
       return;
     }
 
     printStepHeader('🤝  A2A Calling — First-Time Setup');
-    printWorkspaceScan(context);
 
+    // Interactive: ask for confirmation. Non-interactive: auto-accepts (Y).
     const continueSetup = await promptYesNo('Continue with setup? [Y/n] ');
     if (!continueSetup) {
       console.log('\nSetup cancelled.\n');
       return;
     }
 
+    // ── Step 1: Port selection ───────────────────────────────────────────
+    // Scan ports 80, 3001-3020 and pick the first available one.
+    // Only show the selected port — agents don't need to see every candidate.
+    // Interactive users can override with a custom port; non-interactive
+    // auto-accepts the recommendation.
     printSection('Port Configuration');
     const preferredPort = parsePort(args.flags.port || args.flags.p, null);
     const candidates = await inspectPorts(preferredPort);
     const availableCandidates = candidates.filter(c => c.available);
     const recommendedPort = availableCandidates.length ? availableCandidates[0].port : null;
 
-    summarizePortResults(candidates).forEach(line => {
-      console.log(`  ${line}`);
-    });
-
     if (!recommendedPort) {
       console.error('  Could not find a bindable port in the scan range.');
       console.error('  Re-run with --port <number> after freeing one of these ports.\n');
+      if (interactive) {
+        console.log('  Ports scanned:');
+        summarizePortResults(candidates).forEach(line => console.log(`    ${line}`));
+      }
       process.exit(1);
     }
 
-    console.log(`\n  Recommended: ${recommendedPort}`);
+    console.log(`  Selected port: ${recommendedPort}`);
     let serverPort = recommendedPort;
     const portChoice = await promptText(`Use port ${recommendedPort}? [Y/n/custom]: `, 'y');
     if (!interactive) {
-      // explicit default for non-interactive mode
       serverPort = recommendedPort;
     } else if (!['', 'y', 'Y', 'yes', 'YES', 'ye'].includes(String(portChoice).trim())) {
       if (/^(n|no|custom|c)$/i.test(String(portChoice).trim())) {
@@ -1321,6 +1358,10 @@ https://github.com/onthegonow/a2a_calling`;
       }
     }
 
+    // ── Step 2: Hostname detection ───────────────────────────────────────
+    // Look up the machine's external IP so invite URLs point to a routable
+    // address. Non-interactive: auto-uses the detected IP. Interactive: lets
+    // the user choose IP, domain, or skip.
     printSection('Hostname Configuration');
     const ipResult = await getExternalIp();
     const externalIp = ipResult.ip || null;
@@ -1367,6 +1408,12 @@ https://github.com/onthegonow/a2a_calling`;
       console.log(`  External IP lookup failed: ${ipResult.error}`);
     }
 
+    // ── Step 3: Server start ─────────────────────────────────────────────
+    // Launch the A2A Express server as a detached background process, wait
+    // for it to bind, then save the config with the server PID and port.
+    // Non-interactive: auto-starts. Interactive: asks for confirmation.
+    // Also prints a one-line networking hint (reverse proxy or firewall)
+    // and a curl command the agent can use to verify external reachability.
     printSection('Starting Server');
     console.log('  Configuration summary:');
     console.log(`    Port: ${serverPort}`);
@@ -1378,7 +1425,6 @@ https://github.com/onthegonow/a2a_calling`;
       return;
     }
 
-    // Start server
     const isAlreadyListening = await isPortListening(serverPort, '127.0.0.1', { timeoutMs: 250 });
     let serverPid = null;
     if (!isAlreadyListening.listening) {
@@ -1418,28 +1464,32 @@ https://github.com/onthegonow/a2a_calling`;
     }
     console.log('  ✅ A2A server is running');
 
-    if (serverPort !== 80 && externalIp) {
-      console.log('\n  External access required because port 80 is not in use.');
-      console.log('  Option A (recommended): Set up a reverse proxy (HTTP or HTTPS).');
-      console.log(`    Configure your web server to forward /api/a2a/* to localhost:${serverPort}.`);
-      console.log('    If you serve HTTPS on port 443, proxy from there instead.');
-      console.log('    A reverse proxy avoids firewall changes entirely.');
-      console.log(`\n  Option B: Open port ${serverPort} in your firewall (e.g. ufw allow ${serverPort}).`);
-      console.log('  Most users prefer not to modify firewall settings.\n');
-    }
     if (externalIp) {
       const verifyUrl = `http://${publicHost}/api/a2a/ping`;
-      console.log('  External ping check:\n    curl -s ' + verifyUrl);
+      if (serverPort !== 80) {
+        console.log(`\n  Note: Port ${serverPort} must be reachable externally.`);
+        console.log(`  Reverse-proxy /api/a2a/* to localhost:${serverPort}, or open the port in your firewall.`);
+      }
+      console.log(`  Verify: curl -s ${verifyUrl}`);
     }
 
-    // Save server config and advance onboarding
+    // Save server config and advance onboarding state to awaiting_disclosure.
     config.setAgent({ hostname: publicHost });
     config.setOnboarding({ step: 'awaiting_disclosure' });
 
-    // Step 2 of 4: Configure disclosure topics
+    // ── Step 4: Disclosure prompt ────────────────────────────────────────
+    // Output a full agent-readable prompt that tells the agent to:
+    //   1. Scan its own workspace for USER.md, SOUL.md, etc.
+    //   2. Extract tiered disclosure topics from those files
+    //   3. Build the required JSON structure
+    //   4. Submit it back via `a2a quickstart --submit '<json>'`
+    //
+    // IMPORTANT: We do NOT pre-scan files here. The installer runs in a
+    // subprocess and has no access to the agent's file-reading tools. The
+    // prompt lists which files to look for and the agent reads them itself.
     printSection('Disclosure Topic Extraction');
     console.log('Step 2 of 4: Configure disclosure topics\n');
-    console.log(buildExtractionPrompt(availableFiles));
+    console.log(buildExtractionPrompt());
     console.log('\n  Read your workspace files, extract topics, and present to your owner for review.');
     console.log("  Then submit with: a2a quickstart --submit '<json>'\n");
   },
