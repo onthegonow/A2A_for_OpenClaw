@@ -81,7 +81,7 @@ function enforceOnboarding(command) {
       const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
       if (cfg.onboarding?.step === 'awaiting_disclosure') {
         console.log('\nA2A setup in progress. Disclosure topics not yet submitted.\n');
-        console.log("Next: run `a2a onboard --submit '<json>'`\n");
+        console.log("Next: run `a2a quickstart --submit '<json>'` (or `a2a onboard --submit`)\n");
         process.exit(1);
       }
     } catch (e) {
@@ -208,6 +208,122 @@ async function promptYesNo(question) {
       resolve(normalized === 'y' || normalized === 'yes');
     });
   });
+}
+
+async function handleDisclosureSubmit(args, commandLabel = 'onboard') {
+  const submitRaw = args.flags.submit;
+  if (!submitRaw) return false;
+
+  const { A2AConfig } = require('../src/lib/config');
+  const {
+    validateDisclosureSubmission,
+    saveManifest,
+    MANIFEST_FILE
+  } = require('../src/lib/disclosure');
+
+  const config = new A2AConfig();
+  const submitCommand = commandLabel === 'quickstart'
+    ? 'a2a quickstart --submit'
+    : 'a2a onboard --submit';
+
+  let parsed;
+  try {
+    parsed = JSON.parse(String(submitRaw));
+  } catch (e) {
+    console.error('\nInvalid JSON in --submit flag.');
+    console.error(`  Parse error: ${e.message}\n`);
+    process.exit(1);
+  }
+
+  const result = validateDisclosureSubmission(parsed);
+  if (!result.valid) {
+    console.error('\nDisclosure submission validation failed:\n');
+    result.errors.forEach(err => console.error(`  - ${err}`));
+    console.error(`\nFix the errors above and resubmit with: ${submitCommand} '<json>'\n`);
+    process.exit(1);
+  }
+
+  saveManifest(result.manifest);
+  console.log('\nStep 3 of 4: Disclosure manifest saved.');
+  console.log(`  Manifest: ${MANIFEST_FILE}`);
+
+  // Sync tier config from manifest
+  const manifest = result.manifest;
+  function flattenTopics(sections) {
+    const out = [];
+    for (const section of sections) {
+      for (const item of section) {
+        const t = String(item && item.topic || '').trim();
+        if (t && !out.includes(t)) out.push(t);
+      }
+    }
+    return out;
+  }
+
+  try {
+    config.setTier('public', {
+      topics: flattenTopics([manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect]),
+      disclosure: 'public'
+    });
+    config.setTier('friends', {
+      topics: flattenTopics([
+        manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect,
+        manifest.topics.friends.lead_with, manifest.topics.friends.discuss_freely, manifest.topics.friends.deflect
+      ]),
+      disclosure: 'minimal'
+    });
+    config.setTier('family', {
+      topics: flattenTopics([
+        manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect,
+        manifest.topics.friends.lead_with, manifest.topics.friends.discuss_freely, manifest.topics.friends.deflect,
+        manifest.topics.family.lead_with, manifest.topics.family.discuss_freely, manifest.topics.family.deflect
+      ]),
+      disclosure: 'minimal'
+    });
+  } catch (err) {
+    console.error(`  Warning: could not sync tier config: ${err.message}`);
+  }
+
+  // If already onboarded, this is a topic update — no invite generation needed
+  if (config.isOnboarded()) {
+    console.log('\nDisclosure topics updated. Your agent will use these on the next inbound call.\n');
+    return true;
+  }
+
+  console.log('\nStep 4 of 4: Generating your first invite...\n');
+
+  const agentName = args.flags.name || config.getAgent().name || process.env.A2A_AGENT_NAME || 'my-agent';
+  const hostname = config.getAgent().hostname || process.env.A2A_HOSTNAME || 'localhost';
+  if (args.flags.name) config.setAgent({ name: agentName });
+
+  const publicTopics = flattenTopics([
+    manifest.topics.public.lead_with,
+    manifest.topics.public.discuss_freely
+  ]);
+
+  const { token } = store.create({
+    name: agentName,
+    owner: agentName,
+    permissions: 'public',
+    disclosure: 'minimal',
+    expires: 'never',
+    maxCalls: null,
+    allowedTopics: publicTopics,
+    allowedGoals: ['grow-network', 'find-collaborators', 'build-in-public'],
+    notify: 'all'
+  });
+
+  const inviteUrl = `a2a://${hostname}/${token}`;
+  console.log(`  Invite URL: ${inviteUrl}`);
+  console.log('  Share this invite to let other agents call you.\n');
+
+  config.completeOnboarding();
+  console.log('Onboarding complete.\n');
+  console.log(`  Config: ${CONFIG_PATH}`);
+  console.log(`  Disclosure: ${MANIFEST_FILE}`);
+  console.log(`  Invite: ${inviteUrl}\n`);
+
+  return true;
 }
 
 async function resolveInviteHostname() {
@@ -949,10 +1065,14 @@ https://github.com/onthegonow/a2a_calling`;
   quickstart: async (args) => {
     const { A2AConfig } = require('../src/lib/config');
     const { tryBindPort, findAvailablePort, isPortListening } = require('../src/lib/port-scanner');
-    const { buildExtractionPrompt, MANIFEST_FILE } = require('../src/lib/disclosure');
+    const { buildExtractionPrompt } = require('../src/lib/disclosure');
     const { getExternalIp } = require('../src/lib/external-ip');
 
     const config = new A2AConfig();
+
+    if (await handleDisclosureSubmit(args, 'quickstart')) {
+      return;
+    }
 
     if (args.flags.force) {
       config.resetOnboarding();
@@ -979,7 +1099,7 @@ https://github.com/onthegonow/a2a_calling`;
       console.log('Step 2 of 4: Configure disclosure topics\n');
       console.log(buildExtractionPrompt());
       console.log('\n  Read your workspace files, extract topics, and present to your owner for review.');
-      console.log("  Then submit with: a2a onboard --submit '<json>'\n");
+      console.log("  Then submit with: a2a quickstart --submit '<json>'\n");
       return;
     }
 
@@ -1141,7 +1261,7 @@ https://github.com/onthegonow/a2a_calling`;
     console.log('Step 2 of 4: Configure disclosure topics\n');
     console.log(buildExtractionPrompt());
     console.log('\n  Read your workspace files, extract topics, and present to your owner for review.');
-    console.log("  Then submit with: a2a onboard --submit '<json>'\n");
+    console.log("  Then submit with: a2a quickstart --submit '<json>'\n");
   },
 
 
@@ -1391,114 +1511,7 @@ https://github.com/onthegonow/a2a_calling`;
   },
 
   onboard: async (args) => {
-    const { A2AConfig } = require('../src/lib/config');
-    const {
-      validateDisclosureSubmission,
-      saveManifest,
-      MANIFEST_FILE
-    } = require('../src/lib/disclosure');
-    const config = new A2AConfig();
-
-    // ── Submit mode: agent sends structured JSON ──────────────
-    const submitRaw = args.flags.submit;
-    if (submitRaw) {
-      let parsed;
-      try {
-        parsed = JSON.parse(String(submitRaw));
-      } catch (e) {
-        console.error('\nInvalid JSON in --submit flag.');
-        console.error(`  Parse error: ${e.message}\n`);
-        process.exit(1);
-      }
-
-      const result = validateDisclosureSubmission(parsed);
-      if (!result.valid) {
-        console.error('\nDisclosure submission validation failed:\n');
-        result.errors.forEach(err => console.error(`  - ${err}`));
-        console.error("\nFix the errors above and resubmit with: a2a onboard --submit '<json>'\n");
-        process.exit(1);
-      }
-
-      saveManifest(result.manifest);
-      console.log('\nStep 3 of 4: Disclosure manifest saved.');
-      console.log(`  Manifest: ${MANIFEST_FILE}`);
-
-      // Sync tier config from manifest
-      const manifest = result.manifest;
-      function flattenTopics(sections) {
-        const out = [];
-        for (const section of sections) {
-          for (const item of section) {
-            const t = String(item && item.topic || '').trim();
-            if (t && !out.includes(t)) out.push(t);
-          }
-        }
-        return out;
-      }
-
-      try {
-        config.setTier('public', {
-          topics: flattenTopics([manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect]),
-          disclosure: 'public'
-        });
-        config.setTier('friends', {
-          topics: flattenTopics([
-            manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect,
-            manifest.topics.friends.lead_with, manifest.topics.friends.discuss_freely, manifest.topics.friends.deflect
-          ]),
-          disclosure: 'minimal'
-        });
-        config.setTier('family', {
-          topics: flattenTopics([
-            manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect,
-            manifest.topics.friends.lead_with, manifest.topics.friends.discuss_freely, manifest.topics.friends.deflect,
-            manifest.topics.family.lead_with, manifest.topics.family.discuss_freely, manifest.topics.family.deflect
-          ]),
-          disclosure: 'minimal'
-        });
-      } catch (err) {
-        console.error(`  Warning: could not sync tier config: ${err.message}`);
-      }
-
-      // If already onboarded, this is a topic update — no invite generation needed
-      if (config.isOnboarded()) {
-        console.log('\nDisclosure topics updated. Your agent will use these on the next inbound call.\n');
-        return;
-      }
-
-      // ── Step 4 of 4: Generate first invite and complete ─────
-      console.log('\nStep 4 of 4: Generating your first invite...\n');
-
-      const agentName = args.flags.name || config.getAgent().name || process.env.A2A_AGENT_NAME || 'my-agent';
-      const hostname = config.getAgent().hostname || process.env.A2A_HOSTNAME || 'localhost';
-      if (args.flags.name) config.setAgent({ name: agentName });
-
-      const publicTopics = flattenTopics([
-        manifest.topics.public.lead_with,
-        manifest.topics.public.discuss_freely
-      ]);
-
-      const { token } = store.create({
-        name: agentName,
-        owner: agentName,
-        permissions: 'public',
-        disclosure: 'minimal',
-        expires: 'never',
-        maxCalls: null,
-        allowedTopics: publicTopics,
-        allowedGoals: ['grow-network', 'find-collaborators', 'build-in-public'],
-        notify: 'all'
-      });
-
-      const inviteUrl = `a2a://${hostname}/${token}`;
-      console.log(`  Invite URL: ${inviteUrl}`);
-      console.log('  Share this invite to let other agents call you.\n');
-
-      config.completeOnboarding();
-      console.log('Onboarding complete.\n');
-      console.log(`  Config: ${CONFIG_PATH}`);
-      console.log(`  Disclosure: ${MANIFEST_FILE}`);
-      console.log(`  Invite: ${inviteUrl}\n`);
+    if (await handleDisclosureSubmit(args, 'onboard')) {
       return;
     }
 
@@ -1571,6 +1584,7 @@ Server:
   
   quickstart          Set up A2A server and start onboarding
     --port, -p        Preferred server port (default: 80, fallback: 3001+)
+    --submit '<json>' Submit disclosure JSON (Step 3 of onboarding)
     --force           Reset onboarding and re-run from scratch
 
   onboard             Submit disclosure topics or resume quickstart

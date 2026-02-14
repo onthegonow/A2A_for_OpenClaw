@@ -256,6 +256,48 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
+  test('quickstart --submit validates, saves manifest, and completes onboarding', () => {
+    tmp = helpers.tmpConfigDir('quickstart-submit-complete');
+    const fs = require('fs');
+    const path = require('path');
+    const { execFileSync } = require('child_process');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    // Pre-set the config to awaiting_disclosure (simulating quickstart Step 1 already ran)
+    const configPath = path.join(tmp.dir, 'a2a-config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      onboarding: { version: 2, step: 'awaiting_disclosure' },
+      agent: { hostname: 'localhost:3001', name: 'test-agent' },
+      tiers: {}
+    }));
+
+    const submission = JSON.stringify({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'Automation', detail: 'Practical system setup' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: ['API keys'],
+      personality_notes: 'Direct and concise'
+    });
+
+    const out = execFileSync(process.execPath, [cliPath, 'quickstart', '--submit', submission], {
+      env,
+      encoding: 'utf8'
+    });
+
+    assert.ok(out.includes('Step 3 of 4'), 'Should show step 3 in quickstart submit');
+    assert.ok(out.includes('Onboarding complete'), 'Should say onboarding complete');
+
+    tmp.cleanup();
+  });
+
   test('Golda profile exercises all tier levels correctly', () => {
     tmp = helpers.tmpConfigDir('onboard-tiers');
     delete require.cache[require.resolve('../../src/lib/disclosure')];
@@ -409,7 +451,7 @@ module.exports = function (test, assert, helpers) {
     assert.includes(result, 'Step 2 of 4');
     assert.includes(result, 'lead_with');
     assert.includes(result, 'discuss_freely');
-    assert.includes(result, "a2a onboard --submit");
+    assert.includes(result, 'a2a quickstart --submit');
 
     tmp.cleanup();
   });
