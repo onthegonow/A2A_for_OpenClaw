@@ -200,13 +200,156 @@ function parseArgs(argv) {
 }
 
 async function promptYesNo(question) {
+  const defaultValue = question.includes('[Y/n]') || question.includes('[y/N]') || question.includes('[Y/N]')
+    ? question.includes('[Y/n]') || question.includes('[y/n]')
+      ? true
+      : false
+    : true;
+
+  if (!isInteractiveShell()) {
+    return defaultValue;
+  }
+
   return await new Promise(resolve => {
     const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer) => {
       rl.close();
       const normalized = String(answer || '').trim().toLowerCase();
+      if (!normalized) return resolve(defaultValue);
       resolve(normalized === 'y' || normalized === 'yes');
     });
+  });
+}
+
+function isInteractiveShell() {
+  return Boolean(process.stdin && process.stdout && process.stdin.isTTY && process.stdout.isTTY);
+}
+
+async function promptText(question, defaultValue = '') {
+  if (!isInteractiveShell()) {
+    return defaultValue;
+  }
+  return await new Promise(resolve => {
+    const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      const cleaned = String(answer || '').trim();
+      resolve(cleaned || defaultValue);
+    });
+  });
+}
+
+function parsePort(raw, fallback = null) {
+  const parsed = Number.parseInt(String(raw || '').trim(), 10);
+  if (Number.isFinite(parsed) && parsed > 0 && parsed <= 65535) {
+    return parsed;
+  }
+  return fallback;
+}
+
+function printStepHeader(label) {
+  const clean = String(label || '').trim();
+  const innerWidth = Math.max(62, clean.length + 12);
+  const padding = Math.max(0, innerWidth - clean.length);
+  const left = Math.floor(padding / 2);
+  const right = Math.max(0, padding - left);
+  console.log('\n' + '╔' + '═'.repeat(innerWidth) + '╗');
+  console.log(`║${' '.repeat(left)}${clean}${' '.repeat(right)}║`);
+  console.log('╚' + '═'.repeat(innerWidth) + '╝');
+}
+
+function printSection(title) {
+  console.log('\n━━━ ' + title + ' ━━━');
+}
+
+function readWorkspaceContext(baseDir = process.cwd()) {
+  const base = baseDir || process.cwd();
+  const workspaceFiles = {
+    USER: { filename: 'USER.md' },
+    SOUL: { filename: 'SOUL.md' },
+    HEARTBEAT: { filename: 'HEARTBEAT.md' },
+    SKILL: { filename: 'SKILL.md' },
+    CLAUDE: { filename: 'CLAUDE.md' }
+  };
+
+  const found = {};
+  for (const key of Object.keys(workspaceFiles)) {
+    found[key] = fs.existsSync(path.join(base, workspaceFiles[key].filename));
+  }
+
+  const memoryDir = path.join(base, 'memory');
+  let memoryCount = 0;
+  if (fs.existsSync(memoryDir)) {
+    try {
+      memoryCount = fs.readdirSync(memoryDir).filter(item => item.endsWith('.md')).length;
+    } catch (err) {
+      memoryCount = 0;
+    }
+  }
+  found.MEMORY = memoryCount;
+
+  return {
+    workspace: base,
+    found,
+    memoryCount
+  };
+}
+
+function printWorkspaceScan(context) {
+  console.log('Scanning workspace for context...');
+  console.log(`  ${context.found.USER ? '✅' : '⚠️ '} ${context.found.USER ? 'Found USER.md' : 'No USER.md'}${context.found.USER ? ' — identity hints found' : ''}`);
+  console.log(`  ${context.found.SOUL ? '✅' : '⚠️ '} ${context.found.SOUL ? 'Found SOUL.md' : 'No SOUL.md'}${context.found.SOUL ? ' — personality notes available' : ''}`);
+  console.log(`  ${context.found.HEARTBEAT ? '✅' : '⚠️ '} ${context.found.HEARTBEAT ? 'Found HEARTBEAT.md' : 'No HEARTBEAT.md (skipped)'}`);
+  console.log(`  ${context.found.SKILL ? '✅' : '⚠️ '} ${context.found.SKILL ? 'Found SKILL.md' : 'No SKILL.md (skipped)'}`
+  );
+  console.log(`  ${context.found.CLAUDE ? '✅' : '⚠️ '} ${context.found.CLAUDE ? 'Found CLAUDE.md' : 'No CLAUDE.md (skipped)'}`);
+  if (context.memoryCount > 0) {
+    console.log(`  ✅ Found ${context.memoryCount} memory file(s)`);
+  } else {
+    console.log('  ⚠️  No memory/*.md files');
+  }
+}
+
+function getDisclosurePromptFiles(context) {
+  return {
+    'USER.md': context.found.USER,
+    'SOUL.md': context.found.SOUL,
+    'HEARTBEAT.md': context.found.HEARTBEAT,
+    'SKILL.md': context.found.SKILL,
+    'CLAUDE.md': context.found.CLAUDE,
+    'memory/*.md': context.memoryCount > 0
+  };
+}
+
+async function inspectPorts(preferredPort = null) {
+  const candidates = [];
+  if (preferredPort) {
+    candidates.push(preferredPort);
+  }
+  candidates.push(80);
+  for (let p = 3001; p < 3021; p += 1) {
+    if (!candidates.includes(p)) candidates.push(p);
+  }
+
+  const { tryBindPort } = require('../src/lib/port-scanner');
+  const results = [];
+  for (const port of candidates) {
+    const r = await tryBindPort(port);
+    results.push({
+      port,
+      available: Boolean(r.ok),
+      blocked: !r.ok && r.code === 'EACCES',
+      code: r.code || null
+    });
+  }
+  return results;
+}
+
+function summarizePortResults(portResults) {
+  return portResults.map(item => {
+    if (item.available) return `Port ${item.port}: available ✓`;
+    if (item.blocked) return `Port ${item.port}: requires elevated privileges`;
+    return `Port ${item.port}: in use`;
   });
 }
 
@@ -1064,11 +1207,12 @@ https://github.com/onthegonow/a2a_calling`;
 
   quickstart: async (args) => {
     const { A2AConfig } = require('../src/lib/config');
-    const { tryBindPort, findAvailablePort, isPortListening } = require('../src/lib/port-scanner');
+    const { isPortListening } = require('../src/lib/port-scanner');
     const { buildExtractionPrompt } = require('../src/lib/disclosure');
     const { getExternalIp } = require('../src/lib/external-ip');
 
     const config = new A2AConfig();
+    const interactive = isInteractiveShell();
 
     if (await handleDisclosureSubmit(args, 'quickstart')) {
       return;
@@ -1084,6 +1228,9 @@ https://github.com/onthegonow/a2a_calling`;
       return;
     }
 
+    const context = readWorkspaceContext(process.env.A2A_WORKSPACE || process.cwd());
+    const availableFiles = getDisclosurePromptFiles(context);
+
     // If server is already running and awaiting disclosure, skip to Step 2
     let currentStep = 'not_started';
     try {
@@ -1097,100 +1244,150 @@ https://github.com/onthegonow/a2a_calling`;
     if (currentStep === 'awaiting_disclosure' && !args.flags.force) {
       console.log('\nStep 1 already complete. Server is running.\n');
       console.log('Step 2 of 4: Configure disclosure topics\n');
-      console.log(buildExtractionPrompt());
+      console.log(buildExtractionPrompt(availableFiles));
       console.log('\n  Read your workspace files, extract topics, and present to your owner for review.');
       console.log("  Then submit with: a2a quickstart --submit '<json>'\n");
       return;
     }
 
-    function parsePort(raw, fallback) {
-      const parsed = Number.parseInt(String(raw || '').trim(), 10);
-      if (Number.isFinite(parsed) && parsed > 0 && parsed <= 65535) {
-        return parsed;
-      }
-      return fallback;
+    printStepHeader('🤝  A2A Calling — First-Time Setup');
+    printWorkspaceScan(context);
+
+    const continueSetup = await promptYesNo('Continue with setup? [Y/n] ');
+    if (!continueSetup) {
+      console.log('\nSetup cancelled.\n');
+      return;
     }
 
-    // ── Step 1 of 4: Setting up A2A server ──────────────────
-    console.log('\nStep 1 of 4: Setting up A2A server\n');
-
+    printSection('Port Configuration');
     const preferredPort = parsePort(args.flags.port || args.flags.p, null);
+    const candidates = await inspectPorts(preferredPort);
+    const availableCandidates = candidates.filter(c => c.available);
+    const recommendedPort = availableCandidates.length ? availableCandidates[0].port : null;
 
-    // If user specified a port, try that first
-    let serverPort;
-    let usingAlternatePort = false;
+    summarizePortResults(candidates).forEach(line => {
+      console.log(`  ${line}`);
+    });
 
-    if (preferredPort) {
-      console.log(`  1a. Checking preferred port ${preferredPort}...`);
-      const preferredResult = await tryBindPort(preferredPort);
-      if (preferredResult.ok) {
-        console.log(`  Port ${preferredPort} available.`);
-        serverPort = preferredPort;
-        usingAlternatePort = preferredPort !== 80;
-      } else if (preferredResult.code === 'EACCES') {
-        console.log(`  Port ${preferredPort} requires elevated privileges.`);
-        console.log('  Rerun with: sudo npm install -g a2acalling\n');
-        process.exit(1);
-      } else {
-        console.log(`  Port ${preferredPort} is in use. Scanning for alternatives...`);
-        const candidates = [];
-        for (let p = 3001; p < 3101; p++) candidates.push(p);
-        serverPort = await findAvailablePort(candidates);
-        if (!serverPort) {
-          console.log('  Could not find a bindable port. Rerun with elevated privileges:');
-          console.log('    sudo npm install -g a2acalling');
-          process.exit(1);
+    if (!recommendedPort) {
+      console.error('  Could not find a bindable port in the scan range.');
+      console.error('  Re-run with --port <number> after freeing one of these ports.\n');
+      process.exit(1);
+    }
+
+    console.log(`\n  Recommended: ${recommendedPort}`);
+    let serverPort = recommendedPort;
+    const portChoice = await promptText(`Use port ${recommendedPort}? [Y/n/custom]: `, 'y');
+    if (!interactive) {
+      // explicit default for non-interactive mode
+      serverPort = recommendedPort;
+    } else if (!['', 'y', 'Y', 'yes', 'YES', 'ye'].includes(String(portChoice).trim())) {
+      if (/^(n|no|custom|c)$/i.test(String(portChoice).trim())) {
+        let customPort = null;
+        while (customPort === null) {
+          const raw = await promptText('Enter a custom port number: ', String(recommendedPort));
+          const parsed = parsePort(raw, null);
+          if (!parsed) {
+            console.log('  Invalid port. Enter a value between 1 and 65535.');
+            continue;
+          }
+          const checked = await (async () => {
+            const scan = await inspectPorts(parsed);
+            return scan[0];
+          })();
+          if (!checked.available) {
+            console.log(`  Port ${parsed} is unavailable (${checked.code || 'in use'}).`);
+            continue;
+          }
+          customPort = parsed;
         }
-        console.log(`  Port ${serverPort} available.`);
-        usingAlternatePort = true;
-      }
-    } else {
-      // Default: check port 80 first, then scan
-      console.log('  1a. Checking port 80...');
-      const port80Result = await tryBindPort(80);
-
-      if (port80Result.ok) {
-        console.log('  Port 80 available.');
-        serverPort = 80;
-      } else if (port80Result.code === 'EACCES') {
-        console.log('  Port 80 is available but requires elevated privileges.');
-        console.log('  A2A needs to bind to a port to function. Rerun with:');
-        console.log('    sudo npm install -g a2acalling\n');
-        console.log('  Onboarding cannot continue without a bound port.');
-        process.exit(1);
+        serverPort = customPort;
       } else {
-        console.log('  Port 80 is in use by another process.');
-        console.log('  1b. Scanning for available port...');
-
-        const candidates = [];
-        for (let p = 3001; p < 3101; p++) candidates.push(p);
-        serverPort = await findAvailablePort(candidates);
-
-        if (!serverPort) {
-          console.log('  Could not find a bindable port. Rerun with elevated privileges:');
-          console.log('    sudo npm install -g a2acalling');
-          process.exit(1);
+        const parsed = parsePort(portChoice, null);
+        if (parsed) {
+          const checked = await (async () => {
+            const scan = await inspectPorts(parsed);
+            return scan[0];
+          })();
+          if (!checked.available) {
+            console.log(`  Port ${parsed} is unavailable (${checked.code || 'in use'}).`);
+          } else {
+            serverPort = parsed;
+          }
         }
-        console.log(`  Port ${serverPort} available.`);
-        usingAlternatePort = true;
       }
+    }
+
+    printSection('Hostname Configuration');
+    const ipResult = await getExternalIp();
+    const externalIp = ipResult.ip || null;
+    let publicHost = `localhost:${serverPort}`;
+
+    if (externalIp) {
+      const detectedHost = serverPort === 80 ? externalIp : `${externalIp}:${serverPort}`;
+      console.log(`  Detected external IP: ${detectedHost}`);
+      if (interactive) {
+        const hostChoiceRaw = await promptText(
+          'How should other agents reach you?\n'
+          + '  1. Use IP directly\n'
+          + '  2. Enter a domain name\n'
+          + '  3. Skip (configure later)\n'
+          + 'Choice [1/2/3]: ',
+          '1'
+        );
+        const hostChoice = String(hostChoiceRaw || '').trim();
+        if (hostChoice === '2') {
+          const manualHost = await promptText('Enter your public hostname: ', '');
+          if (manualHost) publicHost = String(manualHost).trim();
+        } else if (hostChoice === '3') {
+          publicHost = process.env.A2A_HOSTNAME || `localhost:${serverPort}`;
+        } else {
+          publicHost = detectedHost;
+        }
+      } else {
+        publicHost = detectedHost;
+      }
+    } else if (interactive) {
+      const hostChoiceRaw = await promptText(
+        'External IP unavailable.\nHow should other agents reach you?\n'
+        + '  1. Enter a domain name\n'
+        + '  2. Skip (use localhost)\n'
+        + 'Choice [1/2]: ',
+        '2'
+      );
+      const hostChoice = String(hostChoiceRaw || '').trim();
+      if (hostChoice === '1') {
+        const manualHost = await promptText('Enter your public hostname: ', '');
+        if (manualHost) publicHost = String(manualHost).trim();
+      }
+    } else if (ipResult.error) {
+      console.log(`  External IP lookup failed: ${ipResult.error}`);
+    }
+
+    printSection('Starting Server');
+    console.log('  Configuration summary:');
+    console.log(`    Port: ${serverPort}`);
+    console.log(`    Public host: ${publicHost}`);
+    const startServer = await promptYesNo('Start the A2A server now? [Y/n] ');
+    if (!startServer) {
+      console.log('\nServer not started. Run with:\n  a2a server --port <port> --hostname <host>\n');
+      return;
     }
 
     // Start server
-    console.log(`  Starting A2A server on port ${serverPort}...`);
-
-    async function startServer(port) {
-      const listening = await isPortListening(port, '127.0.0.1', { timeoutMs: 250 });
-      if (listening.listening) return { started: false, existing: true };
+    const isAlreadyListening = await isPortListening(serverPort, '127.0.0.1', { timeoutMs: 250 });
+    let serverPid = null;
+    if (!isAlreadyListening.listening) {
       const serverScript = path.join(__dirname, '../src/server.js');
       const child = spawn(process.execPath, [serverScript], {
-        env: { ...process.env, PORT: String(port) },
+        env: { ...process.env, PORT: String(serverPort) },
         detached: true,
         stdio: 'ignore'
       });
+      serverPid = child.pid;
       child.unref();
-      await new Promise(r => setTimeout(r, 300));
-      return { started: true, pid: child.pid };
+    } else {
+      console.log('  Existing server detected on this port.');
     }
 
     async function waitForServer(port) {
@@ -1202,64 +1399,43 @@ https://github.com/onthegonow/a2a_calling`;
       return false;
     }
 
-    const serverResult = await startServer(serverPort);
-    if (serverResult.existing) {
-      console.log('  Existing server detected on this port.');
-    }
     const serverUp = await waitForServer(serverPort);
     if (!serverUp) {
       console.log('  Server failed to start. Check logs and retry:');
       console.log(`    PORT=${serverPort} node ${path.join(__dirname, '../src/server.js')}`);
       process.exit(1);
     }
-    console.log('  Server running.\n');
 
-    // Store server PID for cleanup
-    if (serverResult.pid) {
-      config.setOnboarding({ server_pid: serverResult.pid, server_port: serverPort });
+    if (serverPid) {
+      console.log('  Server started.');
+      config.setOnboarding({ server_pid: serverPid, server_port: serverPort });
+    } else {
+      console.log('  Using existing server.');
     }
+    console.log('  ✅ A2A server is running');
 
-    // Detect external IP
-    const ipResult = await getExternalIp();
-    if (!ipResult.ip) {
-      console.log('  Warning: Could not detect external IP address.');
-      console.log('  Set your hostname via environment variable and re-run:');
-      console.log(`    A2A_HOSTNAME=YOUR_IP${serverPort !== 80 ? ':' + serverPort : ''} a2a quickstart --force\n`);
-    }
-    const externalIp = ipResult.ip || null;
-    const publicHost = externalIp
-      ? (serverPort === 80 ? externalIp : `${externalIp}:${serverPort}`)
-      : `localhost:${serverPort}`;
-
-    // Save server config
-    config.setAgent({ hostname: publicHost });
-
-    if (usingAlternatePort) {
-      console.log('  External access required.');
-      console.log('  Something is already bound to port 80 on this machine.');
-      console.log('  Two options to make your A2A server reachable:\n');
+    if (serverPort !== 80 && externalIp) {
+      console.log('\n  External access required because port 80 is not in use.');
       console.log('  Option A (recommended): Set up a reverse proxy (HTTP or HTTPS).');
       console.log(`    Configure your web server to forward /api/a2a/* to localhost:${serverPort}.`);
       console.log('    If you serve HTTPS on port 443, proxy from there instead.');
-      console.log('    A reverse proxy avoids firewall changes entirely.\n');
-      console.log(`  Option B: Open port ${serverPort} in your firewall.`);
-      console.log('    This requires the owner to manually allow inbound traffic on');
-      console.log(`    port ${serverPort} (e.g. ufw allow ${serverPort}, or cloud provider security group).`);
-      console.log('    Most users prefer not to modify firewall settings.\n');
+      console.log('    A reverse proxy avoids firewall changes entirely.');
+      console.log(`\n  Option B: Open port ${serverPort} in your firewall (e.g. ufw allow ${serverPort}).`);
+      console.log('  Most users prefer not to modify firewall settings.\n');
     }
-
     if (externalIp) {
       const verifyUrl = `http://${publicHost}/api/a2a/ping`;
-      console.log('  Verify externally:');
-      console.log(`    curl -s ${verifyUrl}`);
-      console.log('  Or ask your owner to check: https://canyouseeme.org/\n');
+      console.log('  External ping check:\n    curl -s ' + verifyUrl);
     }
 
+    // Save server config and advance onboarding
+    config.setAgent({ hostname: publicHost });
     config.setOnboarding({ step: 'awaiting_disclosure' });
 
-    // ── Step 2 of 4: Configure disclosure topics ────────────
+    // Step 2 of 4: Configure disclosure topics
+    printSection('Disclosure Topic Extraction');
     console.log('Step 2 of 4: Configure disclosure topics\n');
-    console.log(buildExtractionPrompt());
+    console.log(buildExtractionPrompt(availableFiles));
     console.log('\n  Read your workspace files, extract topics, and present to your owner for review.');
     console.log("  Then submit with: a2a quickstart --submit '<json>'\n");
   },

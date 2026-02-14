@@ -6,6 +6,16 @@ if (process.env.DOCKER) process.exit(0);
 if (process.env.npm_config_global !== 'true') process.exit(0);
 
 const { spawnSync } = require('child_process');
+const isInteractive = Boolean(process.stdout && process.stderr && process.stdin &&
+  process.stdout.isTTY && process.stderr.isTTY && process.stdin.isTTY);
+
+function warnSuppressedOutput() {
+  if (!isInteractive) {
+    console.warn('\n⚠️  Output may be suppressed. Run \'a2a quickstart\' manually if you don\'t see prompts.');
+  }
+}
+
+warnSuppressedOutput();
 
 // Launch quickstart directly — stdio: 'inherit' forces foreground output
 // even when npm v10+ suppresses postinstall stdout by default.
