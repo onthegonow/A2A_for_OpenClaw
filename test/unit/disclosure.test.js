@@ -398,4 +398,110 @@ module.exports = function (test, assert, helpers) {
     assert.includes(prompt, 'code');
     tmp.cleanup();
   });
+
+  // ── Adversarial Input Hardening Tests ──────────────────────────
+
+  test('validateDisclosureSubmission strips extra properties from topic items', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'AI development', detail: 'Building AI tools', extra: 'should be stripped' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.ok(result.valid);
+    assert.equal(result.manifest.topics.public.lead_with[0].extra, undefined);
+    assert.equal(Object.keys(result.manifest.topics.public.lead_with[0]).length, 2);
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects extra tiers', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: { lead_with: [], discuss_freely: [], deflect: [] },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] },
+        admin: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('admin')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects empty topic strings', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [{ topic: '', detail: 'Empty topic' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('empty')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission enforces array size limits', () => {
+    const disc = freshDisclosure();
+    const items = Array.from({ length: 25 }, (_, i) => ({ topic: `Topic ${i}`, detail: `Detail ${i}` }));
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: items,
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('max')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission allows proper nouns in topics', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [
+            { topic: 'iPhone app development', detail: 'Building iOS apps' },
+            { topic: 'LinkedIn networking', detail: 'Professional connections via LinkedIn' }
+          ],
+          discuss_freely: [
+            { topic: 'WordPress consulting', detail: 'WordPress site building' },
+            { topic: 'YouTube content creation', detail: 'Creating YouTube videos' }
+          ],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.ok(result.valid, 'Proper nouns should not be rejected as technical content');
+    tmp.cleanup();
+  });
 };

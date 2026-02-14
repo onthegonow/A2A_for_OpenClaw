@@ -151,14 +151,14 @@ function generateDefaultManifest() {
 
 /**
  * Check if a string contains technical content that shouldn't appear in
- * disclosure topics (code snippets, URLs, markdown formatting, camelCase).
+ * disclosure topics (code snippets, URLs, markdown formatting, camelCase identifiers).
  */
 function isTechnicalContent(line) {
   return /`/.test(line) ||
     /https?:\/\//.test(line) ||
     /\*\*:/.test(line) ||
     /:\*\*/.test(line) ||
-    /[a-z][A-Z]/.test(line);
+    /\b[a-z]{3,}[A-Z][a-z]{3,}/.test(line);
 }
 
 /**
@@ -189,29 +189,43 @@ function validateDisclosureSubmission(data) {
     return { valid: false, manifest: null, errors };
   }
 
+  // Reject extra tiers beyond the known hierarchy
+  const extraTiers = Object.keys(data.topics).filter(t => !TIER_HIERARCHY.includes(t));
+  if (extraTiers.length > 0) {
+    errors.push(`Unknown tiers: ${extraTiers.join(', ')} — only public, friends, family are allowed`);
+  }
+
   // Validate each tier's structure
   const requiredLists = ['lead_with', 'discuss_freely', 'deflect'];
+  const LIST_LIMITS = { lead_with: 10, discuss_freely: 20, deflect: 10 };
   for (const tier of TIER_HIERARCHY) {
     const tierData = data.topics[tier];
-    for (const listName of requiredLists) {
-      if (!Array.isArray(tierData[listName])) {
-        errors.push(`topics.${tier}.${listName} must be an array`);
+    for (const cat of requiredLists) {
+      if (!Array.isArray(tierData[cat])) {
+        errors.push(`topics.${tier}.${cat} must be an array`);
         continue;
       }
-      for (let i = 0; i < tierData[listName].length; i++) {
-        const item = tierData[listName][i];
+      if (tierData[cat].length > LIST_LIMITS[cat]) {
+        errors.push(`topics.${tier}.${cat} has ${tierData[cat].length} items — max ${LIST_LIMITS[cat]}`);
+      }
+      for (let i = 0; i < tierData[cat].length; i++) {
+        const item = tierData[cat][i];
         if (!item || typeof item !== 'object' || typeof item.topic !== 'string' || typeof item.detail !== 'string') {
-          errors.push(`topics.${tier}.${listName}[${i}]: each topic item must have "topic" (string) and "detail" (string)`);
+          errors.push(`topics.${tier}.${cat}[${i}]: each topic item must have "topic" (string) and "detail" (string)`);
+          continue;
+        }
+        if (item.topic.trim().length === 0) {
+          errors.push(`topics.${tier}.${cat}[${i}].topic must not be empty`);
           continue;
         }
         if (item.topic.length > 160) {
-          errors.push(`topics.${tier}.${listName}[${i}]: topic exceeds 160 character limit (got ${item.topic.length})`);
+          errors.push(`topics.${tier}.${cat}[${i}]: topic exceeds 160 character limit (got ${item.topic.length})`);
         }
         if (item.detail.length > 500) {
-          errors.push(`topics.${tier}.${listName}[${i}]: detail exceeds 500 character limit (got ${item.detail.length})`);
+          errors.push(`topics.${tier}.${cat}[${i}]: detail exceeds 500 character limit (got ${item.detail.length})`);
         }
-        if (isTechnicalContent(item.topic)) {
-          errors.push(`topics.${tier}.${listName}[${i}]: contains technical content (code, URLs, or markdown formatting) — use plain language`);
+        if (isTechnicalContent(item.topic) || isTechnicalContent(item.detail)) {
+          errors.push(`topics.${tier}.${cat}[${i}]: contains technical content (code, URLs, or markdown formatting) — use plain language`);
         }
       }
     }
@@ -222,21 +236,42 @@ function validateDisclosureSubmission(data) {
     if (!Array.isArray(data.never_disclose)) {
       errors.push('"never_disclose" must be an array of strings');
     } else {
+      if (data.never_disclose.length > 20) {
+        errors.push('never_disclose has too many items — max 20');
+      }
       for (let i = 0; i < data.never_disclose.length; i++) {
         if (typeof data.never_disclose[i] !== 'string') {
           errors.push(`never_disclose[${i}] must be a string`);
+        } else if (data.never_disclose[i].length > 200) {
+          errors.push(`never_disclose[${i}] exceeds 200 chars`);
         }
       }
     }
   }
 
   // Validate personality_notes (optional)
-  if (data.personality_notes !== undefined && typeof data.personality_notes !== 'string') {
-    errors.push('"personality_notes" must be a string');
+  if (data.personality_notes !== undefined) {
+    if (typeof data.personality_notes !== 'string') {
+      errors.push('"personality_notes" must be a string');
+    } else if (data.personality_notes.length > 500) {
+      errors.push('"personality_notes" exceeds 500 chars');
+    }
   }
 
   if (errors.length > 0) {
     return { valid: false, manifest: null, errors };
+  }
+
+  // Rebuild topics from only validated keys to prevent extra properties passing through
+  const cleanTopics = {};
+  for (const tier of TIER_HIERARCHY) {
+    cleanTopics[tier] = {};
+    for (const cat of ['lead_with', 'discuss_freely', 'deflect']) {
+      cleanTopics[tier][cat] = (data.topics[tier][cat] || []).map(item => ({
+        topic: item.topic,
+        detail: item.detail
+      }));
+    }
   }
 
   // Build valid manifest
@@ -245,7 +280,7 @@ function validateDisclosureSubmission(data) {
     version: 1,
     generated_at: now,
     updated_at: now,
-    topics: data.topics,
+    topics: cleanTopics,
     never_disclose: data.never_disclose || ['API keys', 'Other users\' data', 'Financial figures'],
     personality_notes: data.personality_notes || ''
   };
@@ -307,7 +342,7 @@ function buildExtractionPrompt(availableFiles = {}) {
     .map(([name]) => `  - ${name}`)
     .join('\n') || '  (no workspace files detected)';
 
-  const jsonBlock = '```json\n{\n  "topics": {\n    "public": {\n      "lead_with": [\n        { "topic": "Short label (max 60 chars)", "detail": "Longer description of the topic" }\n      ],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "friends": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "family": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    }\n  },\n  "never_disclose": ["API keys", "Credentials", "Financial figures"],\n  "personality_notes": "Brief description of communication style"\n}\n```';
+  const jsonBlock = '```json\n{\n  "topics": {\n    "public": {\n      "lead_with": [\n        { "topic": "Short label (max 160 chars)", "detail": "Longer description of the topic" }\n      ],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "friends": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "family": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    }\n  },\n  "never_disclose": ["API keys", "Credentials", "Financial figures"],\n  "personality_notes": "Brief description of communication style"\n}\n```';
 
   return `## A2A Disclosure Extraction
 
