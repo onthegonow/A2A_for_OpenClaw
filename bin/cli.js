@@ -1109,13 +1109,15 @@ https://github.com/onthegonow/a2a_calling`;
 	      contextFiles = disc.readContextFiles(workspaceDir);
 	      const forceManifest = Boolean(args.flags.force || args.flags['regen-manifest'] || args.flags.regenManifest);
 	      if (forceManifest) {
-	        const generated = disc.generateDefaultManifest(contextFiles);
+	        // Force-regen uses minimal starter; agent-driven extraction is the
+	        // proper way to populate topics (via `a2a onboard --submit`).
+	        const generated = disc.generateDefaultManifest();
 	        disc.saveManifest(generated);
 	        manifest = generated;
 	      } else {
 	        manifest = disc.loadManifest();
 	        if (!manifest || Object.keys(manifest).length === 0) {
-	          const generated = disc.generateDefaultManifest(contextFiles);
+	          const generated = disc.generateDefaultManifest();
 	          disc.saveManifest(generated);
 	          manifest = generated;
 	        }
