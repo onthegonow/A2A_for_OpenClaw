@@ -1,19 +1,14 @@
 /**
- * Onboarding Integration Test — Golda Deluxe
+ * Onboarding Integration Tests
  *
- * Simulates the complete onboarding flow for a new test agent:
+ * Tests the full data architecture and CLI onboarding flow:
  *
- *   1. Initialize config and mark onboarding started
- *   2. Set agent identity
- *   3. Create disclosure manifest with tiered interests
- *   4. Create access token with permissions
- *   5. Verify the full prompt can be built from the profile
- *   6. Register as a remote contact
- *   7. Verify end-to-end data integrity
- *   8. Complete onboarding
- *
- * This test validates that every layer of the data architecture
- * works together: config → disclosure → tokens → prompts.
+ *   - Golda Deluxe end-to-end: config → disclosure → tokens → prompts
+ *   - Invite URL format validation
+ *   - Onboarding state machine (not_started → awaiting_disclosure → complete)
+ *   - CLI: onboard --submit (validation, manifest save, tier sync, invite)
+ *   - CLI: quickstart resumes from awaiting_disclosure state
+ *   - CLI: enforceOnboarding blocks commands appropriately per state
  */
 
 module.exports = function (test, assert, helpers) {
@@ -214,103 +209,51 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('quickstart completes onboarding with validated auto-tier configuration', async () => {
-    tmp = helpers.tmpConfigDir('onboard-quickstart');
+  test('onboard --submit validates, saves manifest, and completes onboarding', async () => {
+    tmp = helpers.tmpConfigDir('onboard-submit-complete');
     const fs = require('fs');
     const path = require('path');
-    const http = require('http');
     const { execFileSync } = require('child_process');
 
-    const workspaceDir = path.join(tmp.dir, 'ws');
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.writeFileSync(path.join(workspaceDir, 'USER.md'), '## Goals\n- Build cool tools\n');
-
     const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
-    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir, A2A_WORKSPACE: workspaceDir };
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
 
-    // Start a minimal local server that responds to /api/a2a/ping for step 5.
-    const server = http.createServer((req, res) => {
-      if (req.method === 'GET' && req.url === '/api/a2a/ping') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ pong: true }));
-        return;
-      }
-      res.statusCode = 404;
-      res.end();
-    });
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const backendPort = String(server.address().port);
+    // Pre-set the config to awaiting_disclosure (simulating quickstart already ran)
+    const configPath = path.join(tmp.dir, 'a2a-config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      onboarding: { version: 2, step: 'awaiting_disclosure' },
+      agent: { hostname: 'localhost:3001', name: 'test-agent' },
+      tiers: {}
+    }));
 
-    try {
-      execFileSync(process.execPath, [cliPath, 'quickstart', '--port', backendPort], {
-        env,
-        stdio: 'ignore'
-      });
-
-      delete require.cache[require.resolve('../../src/lib/config')];
-      const { A2AConfig: A2AConfig2 } = require('../../src/lib/config');
-      const config2 = new A2AConfig2();
-      assert.equal(config2.isOnboarded(), true);
-    } finally {
-      await new Promise(resolve => server.close(resolve));
-      tmp.cleanup();
-    }
-  });
-
-  test('quickstart allows --confirm-ingress to bypass external ping failure', async () => {
-    tmp = helpers.tmpConfigDir('onboard-quickstart-external-ping');
-    const fs = require('fs');
-    const path = require('path');
-    const http = require('http');
-    const { execFile } = require('child_process');
-
-    const workspaceDir = path.join(tmp.dir, 'ws');
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.writeFileSync(path.join(workspaceDir, 'USER.md'), '## Goals\n- Build cool tools\n');
-
-    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
-    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir, A2A_WORKSPACE: workspaceDir };
-
-    // Backend server for local reachability check.
-    const server = http.createServer((req, res) => {
-      if (req.method === 'GET' && req.url === '/api/a2a/ping') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ pong: true }));
-        return;
-      }
-      res.statusCode = 404;
-      res.end();
+    const submission = JSON.stringify({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'My work', detail: 'What I build' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: ['API keys'],
+      personality_notes: 'Direct and concise'
     });
 
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    const backendPort = String(server.address().port);
+    const out = execFileSync(process.execPath, [cliPath, 'onboard', '--submit', submission], {
+      env,
+      encoding: 'utf8'
+    });
 
-    try {
-      // Use a public-looking hostname that will NOT return a2a pong at /api/a2a/ping.
-      // External ping should fail, but --confirm-ingress must allow onboarding to continue.
-      await new Promise((resolve, reject) => {
-        execFile(process.execPath, [
-          cliPath,
-          'quickstart',
-          '--hostname',
-          'example.com',
-          '--port',
-          backendPort,
-          '--confirm-ingress'
-        ], {
-          env,
-          stdio: 'ignore'
-        }, (err) => (err ? reject(err) : resolve()));
-      });
+    assert.ok(out.includes('Step 4 of 4'), 'Should show step 4 completion');
+    assert.ok(out.includes('Onboarding complete'), 'Should say onboarding complete');
 
-      delete require.cache[require.resolve('../../src/lib/config')];
-      const { A2AConfig } = require('../../src/lib/config');
-      const config = new A2AConfig();
-      assert.equal(config.isOnboarded(), true);
-    } finally {
-      await new Promise(resolve => server.close(resolve));
-      tmp.cleanup();
-    }
+    delete require.cache[require.resolve('../../src/lib/config')];
+    const { A2AConfig } = require('../../src/lib/config');
+    const config = new A2AConfig();
+    assert.equal(config.isOnboarded(), true);
+
+    tmp.cleanup();
   });
 
   test('Golda profile exercises all tier levels correctly', () => {
@@ -351,13 +294,22 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('onboard --submit validates and saves agent disclosure submission', () => {
+  test('onboard --submit saves manifest and syncs tier config', () => {
     tmp = helpers.tmpConfigDir('onboard-submit');
     const { execFileSync } = require('child_process');
+    const fs = require('fs');
     const path = require('path');
 
     const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
     const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    // Pre-set config to awaiting_disclosure (simulating quickstart Step 1 already ran)
+    const configPath = path.join(tmp.dir, 'a2a-config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      onboarding: { version: 2, step: 'awaiting_disclosure' },
+      agent: { hostname: 'localhost:3001', name: 'test-agent' },
+      tiers: {}
+    }));
 
     const submission = JSON.stringify({
       topics: {
@@ -383,6 +335,7 @@ module.exports = function (test, assert, helpers) {
     });
 
     assert.includes(result, 'Disclosure manifest saved');
+    assert.includes(result, 'Onboarding complete');
 
     // Verify manifest was saved correctly
     delete require.cache[require.resolve('../../src/lib/disclosure')];
@@ -391,6 +344,12 @@ module.exports = function (test, assert, helpers) {
     assert.equal(manifest.version, 1);
     assert.equal(manifest.topics.public.lead_with[0].topic, 'AI development');
     assert.equal(manifest.topics.friends.lead_with[0].topic, 'Current projects');
+
+    // Verify onboarding is complete
+    delete require.cache[require.resolve('../../src/lib/config')];
+    const { A2AConfig } = require('../../src/lib/config');
+    const config = new A2AConfig();
+    assert.equal(config.isOnboarded(), true);
 
     tmp.cleanup();
   });
@@ -424,27 +383,93 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('onboard without --submit prints extraction prompt', () => {
-    tmp = helpers.tmpConfigDir('onboard-prompt');
+  test('quickstart in awaiting_disclosure state prints extraction prompt', () => {
+    tmp = helpers.tmpConfigDir('onboard-awaiting');
     const fs = require('fs');
     const path = require('path');
     const { execFileSync } = require('child_process');
 
     const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
-    const workspaceDir = path.join(tmp.dir, 'ws');
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.writeFileSync(path.join(workspaceDir, 'USER.md'), '## Goals\n- Build cool tools\n');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
 
-    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir, A2A_WORKSPACE: workspaceDir };
+    // Pre-set config to awaiting_disclosure (simulating Step 1 already ran)
+    const configPath = path.join(tmp.dir, 'a2a-config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      onboarding: { version: 2, step: 'awaiting_disclosure' },
+      agent: { hostname: 'localhost:3001', name: 'test-agent' },
+      tiers: {}
+    }));
 
-    const result = execFileSync(process.execPath, [cliPath, 'onboard'], {
+    const result = execFileSync(process.execPath, [cliPath, 'quickstart'], {
       env,
       encoding: 'utf8'
     });
 
+    assert.includes(result, 'Step 1 already complete');
+    assert.includes(result, 'Step 2 of 4');
     assert.includes(result, 'lead_with');
     assert.includes(result, 'discuss_freely');
-    assert.includes(result, 'USER.md');
+    assert.includes(result, "a2a onboard --submit");
+
+    tmp.cleanup();
+  });
+
+  test('enforceOnboarding blocks non-exempt commands when not onboarded', () => {
+    tmp = helpers.tmpConfigDir('onboard-enforce');
+    const { execFileSync } = require('child_process');
+    const path = require('path');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    let threw = false;
+    try {
+      execFileSync(process.execPath, [cliPath, 'list'], {
+        env,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+    } catch (err) {
+      threw = true;
+      const output = (err.stdout || '') + (err.stderr || '');
+      assert.ok(output.includes('a2a quickstart'), 'Should tell agent to run quickstart');
+    }
+    assert.ok(threw, 'Should exit with non-zero code when not onboarded');
+
+    tmp.cleanup();
+  });
+
+  test('enforceOnboarding shows awaiting_disclosure message mid-onboarding', () => {
+    tmp = helpers.tmpConfigDir('onboard-enforce-mid');
+    const fs = require('fs');
+    const path = require('path');
+    const { execFileSync } = require('child_process');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    // Pre-set config to awaiting_disclosure
+    const configPath = path.join(tmp.dir, 'a2a-config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      onboarding: { version: 2, step: 'awaiting_disclosure' },
+      agent: { hostname: 'localhost:3001', name: 'test-agent' },
+      tiers: {}
+    }));
+
+    let threw = false;
+    try {
+      execFileSync(process.execPath, [cliPath, 'list'], {
+        env,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+    } catch (err) {
+      threw = true;
+      const output = (err.stdout || '') + (err.stderr || '');
+      assert.ok(output.includes('onboard --submit'), 'Should tell agent to submit disclosure');
+      assert.ok(output.includes('setup in progress') || output.includes('not yet submitted'), 'Should indicate setup is in progress');
+    }
+    assert.ok(threw, 'Should exit with non-zero code when mid-onboarding');
 
     tmp.cleanup();
   });

@@ -500,11 +500,25 @@ function readContextFiles(workspaceDir) {
  * @param {Object} [availableFiles] - Map of filename to truthy if present
  * @returns {string} The instruction prompt for the agent
  */
-function buildExtractionPrompt(availableFiles = {}) {
-  const fileList = Object.entries(availableFiles)
-    .filter(([, present]) => present)
-    .map(([name]) => `  - ${name}`)
-    .join('\n') || '  (no workspace files detected)';
+function buildExtractionPrompt(availableFiles) {
+  let fileSection;
+  if (availableFiles && Object.keys(availableFiles).length > 0) {
+    const fileList = Object.entries(availableFiles)
+      .filter(([, present]) => present)
+      .map(([name]) => `  - ${name}`)
+      .join('\n') || '  (none detected)';
+    fileSection = `### Available workspace files\n${fileList}\n\nRead the available files above and extract disclosure topics.`;
+  } else {
+    fileSection = `### Workspace files to look for
+  - USER.md — owner identity, bio, interests
+  - SOUL.md — values, personality, communication style
+  - HEARTBEAT.md — skip this (contains agent tasks, not disclosure topics)
+  - SKILL.md — skip this (contains agent instructions)
+  - CLAUDE.md — skip this (contains agent instructions)
+  - memory/*.md — may contain relevant context
+
+Look for these files in your workspace directory and read the ones that exist. Extract disclosure topics from USER.md and SOUL.md primarily.`;
+  }
 
   const jsonBlock = '```json\n{\n  "topics": {\n    "public": {\n      "lead_with": [\n        { "topic": "Short label (max 160 chars)", "detail": "Longer description of the topic" }\n      ],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "friends": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "family": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    }\n  },\n  "never_disclose": ["API keys", "Credentials", "Financial figures"],\n  "personality_notes": "Brief description of communication style"\n}\n```';
 
@@ -512,10 +526,9 @@ function buildExtractionPrompt(availableFiles = {}) {
 
 You are helping the owner set up their A2A disclosure profile — the topics and information their agent is willing to discuss with other agents at different trust levels.
 
-### Available workspace files
-${fileList}
+${fileSection}
 
-Read the available files above and extract disclosure topics. Focus on what the OWNER cares about, works on, and wants to discuss — NOT on agent instructions, code documentation, or operational tasks.
+Focus on what the OWNER cares about, works on, and wants to discuss — NOT on agent instructions, code documentation, or operational tasks.
 
 ### What to extract
 

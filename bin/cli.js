@@ -77,6 +77,16 @@ function enforceOnboarding(command) {
   }
 
   if (!isOnboarded()) {
+    // Check if we're mid-onboarding (server running, awaiting disclosure)
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+      if (cfg.onboarding?.step === 'awaiting_disclosure') {
+        console.log('\nA2A setup in progress. Disclosure topics not yet submitted.\n');
+        console.log("Next: run `a2a onboard --submit '<json>'`\n");
+        process.exit(1);
+      }
+    } catch (e) {}
+
     console.log('\nA2A not configured yet.\n');
     console.log('Next: run `a2a quickstart`\n');
     process.exit(1);
@@ -934,26 +944,36 @@ https://github.com/onthegonow/a2a_calling`;
   },
 
   quickstart: async (args) => {
-    const http = require('http');
     const { A2AConfig } = require('../src/lib/config');
-    const { isPortListening } = require('../src/lib/port-scanner');
-    const {
-      readContextFiles,
-      generateDefaultManifest,
-      saveManifest,
-      MANIFEST_FILE
-    } = require('../src/lib/disclosure');
-    const {
-      normalizeHostInput,
-      splitHostPort,
-      isLocalOrUnroutableHost
-    } = require('../src/lib/invite-host');
+    const { tryBindPort, findAvailablePort, isPortListening } = require('../src/lib/port-scanner');
+    const { buildExtractionPrompt, MANIFEST_FILE } = require('../src/lib/disclosure');
+    const { getExternalIp } = require('../src/lib/external-ip');
 
     const config = new A2AConfig();
-    const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
 
     if (args.flags.force) {
       config.resetOnboarding();
+    }
+
+    // Already onboarded — skip unless --force
+    if (config.isOnboarded() && !args.flags.force) {
+      console.log('\nOnboarding already complete. Use --force to re-run.\n');
+      return;
+    }
+
+    // If server is already running and awaiting disclosure, skip to Step 2
+    let currentStep = 'not_started';
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+      currentStep = cfg.onboarding?.step || 'not_started';
+    } catch (e) {}
+    if (currentStep === 'awaiting_disclosure' && !args.flags.force) {
+      console.log('\nStep 1 already complete. Server is running.\n');
+      console.log('Step 2 of 4: Configure disclosure topics\n');
+      console.log(buildExtractionPrompt());
+      console.log('\n  Read your workspace files, extract topics, and present to your owner for review.');
+      console.log("  Then submit with: a2a onboard --submit '<json>'\n");
+      return;
     }
 
     function parsePort(raw, fallback) {
@@ -964,438 +984,55 @@ https://github.com/onthegonow/a2a_calling`;
       return fallback;
     }
 
-    function uniqueNonEmpty(values, limit = 80) {
-      const normalizeValue = (value) => {
-        if (typeof value === 'string') {
-          return String(value || '').trim();
-        }
-        if (value && typeof value === 'object' && !Array.isArray(value) && 'topic' in value) {
-          return String(value.topic || '').trim();
-        }
-        return '';
-      };
+    // ── Step 1 of 4: Setting up A2A server ──────────────────
+    console.log('\nStep 1 of 4: Setting up A2A server\n');
 
-      const out = [];
-      const seen = new Set();
-      for (const value of values) {
-        const text = normalizeValue(value);
-        if (!text) continue;
-        const key = text.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(text);
-        if (out.length >= limit) break;
+    // 1a. Check port 80
+    console.log('  1a. Checking port 80...');
+    const port80Result = await tryBindPort(80);
+
+    let serverPort;
+    let needsProxy = false;
+
+    if (port80Result.ok) {
+      // Port 80 is free and we can bind
+      console.log('      Port 80 available.');
+      serverPort = 80;
+    } else if (port80Result.code === 'EACCES') {
+      // Port 80 is free but we don't have permission
+      console.log('      Port 80 is available but requires elevated privileges.');
+      console.log('      A2A needs to bind to a port to function. Rerun with:');
+      console.log('        sudo npm install -g a2acalling\n');
+      console.log('      Onboarding cannot continue without a bound port.');
+      process.exit(1);
+    } else {
+      // Port 80 is occupied (EADDRINUSE or other)
+      console.log('      Port 80 is in use by another process.');
+      console.log('  1b. Scanning for available port...');
+
+      // Generate candidates starting at 3001
+      const candidates = [];
+      for (let p = 3001; p < 3101; p++) candidates.push(p);
+      serverPort = await findAvailablePort(candidates);
+
+      if (!serverPort) {
+        console.log('      Could not find a bindable port. Rerun with elevated privileges:');
+        console.log('        sudo npm install -g a2acalling');
+        process.exit(1);
       }
-      return out;
+      console.log(`      Port ${serverPort} available.`);
+      needsProxy = true;
     }
 
-    function normalizeTopicRecord(raw) {
-      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-        return {
-          topic: String(raw.topic || '').trim(),
-          detail: String(raw.detail || '').trim()
-        };
-      }
-      return {
-        topic: String(raw || '').trim(),
-        detail: ''
-      };
-    }
-
-    function uniqueTopicRecords(values, limit = 80) {
-      const out = [];
-      const seen = new Set();
-      for (const value of values) {
-        const item = normalizeTopicRecord(value);
-        if (!item.topic) continue;
-        const key = item.topic.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push(item);
-        if (out.length >= limit) break;
-      }
-      return out;
-    }
-
-    function sanitizeSectionItems(values, limit = 80) {
-      return uniqueTopicRecords(values, limit).map(item => ({
-        topic: item.topic,
-        detail: item.detail || ''
-      }));
-    }
-
-    function cloneDraft(draft = {}) {
-      return JSON.parse(JSON.stringify(draft));
-    }
-
-    function makeDraft(manifest) {
-      const src = (manifest && manifest.topics) ? manifest.topics : {};
-      return {
-        public: {
-          lead_with: sanitizeSectionItems((src.public && src.public.lead_with) || [], 60),
-          discuss_freely: sanitizeSectionItems((src.public && src.public.discuss_freely) || [], 60),
-          deflect: sanitizeSectionItems((src.public && src.public.deflect) || [], 60)
-        },
-        friends: {
-          lead_with: sanitizeSectionItems((src.friends && src.friends.lead_with) || [], 60),
-          discuss_freely: sanitizeSectionItems((src.friends && src.friends.discuss_freely) || [], 60),
-          deflect: sanitizeSectionItems((src.friends && src.friends.deflect) || [], 60)
-        },
-        family: {
-          lead_with: sanitizeSectionItems((src.family && src.family.lead_with) || [], 60),
-          discuss_freely: sanitizeSectionItems((src.family && src.family.discuss_freely) || [], 60),
-          deflect: sanitizeSectionItems((src.family && src.family.deflect) || [], 60)
-        }
-      };
-    }
-
-    function summarizeLine(content, maxLen = 60) {
-      const text = String(content || '').split('\n').map((line) => line.trim()).find((line) => {
-        return line && !line.startsWith('#') && !line.startsWith('---') && line.length <= 220;
-      });
-      if (!text) {
-        return 'found';
-      }
-      return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
-    }
-
-    function countMemoryDocs(root) {
-      try {
-        const dir = path.join(root, 'memory');
-        if (!fs.existsSync(dir)) return 0;
-        return fs.readdirSync(dir).filter(name => name.endsWith('.md')).length;
-      } catch (err) {
-        return 0;
-      }
-    }
-
-    function renderWorkspaceScan(contextFiles) {
-      const memoryCount = countMemoryDocs(workspaceDir);
-      console.log('\n🔍 Scanning workspace for context...\n');
-      console.log('Found:');
-      const rows = [
-        { label: 'USER.md', found: Boolean(contextFiles.user), note: summarizeLine(contextFiles.user, 72) },
-        { label: 'SOUL.md', found: Boolean(contextFiles.soul), note: summarizeLine(contextFiles.soul, 72) },
-        { label: 'HEARTBEAT.md', found: Boolean(contextFiles.heartbeat), note: 'contains agent tasks, not disclosure topics' },
-        { label: 'SKILL.md', found: Boolean(contextFiles.skill), note: null },
-        { label: 'memory/*.md', found: memoryCount > 0, note: `${memoryCount} file${memoryCount === 1 ? '' : 's'}` }
-      ];
-
-      for (const row of rows) {
-        const check = row.found ? '✅' : '❌';
-        const note = row.found && row.note ? ` — ${row.note}` : '';
-        const skip = row.label === 'HEARTBEAT.md' && row.found ? ' (skipped)' : '';
-        console.log(`  ${check} ${row.label}${skip}${note}`);
-      }
-      console.log('');
-    }
-
-    function sectionLabel(sectionName) {
-      if (sectionName === 'lead_with') return 'Lead with';
-      if (sectionName === 'discuss_freely') return 'Discuss freely';
-      return 'Deflect';
-    }
-
-    function flattenDraft(draft) {
-      const flat = [];
-      let index = 1;
-      ['public', 'friends', 'family'].forEach((tier) => {
-        ['lead_with', 'discuss_freely', 'deflect'].forEach((section) => {
-          (draft[tier][section] || []).forEach((item, itemIndex) => {
-            flat.push({
-              index,
-              tier,
-              section,
-              item,
-              itemIndex,
-              list: draft[tier][section]
-            });
-            index += 1;
-          });
-        });
-      });
-      return flat;
-    }
-
-    function renderDraft(draft, neverDisclose) {
-      console.log('\n📋 Proposed Permission Tiers');
-      console.log('═'.repeat(60));
-
-      let index = 1;
-      const titleByTier = {
-        public: 'PUBLIC (anyone can see):',
-        friends: 'FRIENDS (trusted contacts):',
-        family: 'FAMILY (inner circle):'
-      };
-
-      ['public', 'friends', 'family'].forEach((tier) => {
-        console.log(`\n${titleByTier[tier]}`);
-        ['lead_with', 'discuss_freely', 'deflect'].forEach((section) => {
-          console.log(`  ${sectionLabel(section)}:`);
-          const list = draft[tier][section] || [];
-          if (list.length === 0) {
-            console.log('    (none)');
-            return;
-          }
-          list.forEach((item) => {
-            const detail = item.detail ? ` — ${item.detail}` : '';
-            console.log(`    ${index}. ${item.topic}${detail}`);
-            index += 1;
-          });
-        });
-      });
-
-      console.log('\nNEVER DISCLOSE:');
-      const staticNever = (neverDisclose || ['API keys', 'Other users\' data', 'Financial figures']);
-      staticNever.forEach((item) => console.log(`  • ${item}`));
-      console.log('═'.repeat(60));
-      return flattenDraft(draft);
-    }
-
-    function parseSections(target) {
-      if (!target) return null;
-      const [tierRaw, sectionRaw] = String(target).toLowerCase().split('.');
-      if (!tierRaw || !sectionRaw) return null;
-      if (!['public', 'friends', 'family'].includes(tierRaw)) return null;
-
-      const section = {
-        lead: 'lead_with',
-        lead_with: 'lead_with',
-        discuss: 'discuss_freely',
-        discuss_freely: 'discuss_freely',
-        deflect: 'deflect'
-      }[sectionRaw];
-
-      if (!section) return null;
-      return { tier: tierRaw, section };
-    }
-
-    function splitCommand(input) {
-      const raw = String(input || '').trim();
-      if (!raw) return [];
-      const match = raw.match(/"([^"]*)"|'([^']*)'|`([^`]*)`|\S+/g);
-      if (!match) return [];
-      return match.map((token) => {
-        if ((token.startsWith('"') && token.endsWith('"')) ||
-            (token.startsWith("'") && token.endsWith("'")) ||
-            (token.startsWith('`') && token.endsWith('`'))) {
-          return token.slice(1, -1);
-        }
-        return token;
-      });
-    }
-
-    function findByIndex(draft, index) {
-      const target = flattenDraft(draft).find(item => item.index === index);
-      return target || null;
-    }
-
-    function readNameFromUserContext(content) {
-      const lines = String(content || '').split('\n');
-      for (const line of lines) {
-        const trimmed = String(line || '').trim();
-        if (!trimmed) continue;
-
-        const nameMatch = trimmed.match(/^\*{0,2}Name:\*{0,2}\s*(.+)$/i);
-        if (nameMatch && nameMatch[1]) {
-          return String(nameMatch[1]).trim();
-        }
-
-        if (/^(owner|ownername):/i.test(trimmed)) {
-          const ownerMatch = trimmed.replace(/^[^:]+:\s*/, '');
-          if (ownerMatch) return ownerMatch.trim();
-        }
-
-        if (trimmed.startsWith('-') || trimmed.startsWith('*') || trimmed.startsWith('#')) {
-          continue;
-        }
-
-        if (/^[A-Za-z][\w\-,.\s]{2,}$/i.test(trimmed)) {
-          const candidate = trimmed.split('|')[0].split('\t')[0].trim();
-          if (candidate && candidate.length <= 80) {
-            return candidate;
-          }
-        }
-      }
-      return '';
-    }
-
-    function flattenTopicStrings(section) {
-      return uniqueNonEmpty((section || []).map(item => String(item && item.topic || '').trim()), 200)
-        .filter(Boolean);
-    }
-
-    async function editLoop(draft, neverDisclose, reloadManifest) {
-      const shouldPrompt = process.stdin.isTTY && process.stdout.isTTY;
-      if (!shouldPrompt) {
-        console.log('\n⏩ Non-interactive shell detected. Proceeding with proposed topics.');
-        renderDraft(draft, neverDisclose);
-        return draft;
-      }
-
-      console.log('\nEdit commands:');
-      console.log('  move N to TIER.SECTION     — Move topic #N to a section');
-      console.log('  remove N                   — Remove topic #N');
-      console.log('  add TIER.SECTION "Topic" "Detail"  — Add a topic');
-      console.log('  edit N topic "new"         — Edit topic #N label');
-      console.log('  edit N detail "new"        — Edit topic #N detail');
-      console.log('  reset                      — Rescan workspace and regenerate');
-      console.log('  done                       — Save and continue\n');
-
-      let done = false;
-      renderDraft(draft, neverDisclose);
-
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      return await new Promise((resolve) => {
-        const finish = () => {
-          if (!done) {
-            done = true;
-            resolve(draft);
-          }
-        };
-
-        const prompt = () => {
-          rl.question('Your choice: ', (answer) => {
-            const parts = splitCommand(answer);
-            const command = String(parts[0] || '').toLowerCase();
-            if (!parts.length) {
-              renderDraft(draft, neverDisclose);
-              return prompt();
-            }
-
-            if (command === 'done') {
-              rl.close();
-              return finish();
-            }
-
-            if (command === 'reset') {
-              draft = cloneDraft(reloadManifest());
-              renderDraft(draft, neverDisclose);
-              return prompt();
-            }
-
-            if (command === 'remove') {
-              const target = findByIndex(draft, Number.parseInt(parts[1], 10));
-              if (!target) {
-                console.log(`Could not find topic #${parts[1]}.`);
-              } else {
-                target.list.splice(target.itemIndex, 1);
-                console.log(`Removed topic #${parts[1]}.`);
-              }
-              renderDraft(draft, neverDisclose);
-              return prompt();
-            }
-
-            if (command === 'move') {
-              const target = findByIndex(draft, Number.parseInt(parts[1], 10));
-              const destination = parseSections(parts[2] === 'to' ? parts[3] : parts[2]);
-              if (!target) {
-                console.log(`Could not find topic #${parts[1]}.`);
-              } else if (!destination) {
-                console.log('Invalid target. Use format: move N to friends.lead');
-              } else {
-                target.list.splice(target.itemIndex, 1);
-                draft[destination.tier][destination.section].push(target.item);
-                console.log(`Moved topic #${parts[1]} to ${destination.tier}.${destination.section}`);
-              }
-              renderDraft(draft, neverDisclose);
-              return prompt();
-            }
-
-            if (command === 'add') {
-              const destination = parseSections(parts[1]);
-              const topic = parts[2];
-              const detail = parts[3] || '';
-              if (!destination || !topic) {
-                console.log('Add format: add TIER.SECTION "Topic" "Detail"');
-              } else {
-                draft[destination.tier][destination.section].push({ topic, detail });
-                console.log(`Added topic to ${destination.tier}.${destination.section}.`);
-              }
-              renderDraft(draft, neverDisclose);
-              return prompt();
-            }
-
-            if (command === 'edit') {
-              const target = findByIndex(draft, Number.parseInt(parts[1], 10));
-              const field = String(parts[2] || '').toLowerCase();
-              const value = parts[3] || '';
-              if (!target || !field || !['topic', 'detail'].includes(field)) {
-                console.log('Edit format: edit N topic "new" | edit N detail "new"');
-              } else {
-                target.item[field] = value;
-                console.log(`Updated topic #${parts[1]} ${field}.`);
-              }
-              renderDraft(draft, neverDisclose);
-              return prompt();
-            }
-
-            console.log('Unknown command.');
-            renderDraft(draft, neverDisclose);
-            return prompt();
-          });
-        };
-
-        rl.on('close', finish);
-        prompt();
-      });
-    }
-
-    async function probePing(port) {
-      return await new Promise((resolve) => {
-        const req = http.request({
-          hostname: '127.0.0.1',
-          port,
-          path: '/api/a2a/ping',
-          method: 'GET',
-          timeout: 1200
-        }, (res) => {
-          let body = '';
-          res.setEncoding('utf8');
-          res.on('data', chunk => { body += String(chunk || ''); });
-          res.on('end', () => {
-            const ok = body.includes('"pong":true') || body.includes('"pong": true');
-            resolve({ ok, statusCode: res.statusCode || 0, body });
-          });
-        });
-        req.on('error', () => resolve({ ok: false }));
-        req.on('timeout', () => {
-          req.destroy(new Error('timeout'));
-          resolve({ ok: false });
-        });
-        req.end();
-      });
-    }
-
-    async function waitForLocalServer(port) {
-      for (let i = 0; i < 18; i++) {
-        const listening = await isPortListening(port, '127.0.0.1', { timeoutMs: 250 });
-        if (!listening.listening) {
-          await new Promise(r => setTimeout(r, 250));
-          continue;
-        }
-
-        const probe = await probePing(port);
-        if (probe.ok) {
-          return true;
-        }
-      }
-      return false;
-    }
+    // Start server
+    console.log(`      Starting A2A server on port ${serverPort}...`);
 
     async function startServer(port) {
       const listening = await isPortListening(port, '127.0.0.1', { timeoutMs: 250 });
-      if (listening.listening) {
-        return false;
-      }
-
+      if (listening.listening) return false;
       const serverScript = path.join(__dirname, '../src/server.js');
       const child = spawn(process.execPath, [serverScript], {
-        env: {
-          ...process.env,
-          PORT: String(port),
-          A2A_WORKSPACE: workspaceDir
-        },
+        env: { ...process.env, PORT: String(port) },
         detached: true,
         stdio: 'ignore'
       });
@@ -1404,248 +1041,62 @@ https://github.com/onthegonow/a2a_calling`;
       return true;
     }
 
-    function looksLikePong(body) {
-      try {
-        const parsed = JSON.parse(String(body || ''));
-        if (parsed && parsed.pong === true) return true;
-      } catch (e) {}
-      return String(body || '').includes('"pong":true') || String(body || '').includes('"pong": true');
+    async function waitForServer(port) {
+      for (let i = 0; i < 18; i++) {
+        const listening = await isPortListening(port, '127.0.0.1', { timeoutMs: 250 });
+        if (listening.listening) return true;
+        await new Promise(r => setTimeout(r, 250));
+      }
+      return false;
     }
 
-    // Step 1: discover context
-    const contextFiles = (() => {
-      try {
-        return readContextFiles(workspaceDir);
-      } catch (err) {
-        return {};
-      }
-    })();
+    await startServer(serverPort);
+    const serverUp = await waitForServer(serverPort);
+    if (!serverUp) {
+      console.log('      Server failed to start. Check logs and retry:');
+      console.log(`        PORT=${serverPort} node ${path.join(__dirname, '../src/server.js')}`);
+      process.exit(1);
+    }
+    console.log('      Server running.\n');
 
-    renderWorkspaceScan(contextFiles);
+    // Detect external IP
+    const ipResult = await getExternalIp();
+    const externalIp = ipResult.ip || 'YOUR_EXTERNAL_IP';
+    const publicHost = needsProxy ? externalIp : (serverPort === 80 ? externalIp : `${externalIp}:${serverPort}`);
 
-    const backendPort = parsePort(args.flags.port || args.flags.p || process.env.A2A_PORT || process.env.PORT, 3001);
-    const hostFlag = normalizeHostInput(
-      args.flags.hostname !== undefined
-        ? String(args.flags.hostname)
-        : (config.getAgent().hostname || `localhost:${backendPort}`)
-    );
-    const parsedHost = splitHostPort(hostFlag || `localhost:${backendPort}`);
-    const inviteHost = parsedHost.port
-      ? `${parsedHost.hostname}:${parsedHost.port}`
-      : `${parsedHost.hostname || 'localhost'}:${backendPort}`;
+    // Save server config
+    config.setAgent({ hostname: publicHost });
 
-    const hostnameSource = args.flags.hostname !== undefined ? '--hostname flag' : config.getAgent().hostname ? 'saved config' : 'default';
-    console.log(`\nHostname: ${inviteHost} (source: ${hostnameSource})`);
-    console.log(`Port: ${backendPort}`);
-    console.log('To override, rerun with: a2a quickstart --hostname YOUR_DOMAIN:PORT\n');
-
-    // Step 2: seed draft from workspace context
-    let manifest = generateDefaultManifest(contextFiles);
-    let draft = makeDraft(manifest);
-    const neverDisclose = uniqueNonEmpty(manifest.never_disclose || [
-      'API keys',
-      'Other users\' data',
-      'Financial figures'
-    ], 30);
-
-    draft = await editLoop(draft, neverDisclose, () => {
-      try {
-        const refreshedContext = readContextFiles(workspaceDir);
-        const freshManifest = generateDefaultManifest(refreshedContext);
-        manifest = freshManifest;
-        return makeDraft(freshManifest);
-      } catch (err) {
-        return draft;
-      }
-    });
-
-    const finalManifest = {
-      version: 1,
-      generated_at: manifest.generated_at || new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      topics: {
-        public: {
-          lead_with: sanitizeSectionItems(draft.public.lead_with, 80),
-          discuss_freely: sanitizeSectionItems(draft.public.discuss_freely, 80),
-          deflect: sanitizeSectionItems(draft.public.deflect, 80)
-        },
-        friends: {
-          lead_with: sanitizeSectionItems(draft.friends.lead_with, 80),
-          discuss_freely: sanitizeSectionItems(draft.friends.discuss_freely, 80),
-          deflect: sanitizeSectionItems(draft.friends.deflect, 80)
-        },
-        family: {
-          lead_with: sanitizeSectionItems(draft.family.lead_with, 80),
-          discuss_freely: sanitizeSectionItems(draft.family.discuss_freely, 80),
-          deflect: sanitizeSectionItems(draft.family.deflect, 80)
-        }
-      },
-      never_disclose: neverDisclose,
-      personality_notes: manifest.personality_notes || ''
-    };
-
-    // Keep config in sync with the edited disclosure.
-    try {
-      config.setTier('public', {
-        topics: flattenTopicStrings([...finalManifest.topics.public.lead_with, ...finalManifest.topics.public.discuss_freely, ...finalManifest.topics.public.deflect]),
-        disclosure: 'public'
-      });
-
-      config.setTier('friends', {
-        topics: flattenTopicStrings([
-          ...finalManifest.topics.public.lead_with,
-          ...finalManifest.topics.public.discuss_freely,
-          ...finalManifest.topics.public.deflect,
-          ...finalManifest.topics.friends.lead_with,
-          ...finalManifest.topics.friends.discuss_freely,
-          ...finalManifest.topics.friends.deflect
-        ]),
-        disclosure: 'minimal'
-      });
-
-      config.setTier('family', {
-        topics: flattenTopicStrings([
-          ...finalManifest.topics.public.lead_with,
-          ...finalManifest.topics.public.discuss_freely,
-          ...finalManifest.topics.public.deflect,
-          ...finalManifest.topics.friends.lead_with,
-          ...finalManifest.topics.friends.discuss_freely,
-          ...finalManifest.topics.friends.deflect,
-          ...finalManifest.topics.family.lead_with,
-          ...finalManifest.topics.family.discuss_freely,
-          ...finalManifest.topics.family.deflect
-        ]),
-        disclosure: 'minimal'
-      });
-
-      saveManifest(finalManifest);
-      config.setOnboarding({ step: 'tiers', tiers_confirmed: true });
-      console.log('\nPermission tiers saved.');
-      console.log(`  Config: ${CONFIG_PATH}`);
-      console.log(`  Disclosure: ${MANIFEST_FILE}`);
-      console.log('  To customize topics later: run `a2a onboard`');
-    } catch (err) {
-      console.error('\n❌ Failed to save tier updates.');
-      console.error(`   ${err.message}`);
-      throw err;
+    if (needsProxy) {
+      console.log('  External access required.');
+      console.log('  Something is already bound to port 80 on this machine.');
+      console.log('  Two options to make your A2A server reachable:\n');
+      console.log('  Option A (strongly recommended): Set up a reverse proxy.');
+      console.log(`    Configure your web server to forward /api/a2a/* to localhost:${serverPort}.`);
+      console.log('    Most server owners already have port 80 open — a reverse proxy');
+      console.log('    avoids firewall changes entirely.\n');
+      console.log(`  Option B: Open port ${serverPort} in your firewall.`);
+      console.log('    This requires the owner to manually allow inbound traffic on');
+      console.log(`    port ${serverPort} (e.g. ufw allow ${serverPort}, or cloud provider security group).`);
+      console.log('    Most users prefer not to modify firewall settings.\n');
     }
 
-    console.log('\nStarting A2A server...');
+    const verifyUrl = needsProxy
+      ? `http://${externalIp}/api/a2a/ping`
+      : `http://${publicHost}/api/a2a/ping`;
+    console.log('  Verify externally:');
+    console.log(`    curl -s ${verifyUrl}`);
+    console.log('  Or ask your owner to check: https://canyouseeme.org/\n');
 
-    const started = await startServer(backendPort);
-    const localRunning = await waitForLocalServer(backendPort);
-    if (!localRunning) {
-      console.log('⚠️  Local server not reachable. Start it manually and retry if needed:');
-      console.log(`  A2A_HOSTNAME="${inviteHost}" a2a server --port ${backendPort}`);
-    } else {
-      console.log('✅ Server running!');
-      if (started) {
-        console.log('🟢 Local server started automatically.');
-      }
-    }
+    config.setOnboarding({ step: 'awaiting_disclosure' });
 
-    const dashboard = `http://127.0.0.1:${backendPort}/dashboard/`;
-
-    const hostSplit = splitHostPort(inviteHost);
-    const isPrivateHost = isLocalOrUnroutableHost(hostSplit.hostname);
-    const expectedPingUrl = `${isPrivateHost ? 'http' : (hostSplit.port === 443 ? 'https' : 'http')}://${inviteHost}/api/a2a/ping`;
-
-    if (isPrivateHost) {
-      console.log('✅ External ping OK (local testing host)');
-    } else {
-      const external = await new Promise(resolve => {
-        const req = http.get(expectedPingUrl, (res) => {
-          let body = '';
-          res.setEncoding('utf8');
-          res.on('data', chunk => { body += chunk; });
-          res.on('end', () => {
-            resolve({ ok: looksLikePong(body), statusCode: res.statusCode || 0, body });
-          });
-        });
-        req.on('error', () => resolve({ ok: false }));
-        req.setTimeout(1500, () => {
-          req.destroy(new Error('timeout'));
-          resolve({ ok: false });
-        });
-      });
-
-      if (!external.ok && !args.flags['confirm-ingress'] && !args.flags['skip-verify']) {
-        console.log('⚠️  External ping FAILED. Fix host/reachability and rerun quickstart, or use --skip-verify.');
-        console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --skip-verify`);
-        return;
-      }
-
-      if (!external.ok) {
-        console.log('⚠️  External ping FAILED (continuing).');
-      } else {
-        console.log(`✅ External ping OK (${expectedPingUrl})`);
-      }
-    }
-
-    console.log(`Dashboard: ${dashboard}`);
-
-    // Step 5: generate first invite
-    const publicTopicsForInvite = flattenTopicStrings([
-      ...draft.public.lead_with,
-      ...draft.public.discuss_freely
-    ]);
-    const goalItems = ['grow-network', 'find-collaborators', 'build-in-public'];
-
-    const ownerName = args.flags.owner || config.getAgent().name || readNameFromUserContext(contextFiles.user) || 'Someone';
-    const peerName = args.flags.name || 'my-agent';
-
-    config.setAgent({ name: ownerName, hostname: inviteHost });
-
-    const { token, record } = store.create({
-      name: peerName,
-      owner: ownerName,
-      permissions: 'public',
-      disclosure: 'minimal',
-      expires: 'never',
-      maxCalls: null,
-      allowedTopics: publicTopicsForInvite,
-      allowedGoals: goalItems,
-      notify: 'all'
-    });
-
-    const inviteUrl = `a2a://${inviteHost}/${token}`;
-    const topicLine = publicTopicsForInvite.length > 0 ? publicTopicsForInvite.slice(0, 6).join(' · ') : 'chat';
-    const goalLine = goalItems.join(' · ');
-
-    console.log('\n📞 Your first invite (public tier):\n');
-    console.log('─'.repeat(60));
-    const inviteText = `📞🗣️ **Agent-to-Agent Call Invite**
-
-👤 **${ownerName}** would like your agent to call **${peerName}**
-
-💬 ${topicLine}
-🎯 ${goalLine}
-
-${inviteUrl}
-
-── setup ──
-npm i -g a2acalling && a2a add "${inviteUrl}" "${peerName}" && a2a call "${peerName}" "Hello!"
-https://github.com/onthegonow/a2a_calling`;
-    console.log(inviteText);
-    console.log('─'.repeat(60));
-    console.log('Share this invite to let other agents call you!\n');
-
-    config.completeOnboarding();
-
-    console.log('A2A setup complete.\n');
-    console.log(`Listening on ${inviteHost}`);
-    console.log(`Permission tiers: ${Object.keys(finalManifest.topics).join(', ')}`);
-    console.log(`Config: ${CONFIG_PATH}`);
-    console.log(`Disclosure: ${MANIFEST_FILE}`);
-    console.log('\nNext: run `a2a onboard` to customize disclosure topics for your permission tiers.');
-    console.log('  The onboard command will give you extraction instructions to read your workspace');
-    console.log('  files, structure topics by tier, and submit them for validation.');
-    console.log('');
-    console.log('Other commands:');
-    console.log('  a2a create --name "Name" --expires 7d  — Create a new invite');
-    console.log('  a2a list                               — List active tokens');
-    console.log('  a2a gui                                — Open the dashboard');
+    // ── Step 2 of 4: Configure disclosure topics ────────────
+    console.log('Step 2 of 4: Configure disclosure topics\n');
+    console.log(buildExtractionPrompt());
+    console.log('\n  Read your workspace files, extract topics, and present to your owner for review.');
+    console.log("  Then submit with: a2a onboard --submit '<json>'\n");
   },
+
 
   install: () => {
     require('../scripts/install-openclaw.js');
@@ -1892,11 +1343,9 @@ https://github.com/onthegonow/a2a_calling`;
     }
   },
 
-  onboard: (args) => {
+  onboard: async (args) => {
     const { A2AConfig } = require('../src/lib/config');
     const {
-      readContextFiles,
-      buildExtractionPrompt,
       validateDisclosureSubmission,
       saveManifest,
       MANIFEST_FILE
@@ -1910,58 +1359,105 @@ https://github.com/onthegonow/a2a_calling`;
       try {
         parsed = JSON.parse(String(submitRaw));
       } catch (e) {
-        console.error('\n\u274c Invalid JSON in --submit flag.');
-        console.error(`   Parse error: ${e.message}\n`);
+        console.error('\nInvalid JSON in --submit flag.');
+        console.error(`  Parse error: ${e.message}\n`);
         process.exit(1);
       }
 
       const result = validateDisclosureSubmission(parsed);
       if (!result.valid) {
-        console.error('\n\u274c Disclosure submission validation failed:\n');
-        result.errors.forEach(err => console.error(`   \u2022 ${err}`));
-        console.error(`\nFix the errors above and resubmit with: a2a onboard --submit '<json>'\n`);
+        console.error('\nDisclosure submission validation failed:\n');
+        result.errors.forEach(err => console.error(`  - ${err}`));
+        console.error("\nFix the errors above and resubmit with: a2a onboard --submit '<json>'\n");
         process.exit(1);
       }
 
       saveManifest(result.manifest);
-
-      const agentName = args.flags.name || config.getAgent().name || process.env.A2A_AGENT_NAME || '';
-      const hostname = args.flags.hostname || config.getAgent().hostname || process.env.A2A_HOSTNAME || '';
-      if (agentName) config.setAgent({ name: agentName });
-      if (hostname) config.setAgent({ hostname });
-
-      console.log('\nDisclosure manifest saved.');
+      console.log('\nStep 3 of 4: Disclosure manifest saved.');
       console.log(`  Manifest: ${MANIFEST_FILE}`);
+
+      // Sync tier config from manifest
+      const manifest = result.manifest;
+      function flattenTopics(sections) {
+        const out = [];
+        for (const section of sections) {
+          for (const item of section) {
+            const t = String(item && item.topic || '').trim();
+            if (t && !out.includes(t)) out.push(t);
+          }
+        }
+        return out;
+      }
+
+      try {
+        config.setTier('public', {
+          topics: flattenTopics([manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect]),
+          disclosure: 'public'
+        });
+        config.setTier('friends', {
+          topics: flattenTopics([
+            manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect,
+            manifest.topics.friends.lead_with, manifest.topics.friends.discuss_freely, manifest.topics.friends.deflect
+          ]),
+          disclosure: 'minimal'
+        });
+        config.setTier('family', {
+          topics: flattenTopics([
+            manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect,
+            manifest.topics.friends.lead_with, manifest.topics.friends.discuss_freely, manifest.topics.friends.deflect,
+            manifest.topics.family.lead_with, manifest.topics.family.discuss_freely, manifest.topics.family.deflect
+          ]),
+          disclosure: 'minimal'
+        });
+      } catch (err) {
+        console.error(`  Warning: could not sync tier config: ${err.message}`);
+      }
+
+      // If already onboarded, this is a topic update — no invite generation needed
       if (config.isOnboarded()) {
         console.log('\nDisclosure topics updated. Your agent will use these on the next inbound call.\n');
-      } else {
-        console.log('\nNext: run `a2a quickstart` to start the server and generate your first invite.\n');
+        return;
       }
+
+      // ── Step 3 of 4: Generate first invite ──────────────────
+      console.log('\nStep 3 of 4: Generating your first invite...\n');
+
+      const agentName = args.flags.name || config.getAgent().name || process.env.A2A_AGENT_NAME || 'my-agent';
+      const hostname = config.getAgent().hostname || process.env.A2A_HOSTNAME || 'localhost';
+      if (args.flags.name) config.setAgent({ name: agentName });
+
+      const publicTopics = flattenTopics([
+        manifest.topics.public.lead_with,
+        manifest.topics.public.discuss_freely
+      ]);
+
+      const { token } = store.create({
+        name: agentName,
+        owner: agentName,
+        permissions: 'public',
+        disclosure: 'minimal',
+        expires: 'never',
+        maxCalls: null,
+        allowedTopics: publicTopics,
+        allowedGoals: ['grow-network', 'find-collaborators', 'build-in-public'],
+        notify: 'all'
+      });
+
+      const inviteUrl = `a2a://${hostname}/${token}`;
+      console.log(`  Invite URL: ${inviteUrl}`);
+      console.log('  Share this invite to let other agents call you.\n');
+
+      // ── Step 4 of 4: Complete ───────────────────────────────
+      config.completeOnboarding();
+      console.log('Step 4 of 4: Onboarding complete.\n');
+      console.log(`  Config: ${CONFIG_PATH}`);
+      console.log(`  Disclosure: ${MANIFEST_FILE}`);
+      console.log(`  Invite: ${inviteUrl}\n`);
       return;
     }
 
-    // ── Prompt mode: print extraction instructions for agent ──
-    if (config.isOnboarded() && !args.flags.force) {
-      console.log('\u2705 Onboarding already complete. Use --force to regenerate.');
-      return;
-    }
-
-    const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
-    const contextFiles = readContextFiles(workspaceDir);
-
-    const availableFiles = {
-      'USER.md': Boolean(contextFiles.user),
-      'SOUL.md': Boolean(contextFiles.soul),
-      'HEARTBEAT.md': Boolean(contextFiles.heartbeat),
-      'SKILL.md': Boolean(contextFiles.skill),
-      'CLAUDE.md': Boolean(contextFiles.claude),
-      'memory/*.md': Boolean(contextFiles.memory)
-    };
-
-    console.log(buildExtractionPrompt(availableFiles));
-    console.log('\n---');
-    console.log('After the owner confirms, submit with:');
-    console.log("  a2a onboard --submit '<json>'\n");
+    // ── No --submit: same as quickstart ───────────────────────
+    return commands.quickstart(args);
   },
 
   version: () => {
