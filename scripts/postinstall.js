@@ -1,25 +1,9 @@
 #!/usr/bin/env node
 
-// Only show the banner for global installs; skip in CI, dev, and Docker builds.
+// Only run for global installs; skip in CI, dev, and Docker builds.
 if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) process.exit(0);
 if (process.env.npm_config_global !== 'true') process.exit(0);
 
-console.log(`
-╔══════════════════════════════════════════════════════════╗
-║  🤝 A2A Calling installed successfully!                  ║
-╠══════════════════════════════════════════════════════════╣
-║                                                          ║
-║  Next step:                                              ║
-║    a2a quickstart --hostname YOUR_DOMAIN:PORT           ║
-║                                                          ║
-║  Example:                                                ║
-║    a2a quickstart --hostname myserver.com:3001          ║
-║                                                          ║
-║  This will:                                              ║
-║    • Configure your agent's disclosure topics           ║
-║    • Set up permission tiers (public/friends/family)    ║
-║    • Start the A2A server                               ║
-║    • Generate your first invite to share                ║
-║                                                          ║
-╚══════════════════════════════════════════════════════════╝
-`);
+console.log('\n  a2acalling installed successfully.\n');
+console.log('  To get started, run:\n');
+console.log('    a2a quickstart\n');
