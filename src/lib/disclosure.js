@@ -459,6 +459,72 @@ function readContextFiles(workspaceDir) {
   return result;
 }
 
+/**
+ * Generate the extraction prompt that instructs an agent on exactly what
+ * structured disclosure data to return.
+ *
+ * @param {Object} [availableFiles] - Map of filename to truthy if present
+ * @returns {string} The instruction prompt for the agent
+ */
+function buildExtractionPrompt(availableFiles = {}) {
+  const fileList = Object.entries(availableFiles)
+    .filter(([, present]) => present)
+    .map(([name]) => `  - ${name}`)
+    .join('\n') || '  (no workspace files detected)';
+
+  const jsonBlock = '```json\n{\n  "topics": {\n    "public": {\n      "lead_with": [\n        { "topic": "Short label (max 60 chars)", "detail": "Longer description of the topic" }\n      ],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "friends": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "family": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    }\n  },\n  "never_disclose": ["API keys", "Credentials", "Financial figures"],\n  "personality_notes": "Brief description of communication style"\n}\n```';
+
+  return `## A2A Disclosure Extraction
+
+You are helping the owner set up their A2A disclosure profile — the topics and information their agent is willing to discuss with other agents at different trust levels.
+
+### Available workspace files
+${fileList}
+
+Read the available files above and extract disclosure topics. Focus on what the OWNER cares about, works on, and wants to discuss — NOT on agent instructions, code documentation, or operational tasks.
+
+### What to extract
+
+For each trust tier, identify topics the owner would want to discuss:
+
+- **public** — safe for anyone: professional role, public interests, general project descriptions
+- **friends** — for trusted contacts: current goals, collaboration interests, values, detailed project work
+- **family** — inner circle only: personal interests, private projects, sensitive plans
+
+For each tier, categorize topics as:
+- **lead_with** — proactively bring up (max 3 per tier)
+- **discuss_freely** — happy to discuss if asked (max 8 per tier)
+- **deflect** — redirect or decline (max 3 per tier)
+
+Also identify:
+- **never_disclose** — information that should never be shared regardless of tier (API keys, credentials, financial data, etc.)
+- **personality_notes** — a 1-2 sentence description of the owner's communication style
+
+### What NOT to extract
+
+Do NOT include as topics:
+- Code snippets, CLI commands, or technical documentation
+- URLs or file paths
+- Agent instructions or operational tasks (e.g., "post 50 comments/day")
+- Markdown formatting artifacts (bold markers, backticks)
+- Anything from HEARTBEAT.md (these are agent tasks, not disclosure topics)
+
+### Required JSON format
+
+Return ONLY valid JSON in this exact structure:
+
+${jsonBlock}
+
+### Rules
+
+1. Each "topic" string must be a short, human-readable label (max 160 chars)
+2. Each "detail" string explains the topic more fully (max 500 chars)
+3. Topics should be things a person would discuss, not technical artifacts
+4. Higher tiers (friends, family) inherit lower-tier topics automatically — don't duplicate
+5. Present this to the owner for review before submitting
+6. The owner may edit, remove, or add topics before final submission`;
+}
+
 module.exports = {
   loadManifest,
   saveManifest,
@@ -468,5 +534,6 @@ module.exports = {
   readContextFiles,
   validateDisclosureSubmission,
   isTechnicalContent,
+  buildExtractionPrompt,
   MANIFEST_FILE
 };

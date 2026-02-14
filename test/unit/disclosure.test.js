@@ -433,4 +433,37 @@ Prefers deep technical discussions over small talk.
     assert.ok(result.errors.some(e => e.includes('160')));
     tmp.cleanup();
   });
+
+  // ── Extraction Prompt Generation ──────────────────────────────
+
+  test('buildExtractionPrompt returns string with JSON schema', () => {
+    const disc = freshDisclosure();
+    const prompt = disc.buildExtractionPrompt();
+    assert.equal(typeof prompt, 'string');
+    assert.includes(prompt, 'lead_with');
+    assert.includes(prompt, 'discuss_freely');
+    assert.includes(prompt, 'deflect');
+    assert.includes(prompt, 'never_disclose');
+    assert.includes(prompt, 'personality_notes');
+    assert.includes(prompt, 'public');
+    assert.includes(prompt, 'friends');
+    assert.includes(prompt, 'family');
+    tmp.cleanup();
+  });
+
+  test('buildExtractionPrompt lists available context files', () => {
+    const disc = freshDisclosure();
+    const prompt = disc.buildExtractionPrompt({ 'USER.md': true, 'SOUL.md': true, 'HEARTBEAT.md': false });
+    assert.includes(prompt, 'USER.md');
+    assert.includes(prompt, 'SOUL.md');
+    tmp.cleanup();
+  });
+
+  test('buildExtractionPrompt includes guidance on what NOT to extract', () => {
+    const disc = freshDisclosure();
+    const prompt = disc.buildExtractionPrompt();
+    assert.includes(prompt, 'URL');
+    assert.includes(prompt, 'code');
+    tmp.cleanup();
+  });
 };
