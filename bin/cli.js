@@ -77,13 +77,8 @@ function enforceOnboarding(command) {
   }
 
   if (!isOnboarded()) {
-    console.log('\n⚠️  A2A not configured yet.');
-    console.log('');
-    console.log('Run this first:');
-    console.log('  a2a quickstart --hostname YOUR_DOMAIN:PORT');
-    console.log('');
-    console.log('Example:');
-    console.log('  a2a quickstart --hostname myserver.com:3001');
+    console.log('\nA2A not configured yet.\n');
+    console.log('Next: run `a2a quickstart`\n');
     process.exit(1);
   }
 }
@@ -945,7 +940,8 @@ https://github.com/onthegonow/a2a_calling`;
     const {
       readContextFiles,
       generateDefaultManifest,
-      saveManifest
+      saveManifest,
+      MANIFEST_FILE
     } = require('../src/lib/disclosure');
     const {
       normalizeHostInput,
@@ -1438,6 +1434,11 @@ https://github.com/onthegonow/a2a_calling`;
       ? `${parsedHost.hostname}:${parsedHost.port}`
       : `${parsedHost.hostname || 'localhost'}:${backendPort}`;
 
+    const hostnameSource = args.flags.hostname !== undefined ? '--hostname flag' : config.getAgent().hostname ? 'saved config' : 'default';
+    console.log(`\nHostname: ${inviteHost} (source: ${hostnameSource})`);
+    console.log(`Port: ${backendPort}`);
+    console.log('To override, rerun with: a2a quickstart --hostname YOUR_DOMAIN:PORT\n');
+
     // Step 2: seed draft from workspace context
     let manifest = generateDefaultManifest(contextFiles);
     let draft = makeDraft(manifest);
@@ -1519,15 +1520,17 @@ https://github.com/onthegonow/a2a_calling`;
 
       saveManifest(finalManifest);
       config.setOnboarding({ step: 'tiers', tiers_confirmed: true });
+      console.log('\nPermission tiers saved.');
+      console.log(`  Config: ${CONFIG_PATH}`);
+      console.log(`  Disclosure: ${MANIFEST_FILE}`);
+      console.log('  To customize topics later: run `a2a onboard`');
     } catch (err) {
       console.error('\n❌ Failed to save tier updates.');
       console.error(`   ${err.message}`);
       throw err;
     }
 
-    console.log('\n🚀 Starting A2A server...');
-    console.log(`Port: ${backendPort}`);
-    console.log(`Hostname: ${inviteHost}`);
+    console.log('\nStarting A2A server...');
 
     const started = await startServer(backendPort);
     const localRunning = await waitForLocalServer(backendPort);
@@ -1629,16 +1632,19 @@ https://github.com/onthegonow/a2a_calling`;
 
     config.completeOnboarding();
 
-    console.log('✅ A2A setup complete!\n');
-    console.log('Your agent is now:');
-    console.log(`  • Listening on ${inviteHost}`);
-    console.log('  • Ready to receive calls');
-    console.log(`  • Configured with ${Object.keys(finalManifest.topics).length} permission tiers`);
-    console.log('\nNext steps:');
-    console.log('  a2a invite friends    — Create a friends-tier invite');
-    console.log('  a2a contacts          — View your contacts');
-    console.log('  a2a gui               — Open the dashboard\n');
-    console.log('Happy calling! 🤝');
+    console.log('A2A setup complete.\n');
+    console.log(`Listening on ${inviteHost}`);
+    console.log(`Permission tiers: ${Object.keys(finalManifest.topics).join(', ')}`);
+    console.log(`Config: ${CONFIG_PATH}`);
+    console.log(`Disclosure: ${MANIFEST_FILE}`);
+    console.log('\nNext: run `a2a onboard` to customize disclosure topics for your permission tiers.');
+    console.log('  The onboard command will give you extraction instructions to read your workspace');
+    console.log('  files, structure topics by tier, and submit them for validation.');
+    console.log('');
+    console.log('Other commands:');
+    console.log('  a2a create --name "Name" --expires 7d  — Create a new invite');
+    console.log('  a2a list                               — List active tokens');
+    console.log('  a2a gui                                — Open the dashboard');
   },
 
   install: () => {
@@ -1924,9 +1930,13 @@ https://github.com/onthegonow/a2a_calling`;
       if (agentName) config.setAgent({ name: agentName });
       if (hostname) config.setAgent({ hostname });
 
-      console.log('\n\u2705 Disclosure manifest saved.');
-      console.log(`   Manifest: ${MANIFEST_FILE}`);
-      console.log('   Next: a2a quickstart\n');
+      console.log('\nDisclosure manifest saved.');
+      console.log(`  Manifest: ${MANIFEST_FILE}`);
+      if (config.isOnboarded()) {
+        console.log('\nDisclosure topics updated. Your agent will use these on the next inbound call.\n');
+      } else {
+        console.log('\nNext: run `a2a quickstart` to start the server and generate your first invite.\n');
+      }
       return;
     }
 
