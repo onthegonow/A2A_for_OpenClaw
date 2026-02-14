@@ -1103,8 +1103,8 @@ https://github.com/onthegonow/a2a_calling`;
     const ipResult = await getExternalIp();
     if (!ipResult.ip) {
       console.log('  Warning: Could not detect external IP address.');
-      console.log('  You will need to set your hostname manually:');
-      console.log(`    a2a onboard --hostname YOUR_IP${serverPort !== 80 ? ':' + serverPort : ''}\n`);
+      console.log('  Set your hostname via environment variable and re-run:');
+      console.log(`    A2A_HOSTNAME=YOUR_IP${serverPort !== 80 ? ':' + serverPort : ''} a2a quickstart --force\n`);
     }
     const externalIp = ipResult.ip || null;
     const publicHost = externalIp
