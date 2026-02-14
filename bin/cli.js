@@ -23,20 +23,26 @@ const { spawn } = require('child_process');
 const { TokenStore } = require('../src/lib/tokens');
 const { A2AClient } = require('../src/lib/client');
 
-const CONFIG_PATH = path.join(os.homedir(), '.config', 'openclaw', 'a2a-config.json');
+const CONFIG_DIR = process.env.A2A_CONFIG_DIR || process.env.OPENCLAW_CONFIG_DIR || path.join(os.homedir(), '.config', 'openclaw');
+const CONFIG_PATH = path.join(CONFIG_DIR, 'a2a-config.json');
 const ONBOARDING_EXEMPT = new Set([
   'quickstart',
   'help',
   'version',
   'update',
   'uninstall',
-  'onboard'
+  'onboard',
+  'gui',
+  'dashboard',
+  'server',
+  'setup',
+  'install'
 ]);
 
 function isOnboarded() {
   try {
     const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-    return config.onboarding?.step === 'complete';
+    return config.onboarding?.version === 2 && config.onboarding?.step === 'complete';
   } catch (err) {
     return false;
   }
@@ -96,8 +102,6 @@ function formatTimeAgo(date) {
 }
 
 function openInBrowser(url) {
-  const { spawn } = require('child_process');
-
   const platform = process.platform;
   let cmd = null;
   let args = [];
@@ -188,7 +192,6 @@ function parseArgs(argv) {
 }
 
 async function promptYesNo(question) {
-  const readline = require('readline');
   return await new Promise(resolve => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer) => {
@@ -1406,6 +1409,10 @@ https://github.com/onthegonow/a2a_calling`;
     }
 
     function looksLikePong(body) {
+      try {
+        const parsed = JSON.parse(String(body || ''));
+        if (parsed && parsed.pong === true) return true;
+      } catch (e) {}
       return String(body || '').includes('"pong":true') || String(body || '').includes('"pong": true');
     }
 
@@ -1476,8 +1483,6 @@ https://github.com/onthegonow/a2a_calling`;
       personality_notes: manifest.personality_notes || ''
     };
 
-    const finalManifestForStore = finalManifest;
-
     // Keep config in sync with the edited disclosure.
     try {
       config.setTier('public', {
@@ -1494,7 +1499,7 @@ https://github.com/onthegonow/a2a_calling`;
           ...finalManifest.topics.friends.discuss_freely,
           ...finalManifest.topics.friends.deflect
         ]),
-        disclosure: 'public'
+        disclosure: 'minimal'
       });
 
       config.setTier('family', {
@@ -1509,10 +1514,10 @@ https://github.com/onthegonow/a2a_calling`;
           ...finalManifest.topics.family.discuss_freely,
           ...finalManifest.topics.family.deflect
         ]),
-        disclosure: 'public'
+        disclosure: 'minimal'
       });
 
-      saveManifest(finalManifestForStore);
+      saveManifest(finalManifest);
       config.setOnboarding({ step: 'tiers', tiers_confirmed: true });
     } catch (err) {
       console.error('\n❌ Failed to save tier updates.');
@@ -1584,7 +1589,7 @@ https://github.com/onthegonow/a2a_calling`;
     const goalItems = ['grow-network', 'find-collaborators', 'build-in-public'];
 
     const ownerName = args.flags.owner || config.getAgent().name || readNameFromUserContext(contextFiles.user) || 'Someone';
-    const peerName = args.flags.name || 'bappybot';
+    const peerName = args.flags.name || 'my-agent';
 
     config.setAgent({ name: ownerName, hostname: inviteHost });
 
@@ -1658,7 +1663,10 @@ https://github.com/onthegonow/a2a_calling`;
 
     const configFile = path.join(configDir, 'a2a-config.json');
     const disclosureFile = path.join(configDir, 'a2a-disclosure.json');
+    const tokensFile = path.join(configDir, 'a2a-tokens.json');
     const dbFile = path.join(configDir, 'a2a-conversations.db');
+    const logsDbFile = path.join(configDir, 'a2a-logs.db');
+    const callbookDbFile = path.join(configDir, 'a2a-callbook.db');
 
     console.log(`\n🗑️  A2A Uninstall`);
     console.log('─────────────────\n');
@@ -1669,7 +1677,7 @@ https://github.com/onthegonow/a2a_calling`;
         process.exit(1);
       }
 
-      const existing = [configFile, disclosureFile, dbFile].filter(f => fs.existsSync(f));
+      const existing = [configFile, disclosureFile, tokensFile, dbFile, logsDbFile, callbookDbFile].filter(f => fs.existsSync(f));
       const list = existing.length ? existing.map(f => `  - ${f}`).join('\n') : '  (no local config/database files found)';
       const ok = await promptYesNo(
         `This will stop the pm2 process "a2a" and delete:\n${list}\nProceed? (y/N) `
@@ -1736,19 +1744,25 @@ https://github.com/onthegonow/a2a_calling`;
       process.stdout.write('Removing config... ');
       const c1 = rmFileSafe(configFile);
       const c2 = rmFileSafe(disclosureFile);
-      configOk = Boolean(c1.ok && c2.ok);
+      const c3 = rmFileSafe(tokensFile);
+      configOk = Boolean(c1.ok && c2.ok && c3.ok);
       console.log(configOk ? '✅' : '❌');
       if (!configOk) {
         if (!c1.ok) console.error(`  ${configFile}: ${c1.error}`);
         if (!c2.ok) console.error(`  ${disclosureFile}: ${c2.error}`);
+        if (!c3.ok) console.error(`  ${tokensFile}: ${c3.error}`);
       }
 
       process.stdout.write('Removing database... ');
       const d1 = rmFileSafe(dbFile);
-      dbOk = Boolean(d1.ok);
+      const d2 = rmFileSafe(logsDbFile);
+      const d3 = rmFileSafe(callbookDbFile);
+      dbOk = Boolean(d1.ok && d2.ok && d3.ok);
       console.log(dbOk ? '✅' : '❌');
       if (!dbOk) {
-        console.error(`  ${dbFile}: ${d1.error}`);
+        if (!d1.ok) console.error(`  ${dbFile}: ${d1.error}`);
+        if (!d2.ok) console.error(`  ${logsDbFile}: ${d2.error}`);
+        if (!d3.ok) console.error(`  ${callbookDbFile}: ${d3.error}`);
       }
 
       if (!configOk || !dbOk) {

@@ -74,24 +74,6 @@ function truncateAtWordBoundary(text, max = 60) {
   return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '...';
 }
 
-function extractFromSection(content, sectionNames) {
-  const source = normalizeTopic(content);
-  if (!source) return [];
-  const safeSectionNames = sectionNames.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const pattern = new RegExp(`##\\s*(?:${safeSectionNames.join('|')})[^\\n]*\\n([\\s\\S]*?)(?=\\n##|$)`, 'i');
-  const match = source.match(pattern);
-  if (!match) return [];
-
-  return match[1]
-    .split('\n')
-    .map(line => normalizeTopic(line))
-    .filter(line => line && (line.startsWith('-') || line.startsWith('*') || line.includes(' - ') || /[A-Za-z0-9]/.test(line)))
-    .map(line => line.replace(/^[\s*-]+/, ''))
-    .filter(Boolean)
-    .map(parseTopicLine)
-    .filter(topic => topic && isValidTopic(topic.topic));
-}
-
 /**
  * Load manifest from disk. Returns {} if not found.
  */

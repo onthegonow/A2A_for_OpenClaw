@@ -168,7 +168,7 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('generateDefaultManifest returns minimal starter regardless of context files', () => {
+  test('generateDefaultManifest returns minimal starter when no context files are provided', () => {
     const disc = freshDisclosure();
     const manifest = disc.generateDefaultManifest();
 
