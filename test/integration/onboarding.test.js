@@ -617,22 +617,26 @@ module.exports = function (test, assert, helpers) {
   });
 
   // ── Issue #23: Postinstall script test ──
-  test('postinstall prints setup instructions without launching quickstart', () => {
-    const { execFileSync } = require('child_process');
+  test('postinstall spawns quickstart or prints fallback when a2a not in PATH', () => {
+    const { spawnSync } = require('child_process');
     const path = require('path');
 
     const postinstallPath = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
 
-    // Simulate global install environment
-    const env = { ...process.env, npm_config_global: 'true' };
+    // Simulate global install with empty PATH so a2a binary cannot be found.
+    // The postinstall script uses stdio:'inherit' internally, but we run
+    // the script itself with piped output to capture what it prints.
+    const env = { ...process.env, npm_config_global: 'true', PATH: '/nonexistent' };
 
-    const out = execFileSync(process.execPath, [postinstallPath], {
+    const result = spawnSync(process.execPath, [postinstallPath], {
       env,
-      encoding: 'utf8'
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    assert.includes(out, 'a2a quickstart', 'Should tell user to run quickstart');
-    assert.includes(out, 'installed', 'Should confirm installation');
+    const output = (result.stdout || '') + (result.stderr || '');
+    assert.includes(output, 'a2a quickstart', 'Should tell user to run quickstart manually');
+    assert.equal(result.status, 0, 'Should exit 0 even when a2a is not found');
   });
 
   // ── Issue #23: Postinstall skips in CI ──
