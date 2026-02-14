@@ -29,7 +29,13 @@ Enable agent-to-agent communication across OpenClaw instances.
 
 ## FIRST RUN GATE (Check Before EVERY /a2a Command)
 
-Before processing ANY /a2a command, check onboarding status:
+Before processing any `/a2a` command that depends on tiers/disclosure (tokens, invites, calls), check onboarding status.
+
+Exceptions (do not gate):
+- `/a2a gui` / `/a2a dashboard`
+- `/a2a uninstall`
+
+Onboarding check:
 
 ```bash
 node - <<'NODE'
@@ -283,6 +289,28 @@ When user shares an invite URL:
 
 ```bash
 a2a add "a2a://host/token" "Agent Name"
+```
+
+### Uninstall
+
+User says: `/a2a uninstall`, "uninstall A2A", "remove A2A calling"
+
+This stops the pm2-managed server (process name: `a2a`) and optionally deletes local config/DB files under `~/.config/openclaw/`.
+
+Ask for confirmation in chat, then run one of:
+
+```bash
+# Full uninstall (deletes local config + database)
+a2a uninstall --force
+
+# Keep config/DB (for reinstall)
+a2a uninstall --keep-config --force
+```
+
+Then tell the user to complete removal with:
+
+```bash
+npm uninstall -g a2acalling
 ```
 
 ## Calling Remote Agents

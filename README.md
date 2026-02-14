@@ -59,6 +59,19 @@ npm install -g a2acalling
 npm install a2acalling
 ```
 
+### Uninstall
+
+```bash
+# Stop pm2 server (name: a2a) and remove local config/DB (prompts unless --force)
+a2a uninstall
+
+# Keep config/DB for reinstall
+a2a uninstall --keep-config --force
+
+# Remove the global package
+npm uninstall -g a2acalling
+```
+
 ### Setup (Auto-Detect Runtime)
 
 ```bash

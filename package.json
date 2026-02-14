@@ -8,6 +8,7 @@
     "a2acalling": "scripts/install-openclaw.js"
   },
   "scripts": {
+    "postinstall": "node scripts/postinstall.js",
     "start": "node src/server.js",
     "test": "node test/run.js"
   },

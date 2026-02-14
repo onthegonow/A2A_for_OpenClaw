@@ -12,10 +12,35 @@
  *   a2a ping <url>           Ping an invite URL
  *   a2a gui                  Open the local dashboard GUI in a browser
  *   a2a setup                Auto setup (gateway-aware dashboard install)
+ *   a2a uninstall            Stop server and remove local A2A config
  */
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const readline = require('readline');
+const { spawn } = require('child_process');
 const { TokenStore } = require('../src/lib/tokens');
 const { A2AClient } = require('../src/lib/client');
+
+const CONFIG_PATH = path.join(os.homedir(), '.config', 'openclaw', 'a2a-config.json');
+const ONBOARDING_EXEMPT = new Set([
+  'quickstart',
+  'help',
+  'version',
+  'update',
+  'uninstall',
+  'onboard'
+]);
+
+function isOnboarded() {
+  try {
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    return config.onboarding?.step === 'complete';
+  } catch (err) {
+    return false;
+  }
+}
 
 // Lazy load conversation store (requires better-sqlite3)
 let convStore = null;
@@ -40,20 +65,20 @@ function getConvStore() {
 
 const store = new TokenStore();
 
-// Check onboarding status — warns but does not block
-function checkOnboarding(commandName) {
-  try {
-    const { A2AConfig } = require('../src/lib/config');
-    const config = new A2AConfig();
-    if (!config.isOnboarded()) {
-      console.warn('\n\u26a0\ufe0f  A2A onboarding not complete.');
-      console.warn('   Run "a2a quickstart" to complete deterministic onboarding.');
-      console.warn('   Without onboarding, invites may use default topics/goals and remote dashboard access may not be configured.\n');
-      return false;
-    }
-    return true;
-  } catch (e) {
-    return true; // Don't block if config is broken
+function enforceOnboarding(command) {
+  if (ONBOARDING_EXEMPT.has(command)) {
+    return;
+  }
+
+  if (!isOnboarded()) {
+    console.log('\n⚠️  A2A not configured yet.');
+    console.log('');
+    console.log('Run this first:');
+    console.log('  a2a quickstart --hostname YOUR_DOMAIN:PORT');
+    console.log('');
+    console.log('Example:');
+    console.log('  a2a quickstart --hostname myserver.com:3001');
+    process.exit(1);
   }
 }
 
@@ -162,6 +187,18 @@ function parseArgs(argv) {
   return args;
 }
 
+async function promptYesNo(question) {
+  const readline = require('readline');
+  return await new Promise(resolve => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      const normalized = String(answer || '').trim().toLowerCase();
+      resolve(normalized === 'y' || normalized === 'yes');
+    });
+  });
+}
+
 async function resolveInviteHostname() {
   const { resolveInviteHost } = require('../src/lib/invite-host');
 
@@ -184,7 +221,6 @@ async function resolveInviteHostname() {
 // Commands
 const commands = {
   create: async (args) => {
-    checkOnboarding('create');
     // Parse max-calls: number, 'unlimited', or default (unlimited)
     let maxCalls = null; // Default: unlimited
     if (args.flags['max-calls']) {
@@ -753,7 +789,6 @@ https://github.com/onthegonow/a2a_calling`;
   },
 
   call: async (args) => {
-    checkOnboarding('call');
     let target = args._[1];
     const message = args._.slice(2).join(' ') || args.flags.message || args.flags.m;
 
@@ -902,497 +937,703 @@ https://github.com/onthegonow/a2a_calling`;
 
   quickstart: async (args) => {
     const http = require('http');
-    const https = require('https');
     const { A2AConfig } = require('../src/lib/config');
-    const disc = require('../src/lib/disclosure');
+    const { isPortListening } = require('../src/lib/port-scanner');
+    const {
+      readContextFiles,
+      generateDefaultManifest,
+      saveManifest
+    } = require('../src/lib/disclosure');
     const {
       normalizeHostInput,
       splitHostPort,
       isLocalOrUnroutableHost
     } = require('../src/lib/invite-host');
-    const { getExternalIp } = require('../src/lib/external-ip');
-    const { CallbookStore } = require('../src/lib/callbook');
-    const { isPortListening, tryBindPort } = require('../src/lib/port-scanner');
 
-    const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
     const config = new A2AConfig();
+    const workspaceDir = process.env.A2A_WORKSPACE || process.cwd();
 
     if (args.flags.force) {
       config.resetOnboarding();
     }
 
-    const backendPort = (() => {
-      const raw = args.flags.port || process.env.A2A_PORT || process.env.PORT || 3001;
-      const n = Number.parseInt(String(raw), 10);
-      return (Number.isFinite(n) && n > 0 && n <= 65535) ? n : 3001;
-    })();
-
-    function looksLikePong(body) {
-      try {
-        const parsed = JSON.parse(String(body || ''));
-        if (parsed && typeof parsed === 'object' && parsed.pong === true) return true;
-      } catch (err) {
-        // ignore
+    function parsePort(raw, fallback) {
+      const parsed = Number.parseInt(String(raw || '').trim(), 10);
+      if (Number.isFinite(parsed) && parsed > 0 && parsed <= 65535) {
+        return parsed;
       }
-      return String(body || '').includes('"pong":true') || String(body || '').includes('"pong": true');
+      return fallback;
     }
 
-    function fetchUrlText(url, timeoutMs = 5000) {
-      return new Promise((resolve, reject) => {
-        let parsed;
-        try {
-          parsed = new URL(url);
-        } catch (err) {
-          reject(new Error('invalid_url'));
-          return;
+    function uniqueNonEmpty(values, limit = 80) {
+      const normalizeValue = (value) => {
+        if (typeof value === 'string') {
+          return String(value || '').trim();
         }
-        const client = parsed.protocol === 'https:' ? https : http;
-        const req = client.request({
-          protocol: parsed.protocol,
-          hostname: parsed.hostname,
-          port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
-          method: 'GET',
-          path: parsed.pathname + parsed.search,
-          headers: {
-            'User-Agent': `a2acalling/${process.env.npm_package_version || 'dev'} (quickstart)`
-          },
-          timeout: timeoutMs
-        }, (res) => {
-          let data = '';
-          res.setEncoding('utf8');
-          res.on('data', (chunk) => {
-            data += chunk;
-            if (data.length > 1024 * 256) {
-              req.destroy(new Error('response_too_large'));
-            }
-          });
-          res.on('end', () => resolve({ statusCode: res.statusCode || 0, body: data }));
-        });
-        req.on('error', reject);
-        req.on('timeout', () => req.destroy(new Error('timeout')));
-        req.end();
-      });
-    }
-
-	    async function probeLocalPing(port, timeoutMs = 1000) {
-	      try {
-	        const res = await fetchUrlText(`http://127.0.0.1:${port}/api/a2a/ping`, timeoutMs);
-	        return { ok: looksLikePong(res.body), statusCode: res.statusCode, body: res.body };
-	      } catch (err) {
-	        return { ok: false, error: err && err.message ? err.message : 'request_failed' };
-	      }
-	    }
-
-	    async function externalPingCheck(targetUrl) {
-	      // Try direct access first. In practice this is the most reliable signal:
-	      // it avoids flaky third-party proxies and catches obvious scheme/port mistakes.
-	      try {
-	        const direct = await fetchUrlText(targetUrl, 2500);
-	        return { ok: looksLikePong(direct.body), provider: 'direct', statusCode: direct.statusCode };
-	      } catch (err) {
-	        // Fall back to remote fetch providers below.
-	      }
-
-	      const providers = [
-	        {
-	          name: 'allorigins',
-	          buildUrl: () => {
-	            const u = new URL('https://api.allorigins.win/raw');
-            u.searchParams.set('url', targetUrl);
-            return u.toString();
-          }
-        },
-        {
-          name: 'jina',
-          buildUrl: () => `https://r.jina.ai/${targetUrl}`
+        if (value && typeof value === 'object' && !Array.isArray(value) && 'topic' in value) {
+          return String(value.topic || '').trim();
         }
-      ];
+        return '';
+      };
 
-      for (const provider of providers) {
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          const res = await fetchUrlText(provider.buildUrl(), 8000);
-          if (looksLikePong(res.body)) {
-            return { ok: true, provider: provider.name, statusCode: res.statusCode };
-          }
-        } catch (err) {
-          // try next
-        }
-      }
-      return { ok: false };
-    }
-
-    function slugify(value) {
-      return String(value || '')
-        .toLowerCase()
-        .replace(/['"]/g, '')
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 60);
-    }
-
-    function uniqueNonEmpty(items, limit = 24) {
       const out = [];
       const seen = new Set();
-      for (const raw of items) {
-        const s = String(raw || '').trim();
-        if (!s) continue;
-        if (seen.has(s)) continue;
-        seen.add(s);
-        out.push(s);
+      for (const value of values) {
+        const text = normalizeValue(value);
+        if (!text) continue;
+        const key = text.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(text);
         if (out.length >= limit) break;
       }
       return out;
     }
 
-    function extractSectionBullets(markdown, headingRegex) {
-      const text = String(markdown || '');
-      const match = text.match(new RegExp(`##\\s*(?:${headingRegex})[^\\n]*\\n([\\s\\S]*?)(?=\\n##|$)`, 'i'));
-      if (!match) return [];
-      return match[1]
-        .split('\n')
-        .map(l => l.trim())
-        .filter(l => l.startsWith('-') || l.startsWith('*'))
-        .map(l => l.replace(/^[\\s\\-\\*]+/, '').trim())
-        .filter(Boolean);
-    }
-
-    function tierFromManifest(manifest, tier, fallback = []) {
-      const t = (manifest && manifest.topics && manifest.topics[tier]) ? manifest.topics[tier] : null;
-      if (!t) return fallback;
-      const items = []
-        .concat(Array.isArray(t.lead_with) ? t.lead_with : [])
-        .concat(Array.isArray(t.discuss_freely) ? t.discuss_freely : [])
-        .concat(Array.isArray(t.deflect) ? t.deflect : []);
-      const topics = items.map(x => (x && x.topic) ? x.topic : '').filter(Boolean);
-      return topics.length ? topics : fallback;
-    }
-
-    function buildTierRecommendations(contextFiles, manifest) {
-      const publicFallback = ['chat', 'openclaw', 'a2a'];
-      const friendsFallback = ['chat', 'search', 'openclaw', 'a2a'];
-      const familyFallback = ['chat', 'search', 'openclaw', 'a2a', 'tools', 'memory'];
-
-      const rawPublic = tierFromManifest(manifest, 'public', publicFallback);
-      const rawFriends = tierFromManifest(manifest, 'friends', friendsFallback);
-      const rawFamily = tierFromManifest(manifest, 'family', familyFallback);
-
-      const goalsFromUser = extractSectionBullets(contextFiles.user, 'Goals|Current|Seeking|Working On');
-      const baseGoals = goalsFromUser.length
-        ? goalsFromUser
-        : ['grow network', 'find collaborators', 'build in public'];
-
-      const publicTopics = uniqueNonEmpty(rawPublic.map(slugify).filter(Boolean), 16);
-      const friendsTopics = uniqueNonEmpty(rawFriends.map(slugify).filter(Boolean), 20);
-      const familyTopics = uniqueNonEmpty(rawFamily.map(slugify).filter(Boolean), 24);
-
-      const goals = uniqueNonEmpty(baseGoals.map(slugify).filter(Boolean), 12);
-
+    function normalizeTopicRecord(raw) {
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        return {
+          topic: String(raw.topic || '').trim(),
+          detail: String(raw.detail || '').trim()
+        };
+      }
       return {
-        public: { topics: publicTopics, goals: goals.slice(0, 6) },
-        friends: { topics: uniqueNonEmpty([...publicTopics, ...friendsTopics], 24), goals: goals.slice(0, 8) },
-        family: { topics: uniqueNonEmpty([...publicTopics, ...friendsTopics, ...familyTopics], 30), goals }
+        topic: String(raw || '').trim(),
+        detail: ''
       };
     }
 
-    function printTierSummary(tiers) {
-      const format = (t) => {
-        const topics = (t.topics || []).join(' · ') || '(none)';
-        const goals = (t.goals || []).join(' · ') || '(none)';
-        return `Topics: ${topics}\nGoals:  ${goals}`;
+    function uniqueTopicRecords(values, limit = 80) {
+      const out = [];
+      const seen = new Set();
+      for (const value of values) {
+        const item = normalizeTopicRecord(value);
+        if (!item.topic) continue;
+        const key = item.topic.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(item);
+        if (out.length >= limit) break;
+      }
+      return out;
+    }
+
+    function sanitizeSectionItems(values, limit = 80) {
+      return uniqueTopicRecords(values, limit).map(item => ({
+        topic: item.topic,
+        detail: item.detail || ''
+      }));
+    }
+
+    function cloneDraft(draft = {}) {
+      return JSON.parse(JSON.stringify(draft));
+    }
+
+    function makeDraft(manifest) {
+      const src = (manifest && manifest.topics) ? manifest.topics : {};
+      return {
+        public: {
+          lead_with: sanitizeSectionItems((src.public && src.public.lead_with) || [], 60),
+          discuss_freely: sanitizeSectionItems((src.public && src.public.discuss_freely) || [], 60),
+          deflect: sanitizeSectionItems((src.public && src.public.deflect) || [], 60)
+        },
+        friends: {
+          lead_with: sanitizeSectionItems((src.friends && src.friends.lead_with) || [], 60),
+          discuss_freely: sanitizeSectionItems((src.friends && src.friends.discuss_freely) || [], 60),
+          deflect: sanitizeSectionItems((src.friends && src.friends.deflect) || [], 60)
+        },
+        family: {
+          lead_with: sanitizeSectionItems((src.family && src.family.lead_with) || [], 60),
+          discuss_freely: sanitizeSectionItems((src.family && src.family.discuss_freely) || [], 60),
+          deflect: sanitizeSectionItems((src.family && src.family.deflect) || [], 60)
+        }
       };
-      console.log('\nProposed permission tiers:\n');
-      console.log('PUBLIC');
-      console.log(format(tiers.public));
-      console.log('\nFRIENDS');
-      console.log(format(tiers.friends));
-      console.log('\nFAMILY');
-      console.log(format(tiers.family));
+    }
+
+    function summarizeLine(content, maxLen = 60) {
+      const text = String(content || '').split('\n').map((line) => line.trim()).find((line) => {
+        return line && !line.startsWith('#') && !line.startsWith('---') && line.length <= 220;
+      });
+      if (!text) {
+        return 'found';
+      }
+      return text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
+    }
+
+    function countMemoryDocs(root) {
+      try {
+        const dir = path.join(root, 'memory');
+        if (!fs.existsSync(dir)) return 0;
+        return fs.readdirSync(dir).filter(name => name.endsWith('.md')).length;
+      } catch (err) {
+        return 0;
+      }
+    }
+
+    function renderWorkspaceScan(contextFiles) {
+      const memoryCount = countMemoryDocs(workspaceDir);
+      console.log('\n🔍 Scanning workspace for context...\n');
+      console.log('Found:');
+      const rows = [
+        { label: 'USER.md', found: Boolean(contextFiles.user), note: summarizeLine(contextFiles.user, 72) },
+        { label: 'SOUL.md', found: Boolean(contextFiles.soul), note: summarizeLine(contextFiles.soul, 72) },
+        { label: 'HEARTBEAT.md', found: Boolean(contextFiles.heartbeat), note: 'contains agent tasks, not disclosure topics' },
+        { label: 'SKILL.md', found: Boolean(contextFiles.skill), note: null },
+        { label: 'memory/*.md', found: memoryCount > 0, note: `${memoryCount} file${memoryCount === 1 ? '' : 's'}` }
+      ];
+
+      for (const row of rows) {
+        const check = row.found ? '✅' : '❌';
+        const note = row.found && row.note ? ` — ${row.note}` : '';
+        const skip = row.label === 'HEARTBEAT.md' && row.found ? ' (skipped)' : '';
+        console.log(`  ${check} ${row.label}${skip}${note}`);
+      }
       console.log('');
     }
 
-    // ── Step 1: Background bootstrap (config + manifest) ─────────
-    let contextFiles = {};
-    let manifest = {};
-	    try {
-	      contextFiles = disc.readContextFiles(workspaceDir);
-	      const forceManifest = Boolean(args.flags.force || args.flags['regen-manifest'] || args.flags.regenManifest);
-	      if (forceManifest) {
-	        // Force-regen uses minimal starter; agent-driven extraction is the
-	        // proper way to populate topics (via `a2a onboard --submit`).
-	        const generated = disc.generateDefaultManifest();
-	        disc.saveManifest(generated);
-	        manifest = generated;
-	      } else {
-	        manifest = disc.loadManifest();
-	        if (!manifest || Object.keys(manifest).length === 0) {
-	          const generated = disc.generateDefaultManifest();
-	          disc.saveManifest(generated);
-	          manifest = generated;
-	        }
-	      }
-	    } catch (err) {
-	      // Non-fatal: onboarding can proceed even if manifest fails.
-	      contextFiles = {};
-	      manifest = {};
-	    }
-
-    console.log('\nA2A deterministic onboarding');
-    console.log('──────────────────────────');
-
-    // ── Step 2: Owner dashboard access (local + optional remote) ─
-    config.setOnboarding({ step: 'access' });
-
-    const hostnameFlagRaw = args.flags.hostname !== undefined ? String(args.flags.hostname) : '';
-    const normalizedHostname = normalizeHostInput(hostnameFlagRaw);
-
-    // Invite host controls the a2a:// hostname we hand out (and remote dashboard pairing URL).
-    let inviteHost = '';
-    if (normalizedHostname) {
-      const parsed = splitHostPort(normalizedHostname);
-      const publicPortRaw = args.flags['public-port'] || args.flags.publicPort || process.env.A2A_PUBLIC_PORT || 443;
-      const publicPort = Number.parseInt(String(publicPortRaw), 10);
-      inviteHost = parsed.port
-        ? normalizedHostname
-        : `${parsed.hostname}:${(Number.isFinite(publicPort) && publicPort > 0 && publicPort <= 65535) ? publicPort : 443}`;
-      config.setAgent({ hostname: inviteHost });
-    } else {
-      const existing = normalizeHostInput((config.getAgent() || {}).hostname || '');
-      inviteHost = existing || `localhost:${backendPort}`;
-      if (!existing) {
-        config.setAgent({ hostname: inviteHost });
-      }
+    function sectionLabel(sectionName) {
+      if (sectionName === 'lead_with') return 'Lead with';
+      if (sectionName === 'discuss_freely') return 'Discuss freely';
+      return 'Deflect';
     }
 
-    const inviteParsed = splitHostPort(inviteHost);
-    const invitePort = inviteParsed.port;
-    const schemeOverride = String(process.env.A2A_PUBLIC_SCHEME || '').trim();
-    const inviteScheme = schemeOverride || ((!invitePort || invitePort === 443) ? 'https' : 'http');
-    const expectedPingUrl = `${inviteScheme}://${inviteHost}/api/a2a/ping`;
-    const inviteLooksLocal = isLocalOrUnroutableHost(inviteParsed.hostname);
+    function flattenDraft(draft) {
+      const flat = [];
+      let index = 1;
+      ['public', 'friends', 'family'].forEach((tier) => {
+        ['lead_with', 'discuss_freely', 'deflect'].forEach((section) => {
+          (draft[tier][section] || []).forEach((item, itemIndex) => {
+            flat.push({
+              index,
+              tier,
+              section,
+              item,
+              itemIndex,
+              list: draft[tier][section]
+            });
+            index += 1;
+          });
+        });
+      });
+      return flat;
+    }
 
-    console.log('\n2️⃣  Owner dashboard access');
-    console.log(`Local dashboard: http://127.0.0.1:${backendPort}/dashboard/`);
-    console.log(`Invite host:      ${inviteHost}`);
+    function renderDraft(draft, neverDisclose) {
+      console.log('\n📋 Proposed Permission Tiers');
+      console.log('═'.repeat(60));
 
-    if (inviteLooksLocal) {
-      console.log('Remote dashboard: not configured (invite host looks local/unroutable)');
-      console.log('  To enable remote access, rerun with: --hostname YOUR_DOMAIN:443');
-    } else {
-      const callbookStore = new CallbookStore();
-      if (!callbookStore.isAvailable()) {
-        console.log('Remote dashboard: Callbook Remote not available (storage unavailable)');
-        console.log(`  Hint: ${callbookStore.getDbError ? callbookStore.getDbError() : 'storage_unavailable'}`);
-      } else {
-        const label = String(args.flags['device-label'] || args.flags.deviceLabel || 'Callbook Remote').trim().slice(0, 120);
-        const ttlHoursRaw = args.flags['callbook-ttl-hours'] || args.flags.callbookTtlHours || 24;
-        const ttlHours = Math.max(1, Math.min(168, Number.parseInt(String(ttlHoursRaw), 10) || 24));
-        const created = callbookStore.createProvisionCode({ label, ttlMs: ttlHours * 60 * 60 * 1000 });
-        if (created && created.success) {
-          const installUrl = `${inviteScheme}://${inviteHost}/callbook/install#code=${created.code}`;
-          console.log(`Remote dashboard: ${installUrl}  (one-time, ${ttlHours}h)`);
-        } else {
-          console.log('Remote dashboard: failed to create install link');
-          console.log(`  Hint: ${created && created.message ? created.message : (created && created.error ? created.error : 'unknown_error')}`);
+      let index = 1;
+      const titleByTier = {
+        public: 'PUBLIC (anyone can see):',
+        friends: 'FRIENDS (trusted contacts):',
+        family: 'FAMILY (inner circle):'
+      };
+
+      ['public', 'friends', 'family'].forEach((tier) => {
+        console.log(`\n${titleByTier[tier]}`);
+        ['lead_with', 'discuss_freely', 'deflect'].forEach((section) => {
+          console.log(`  ${sectionLabel(section)}:`);
+          const list = draft[tier][section] || [];
+          if (list.length === 0) {
+            console.log('    (none)');
+            return;
+          }
+          list.forEach((item) => {
+            const detail = item.detail ? ` — ${item.detail}` : '';
+            console.log(`    ${index}. ${item.topic}${detail}`);
+            index += 1;
+          });
+        });
+      });
+
+      console.log('\nNEVER DISCLOSE:');
+      const staticNever = (neverDisclose || ['API keys', 'Other users\' data', 'Financial figures']);
+      staticNever.forEach((item) => console.log(`  • ${item}`));
+      console.log('═'.repeat(60));
+      return flattenDraft(draft);
+    }
+
+    function parseSections(target) {
+      if (!target) return null;
+      const [tierRaw, sectionRaw] = String(target).toLowerCase().split('.');
+      if (!tierRaw || !sectionRaw) return null;
+      if (!['public', 'friends', 'family'].includes(tierRaw)) return null;
+
+      const section = {
+        lead: 'lead_with',
+        lead_with: 'lead_with',
+        discuss: 'discuss_freely',
+        discuss_freely: 'discuss_freely',
+        deflect: 'deflect'
+      }[sectionRaw];
+
+      if (!section) return null;
+      return { tier: tierRaw, section };
+    }
+
+    function splitCommand(input) {
+      const raw = String(input || '').trim();
+      if (!raw) return [];
+      const match = raw.match(/"([^"]*)"|'([^']*)'|`([^`]*)`|\S+/g);
+      if (!match) return [];
+      return match.map((token) => {
+        if ((token.startsWith('"') && token.endsWith('"')) ||
+            (token.startsWith("'") && token.endsWith("'")) ||
+            (token.startsWith('`') && token.endsWith('`'))) {
+          return token.slice(1, -1);
+        }
+        return token;
+      });
+    }
+
+    function findByIndex(draft, index) {
+      const target = flattenDraft(draft).find(item => item.index === index);
+      return target || null;
+    }
+
+    function readNameFromUserContext(content) {
+      const lines = String(content || '').split('\n');
+      for (const line of lines) {
+        const trimmed = String(line || '').trim();
+        if (!trimmed) continue;
+
+        const nameMatch = trimmed.match(/^\*{0,2}Name:\*{0,2}\s*(.+)$/i);
+        if (nameMatch && nameMatch[1]) {
+          return String(nameMatch[1]).trim();
+        }
+
+        if (/^(owner|ownername):/i.test(trimmed)) {
+          const ownerMatch = trimmed.replace(/^[^:]+:\s*/, '');
+          if (ownerMatch) return ownerMatch.trim();
+        }
+
+        if (trimmed.startsWith('-') || trimmed.startsWith('*') || trimmed.startsWith('#')) {
+          continue;
+        }
+
+        if (/^[A-Za-z][\w\-,.\s]{2,}$/i.test(trimmed)) {
+          const candidate = trimmed.split('|')[0].split('\t')[0].trim();
+          if (candidate && candidate.length <= 80) {
+            return candidate;
+          }
         }
       }
+      return '';
     }
 
-	    // ── Step 3: Permission tiers (topics + goals) ───────────────
-	    const onboardingAfterAccess = config.getOnboarding();
-	    if (!onboardingAfterAccess.tiers_confirmed) {
-	      const recommendations = buildTierRecommendations(contextFiles, manifest);
+    function flattenTopicStrings(section) {
+      return uniqueNonEmpty((section || []).map(item => String(item && item.topic || '').trim()), 200)
+        .filter(Boolean);
+    }
 
-	      const parseFreeTextList = (raw) => {
-	        if (raw === undefined || raw === null || raw === true) return [];
-	        const text = String(raw || '').trim();
-	        if (!text) return [];
-	        return text
-	          .split(/[\n,]+/g)
-	          .map(s => s.trim())
-	          .filter(Boolean);
-	      };
+    async function editLoop(draft, neverDisclose, reloadManifest) {
+      const shouldPrompt = process.stdin.isTTY && process.stdout.isTTY;
+      if (!shouldPrompt) {
+        console.log('\n⏩ Non-interactive shell detected. Proceeding with proposed topics.');
+        renderDraft(draft, neverDisclose);
+        return draft;
+      }
 
-	      const promptLine = async (question) => {
-	        const readline = require('readline');
-	        return await new Promise(resolve => {
-	          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-	          rl.question(question, (answer) => {
-	            rl.close();
-	            resolve(String(answer || '').trim());
-	          });
-	        });
-	      };
+      console.log('\nEdit commands:');
+      console.log('  move N to TIER.SECTION     — Move topic #N to a section');
+      console.log('  remove N                   — Remove topic #N');
+      console.log('  add TIER.SECTION "Topic" "Detail"  — Add a topic');
+      console.log('  edit N topic "new"         — Edit topic #N label');
+      console.log('  edit N detail "new"        — Edit topic #N detail');
+      console.log('  reset                      — Rescan workspace and regenerate');
+      console.log('  done                       — Save and continue\n');
 
-	      // Optional owner override: Friends tier topics/interests (most important tier).
-	      const interactive = Boolean(
-	        args.flags.interactive ||
-	        args.flags['ask-friends-topics'] ||
-	        args.flags.askFriendsTopics
-	      );
-	      let friendsTopicsOverride = parseFreeTextList(args.flags['friends-topics'] || args.flags.friendsTopics);
-	      const noWorkspaceContext = !contextFiles.user && !contextFiles.heartbeat && !contextFiles.soul &&
-	        !contextFiles.memory && !contextFiles.claude;
-	      const shouldPromptFriendsTopics = (interactive || noWorkspaceContext) &&
-	        friendsTopicsOverride.length === 0 &&
-	        process.stdin.isTTY &&
-	        process.stdout.isTTY;
-	      if (shouldPromptFriendsTopics) {
-	        const suggested = (recommendations.friends.topics || []).slice(0, 12).join(', ');
-	        const answer = await promptLine(`Friends-tier topics/interests (comma-separated).\nSuggested: ${suggested}\n> `);
-	        friendsTopicsOverride = parseFreeTextList(answer);
-	      }
+      let done = false;
+      renderDraft(draft, neverDisclose);
 
-	      if (friendsTopicsOverride.length > 0) {
-	        const normalized = uniqueNonEmpty(friendsTopicsOverride.map(slugify).filter(Boolean), 24);
-	        recommendations.friends.topics = uniqueNonEmpty(
-	          [...(recommendations.public.topics || []), ...normalized],
-	          24
-	        );
-	        recommendations.family.topics = uniqueNonEmpty(
-	          [...(recommendations.friends.topics || []), ...(recommendations.family.topics || [])],
-	          30
-	        );
-	      }
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      return await new Promise((resolve) => {
+        const finish = () => {
+          if (!done) {
+            done = true;
+            resolve(draft);
+          }
+        };
 
-	      try {
-	        config.setTier('public', recommendations.public);
-	        config.setTier('friends', recommendations.friends);
-	        config.setTier('family', recommendations.family);
-	      } catch (err) {
-	        console.error('\n❌ Tier configuration validation failed.');
-	        console.error(`   ${err.message}`);
-	        if (err.hint) {
-	          console.error(`   Hint: ${err.hint}`);
-	        }
-	        console.error('');
-	        process.exit(1);
-	      }
+        const prompt = () => {
+          rl.question('Your choice: ', (answer) => {
+            const parts = splitCommand(answer);
+            const command = String(parts[0] || '').toLowerCase();
+            if (!parts.length) {
+              renderDraft(draft, neverDisclose);
+              return prompt();
+            }
 
-	      printTierSummary(recommendations);
+            if (command === 'done') {
+              rl.close();
+              return finish();
+            }
 
-	      config.setOnboarding({
-	        step: 'tiers',
-	        tiers_confirmed: true
-	      });
-	    }
+            if (command === 'reset') {
+              draft = cloneDraft(reloadManifest());
+              renderDraft(draft, neverDisclose);
+              return prompt();
+            }
 
-    // ── Step 4: Port scan + reverse proxy guidance (if needed) ──
-    console.log('\n4️⃣  Port scan + reverse proxy');
-    console.log(`Invite host: ${inviteHost}`);
-    console.log(`Expected ping URL: ${expectedPingUrl}\n`);
+            if (command === 'remove') {
+              const target = findByIndex(draft, Number.parseInt(parts[1], 10));
+              if (!target) {
+                console.log(`Could not find topic #${parts[1]}.`);
+              } else {
+                target.list.splice(target.itemIndex, 1);
+                console.log(`Removed topic #${parts[1]}.`);
+              }
+              renderDraft(draft, neverDisclose);
+              return prompt();
+            }
 
-    const expectsReverseProxy = Boolean(
-      (invitePort === 80 && backendPort !== 80) ||
-      ((!invitePort || invitePort === 443) && backendPort !== 443)
+            if (command === 'move') {
+              const target = findByIndex(draft, Number.parseInt(parts[1], 10));
+              const destination = parseSections(parts[2] === 'to' ? parts[3] : parts[2]);
+              if (!target) {
+                console.log(`Could not find topic #${parts[1]}.`);
+              } else if (!destination) {
+                console.log('Invalid target. Use format: move N to friends.lead');
+              } else {
+                target.list.splice(target.itemIndex, 1);
+                draft[destination.tier][destination.section].push(target.item);
+                console.log(`Moved topic #${parts[1]} to ${destination.tier}.${destination.section}`);
+              }
+              renderDraft(draft, neverDisclose);
+              return prompt();
+            }
+
+            if (command === 'add') {
+              const destination = parseSections(parts[1]);
+              const topic = parts[2];
+              const detail = parts[3] || '';
+              if (!destination || !topic) {
+                console.log('Add format: add TIER.SECTION "Topic" "Detail"');
+              } else {
+                draft[destination.tier][destination.section].push({ topic, detail });
+                console.log(`Added topic to ${destination.tier}.${destination.section}.`);
+              }
+              renderDraft(draft, neverDisclose);
+              return prompt();
+            }
+
+            if (command === 'edit') {
+              const target = findByIndex(draft, Number.parseInt(parts[1], 10));
+              const field = String(parts[2] || '').toLowerCase();
+              const value = parts[3] || '';
+              if (!target || !field || !['topic', 'detail'].includes(field)) {
+                console.log('Edit format: edit N topic "new" | edit N detail "new"');
+              } else {
+                target.item[field] = value;
+                console.log(`Updated topic #${parts[1]} ${field}.`);
+              }
+              renderDraft(draft, neverDisclose);
+              return prompt();
+            }
+
+            console.log('Unknown command.');
+            renderDraft(draft, neverDisclose);
+            return prompt();
+          });
+        };
+
+        rl.on('close', finish);
+        prompt();
+      });
+    }
+
+    async function probePing(port) {
+      return await new Promise((resolve) => {
+        const req = http.request({
+          hostname: '127.0.0.1',
+          port,
+          path: '/api/a2a/ping',
+          method: 'GET',
+          timeout: 1200
+        }, (res) => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', chunk => { body += String(chunk || ''); });
+          res.on('end', () => {
+            const ok = body.includes('"pong":true') || body.includes('"pong": true');
+            resolve({ ok, statusCode: res.statusCode || 0, body });
+          });
+        });
+        req.on('error', () => resolve({ ok: false }));
+        req.on('timeout', () => {
+          req.destroy(new Error('timeout'));
+          resolve({ ok: false });
+        });
+        req.end();
+      });
+    }
+
+    async function waitForLocalServer(port) {
+      for (let i = 0; i < 18; i++) {
+        const listening = await isPortListening(port, '127.0.0.1', { timeoutMs: 250 });
+        if (!listening.listening) {
+          await new Promise(r => setTimeout(r, 250));
+          continue;
+        }
+
+        const probe = await probePing(port);
+        if (probe.ok) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    async function startServer(port) {
+      const listening = await isPortListening(port, '127.0.0.1', { timeoutMs: 250 });
+      if (listening.listening) {
+        return false;
+      }
+
+      const serverScript = path.join(__dirname, '../src/server.js');
+      const child = spawn(process.execPath, [serverScript], {
+        env: {
+          ...process.env,
+          PORT: String(port),
+          A2A_WORKSPACE: workspaceDir
+        },
+        detached: true,
+        stdio: 'ignore'
+      });
+      child.unref();
+      await new Promise(r => setTimeout(r, 300));
+      return true;
+    }
+
+    function looksLikePong(body) {
+      return String(body || '').includes('"pong":true') || String(body || '').includes('"pong": true');
+    }
+
+    // Step 1: discover context
+    const contextFiles = (() => {
+      try {
+        return readContextFiles(workspaceDir);
+      } catch (err) {
+        return {};
+      }
+    })();
+
+    renderWorkspaceScan(contextFiles);
+
+    const backendPort = parsePort(args.flags.port || args.flags.p || process.env.A2A_PORT || process.env.PORT, 3001);
+    const hostFlag = normalizeHostInput(
+      args.flags.hostname !== undefined
+        ? String(args.flags.hostname)
+        : (config.getAgent().hostname || `localhost:${backendPort}`)
     );
+    const parsedHost = splitHostPort(hostFlag || `localhost:${backendPort}`);
+    const inviteHost = parsedHost.port
+      ? `${parsedHost.hostname}:${parsedHost.port}`
+      : `${parsedHost.hostname || 'localhost'}:${backendPort}`;
 
-    if (expectsReverseProxy) {
-      const port80Listening = await isPortListening(80, '127.0.0.1', { timeoutMs: 500 });
-      const port80Bind = await tryBindPort(80, '0.0.0.0');
-      const port80Ping = port80Listening.listening ? await probeLocalPing(80) : { ok: false };
+    // Step 2: seed draft from workspace context
+    let manifest = generateDefaultManifest(contextFiles);
+    let draft = makeDraft(manifest);
+    const neverDisclose = uniqueNonEmpty(manifest.never_disclose || [
+      'API keys',
+      'Other users\' data',
+      'Financial figures'
+    ], 30);
 
-      console.log('Port 80:');
-      if (port80Ping.ok) {
-        console.log('  ✅ serves /api/a2a/ping (A2A detected on :80)');
-      } else if (port80Listening.listening) {
-        console.log(`  ⚠️  has a listener (${port80Listening.code || 'in_use'})`);
-      } else if (!port80Bind.ok && port80Bind.code === 'EACCES') {
-        console.log('  ⚠️  appears free but is not bindable by this user (EACCES)');
-      } else if (port80Bind.ok) {
-        console.log('  ✅ free and bindable by this user');
-      } else {
-        console.log(`  ⚠️  not bindable (${port80Bind.code || 'unknown'})`);
+    draft = await editLoop(draft, neverDisclose, () => {
+      try {
+        const refreshedContext = readContextFiles(workspaceDir);
+        const freshManifest = generateDefaultManifest(refreshedContext);
+        manifest = freshManifest;
+        return makeDraft(freshManifest);
+      } catch (err) {
+        return draft;
+      }
+    });
+
+    const finalManifest = {
+      version: 1,
+      generated_at: manifest.generated_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      topics: {
+        public: {
+          lead_with: sanitizeSectionItems(draft.public.lead_with, 80),
+          discuss_freely: sanitizeSectionItems(draft.public.discuss_freely, 80),
+          deflect: sanitizeSectionItems(draft.public.deflect, 80)
+        },
+        friends: {
+          lead_with: sanitizeSectionItems(draft.friends.lead_with, 80),
+          discuss_freely: sanitizeSectionItems(draft.friends.discuss_freely, 80),
+          deflect: sanitizeSectionItems(draft.friends.deflect, 80)
+        },
+        family: {
+          lead_with: sanitizeSectionItems(draft.family.lead_with, 80),
+          discuss_freely: sanitizeSectionItems(draft.family.discuss_freely, 80),
+          deflect: sanitizeSectionItems(draft.family.deflect, 80)
+        }
+      },
+      never_disclose: neverDisclose,
+      personality_notes: manifest.personality_notes || ''
+    };
+
+    const finalManifestForStore = finalManifest;
+
+    // Keep config in sync with the edited disclosure.
+    try {
+      config.setTier('public', {
+        topics: flattenTopicStrings([...finalManifest.topics.public.lead_with, ...finalManifest.topics.public.discuss_freely, ...finalManifest.topics.public.deflect]),
+        disclosure: 'public'
+      });
+
+      config.setTier('friends', {
+        topics: flattenTopicStrings([
+          ...finalManifest.topics.public.lead_with,
+          ...finalManifest.topics.public.discuss_freely,
+          ...finalManifest.topics.public.deflect,
+          ...finalManifest.topics.friends.lead_with,
+          ...finalManifest.topics.friends.discuss_freely,
+          ...finalManifest.topics.friends.deflect
+        ]),
+        disclosure: 'public'
+      });
+
+      config.setTier('family', {
+        topics: flattenTopicStrings([
+          ...finalManifest.topics.public.lead_with,
+          ...finalManifest.topics.public.discuss_freely,
+          ...finalManifest.topics.public.deflect,
+          ...finalManifest.topics.friends.lead_with,
+          ...finalManifest.topics.friends.discuss_freely,
+          ...finalManifest.topics.friends.deflect,
+          ...finalManifest.topics.family.lead_with,
+          ...finalManifest.topics.family.discuss_freely,
+          ...finalManifest.topics.family.deflect
+        ]),
+        disclosure: 'public'
+      });
+
+      saveManifest(finalManifestForStore);
+      config.setOnboarding({ step: 'tiers', tiers_confirmed: true });
+    } catch (err) {
+      console.error('\n❌ Failed to save tier updates.');
+      console.error(`   ${err.message}`);
+      throw err;
+    }
+
+    console.log('\n🚀 Starting A2A server...');
+    console.log(`Port: ${backendPort}`);
+    console.log(`Hostname: ${inviteHost}`);
+
+    const started = await startServer(backendPort);
+    const localRunning = await waitForLocalServer(backendPort);
+    if (!localRunning) {
+      console.log('⚠️  Local server not reachable. Start it manually and retry if needed:');
+      console.log(`  A2A_HOSTNAME="${inviteHost}" a2a server --port ${backendPort}`);
+    } else {
+      console.log('✅ Server running!');
+      if (started) {
+        console.log('🟢 Local server started automatically.');
+      }
+    }
+
+    const dashboard = `http://127.0.0.1:${backendPort}/dashboard/`;
+
+    const hostSplit = splitHostPort(inviteHost);
+    const isPrivateHost = isLocalOrUnroutableHost(hostSplit.hostname);
+    const expectedPingUrl = `${isPrivateHost ? 'http' : (hostSplit.port === 443 ? 'https' : 'http')}://${inviteHost}/api/a2a/ping`;
+
+    if (isPrivateHost) {
+      console.log('✅ External ping OK (local testing host)');
+    } else {
+      const external = await new Promise(resolve => {
+        const req = http.get(expectedPingUrl, (res) => {
+          let body = '';
+          res.setEncoding('utf8');
+          res.on('data', chunk => { body += chunk; });
+          res.on('end', () => {
+            resolve({ ok: looksLikePong(body), statusCode: res.statusCode || 0, body });
+          });
+        });
+        req.on('error', () => resolve({ ok: false }));
+        req.setTimeout(1500, () => {
+          req.destroy(new Error('timeout'));
+          resolve({ ok: false });
+        });
+      });
+
+      if (!external.ok && !args.flags['confirm-ingress'] && !args.flags['skip-verify']) {
+        console.log('⚠️  External ping FAILED. Fix host/reachability and rerun quickstart, or use --skip-verify.');
+        console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --skip-verify`);
+        return;
       }
 
-      console.log('\nReverse proxy required (example routes):');
-      console.log(`  /api/a2a/*   -> http://127.0.0.1:${backendPort}`);
-      console.log(`  /dashboard/* -> http://127.0.0.1:${backendPort}`);
-      console.log(`  /callbook/*  -> http://127.0.0.1:${backendPort}`);
-	      console.log('');
-	      console.log('If you have configured your reverse proxy and want to continue, run:');
-	      console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --confirm-ingress`);
-	      console.log('');
-	      if (!args.flags['confirm-ingress']) {
-	        return;
-	      }
-    } else {
-      console.log('✅ No reverse proxy required based on invite host/port.');
-    }
-
-    if (!config.getOnboarding().ingress_confirmed) {
-      config.setOnboarding({
-        step: 'ingress',
-        ingress_confirmed: true
-      });
-    }
-
-    // ── Step 5: External IP + reachability check ───────────────
-    console.log('\n5️⃣  External IP + reachability check');
-
-    if (inviteLooksLocal) {
-      console.log('Skipping external IP probe: invite host looks local/unroutable.');
-    } else {
-      const external = await getExternalIp({ forceRefresh: true });
-      if (external && external.ip) {
-        console.log(`External IP (${external.source || 'resolver'}): ${external.ip}`);
+      if (!external.ok) {
+        console.log('⚠️  External ping FAILED (continuing).');
       } else {
-        console.log(`External IP lookup failed: ${external && external.error ? external.error : 'unknown_error'}`);
+        console.log(`✅ External ping OK (${expectedPingUrl})`);
       }
     }
 
-	    const localListener = await isPortListening(backendPort, '127.0.0.1', { timeoutMs: 500 });
-	    if (!localListener.listening) {
-	      console.log('\n⚠️  A2A server is not reachable locally yet.');
-	      console.log('Start it, then rerun quickstart:');
-	      console.log(`  A2A_HOSTNAME="${inviteHost}" a2a server --port ${backendPort}`);
-	      console.log('');
-	      return;
-	    }
-	    const localPing = await probeLocalPing(backendPort, inviteLooksLocal ? 250 : 1000);
-	    if (!localPing.ok) {
-	      if (inviteLooksLocal) {
-	        console.log(`\n⚠️  Port ${backendPort} is listening but /api/a2a/ping did not respond within a short timeout.`);
-	        console.log('Continuing onboarding anyway (invite host is local/unroutable).');
-	      } else {
-	        console.log('\n⚠️  A2A server is not responding locally yet.');
-	        console.log('Start it, then rerun quickstart:');
-	        console.log(`  A2A_HOSTNAME="${inviteHost}" a2a server --port ${backendPort}`);
-	        console.log('');
-	        return;
-	      }
-	    }
+    console.log(`Dashboard: ${dashboard}`);
 
-	    if (inviteLooksLocal) {
-	      console.log('Skipping external reachability check: invite host looks local/unroutable.');
-	    } else {
-	      const extPing = await externalPingCheck(expectedPingUrl);
-	      if (extPing.ok) {
-	        console.log(`✅ External ping OK (${extPing.provider})`);
-	      } else if (args.flags['skip-verify']) {
-	        console.log('⚠️  External ping FAILED (skipped via --skip-verify).');
-	      } else if (args.flags['confirm-ingress']) {
-	        console.log('⚠️  External ping FAILED (continuing due to --confirm-ingress).');
-	      } else {
-	        console.log('⚠️  External ping FAILED (server may not be publicly reachable yet).');
-	        console.log('Fix ingress (DNS/reverse proxy/firewall), then rerun. If you want to proceed anyway:');
-	        console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --confirm-ingress`);
-	        console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --skip-verify`);
-	        console.log('');
-	        return;
-	      }
-	    }
+    // Step 5: generate first invite
+    const publicTopicsForInvite = flattenTopicStrings([
+      ...draft.public.lead_with,
+      ...draft.public.discuss_freely
+    ]);
+    const goalItems = ['grow-network', 'find-collaborators', 'build-in-public'];
 
-    if (!config.getOnboarding().verify_confirmed) {
-      config.setOnboarding({
-        step: 'verify',
-        verify_confirmed: true
-      });
-    }
+    const ownerName = args.flags.owner || config.getAgent().name || readNameFromUserContext(contextFiles.user) || 'Someone';
+    const peerName = args.flags.name || 'bappybot';
+
+    config.setAgent({ name: ownerName, hostname: inviteHost });
+
+    const { token, record } = store.create({
+      name: peerName,
+      owner: ownerName,
+      permissions: 'public',
+      disclosure: 'minimal',
+      expires: 'never',
+      maxCalls: null,
+      allowedTopics: publicTopicsForInvite,
+      allowedGoals: goalItems,
+      notify: 'all'
+    });
+
+    const inviteUrl = `a2a://${inviteHost}/${token}`;
+    const topicLine = publicTopicsForInvite.length > 0 ? publicTopicsForInvite.slice(0, 6).join(' · ') : 'chat';
+    const goalLine = goalItems.join(' · ');
+
+    console.log('\n📞 Your first invite (public tier):\n');
+    console.log('─'.repeat(60));
+    const inviteText = `📞🗣️ **Agent-to-Agent Call Invite**
+
+👤 **${ownerName}** would like your agent to call **${peerName}**
+
+💬 ${topicLine}
+🎯 ${goalLine}
+
+${inviteUrl}
+
+── setup ──
+npm i -g a2acalling && a2a add "${inviteUrl}" "${peerName}" && a2a call "${peerName}" "Hello!"
+https://github.com/onthegonow/a2a_calling`;
+    console.log(inviteText);
+    console.log('─'.repeat(60));
+    console.log('Share this invite to let other agents call you!\n');
 
     config.completeOnboarding();
-    console.log('✅ Onboarding complete.');
-    console.log('Next: a2a gui   or   a2a create   or   a2a server');
+
+    console.log('✅ A2A setup complete!\n');
+    console.log('Your agent is now:');
+    console.log(`  • Listening on ${inviteHost}`);
+    console.log('  • Ready to receive calls');
+    console.log(`  • Configured with ${Object.keys(finalManifest.topics).length} permission tiers`);
+    console.log('\nNext steps:');
+    console.log('  a2a invite friends    — Create a friends-tier invite');
+    console.log('  a2a contacts          — View your contacts');
+    console.log('  a2a gui               — Open the dashboard\n');
+    console.log('Happy calling! 🤝');
   },
 
   install: () => {
@@ -1401,6 +1642,127 @@ https://github.com/onthegonow/a2a_calling`;
 
   setup: () => {
     require('../scripts/install-openclaw.js');
+  },
+
+  uninstall: async (args) => {
+    const fs = require('fs');
+    const path = require('path');
+    const { spawnSync } = require('child_process');
+
+    const keepConfig = Boolean(args.flags['keep-config'] || args.flags.keepConfig);
+    const force = Boolean(args.flags.force || args.flags.f);
+
+    const configDir = process.env.A2A_CONFIG_DIR ||
+      process.env.OPENCLAW_CONFIG_DIR ||
+      path.join(process.env.HOME || '/tmp', '.config', 'openclaw');
+
+    const configFile = path.join(configDir, 'a2a-config.json');
+    const disclosureFile = path.join(configDir, 'a2a-disclosure.json');
+    const dbFile = path.join(configDir, 'a2a-conversations.db');
+
+    console.log(`\n🗑️  A2A Uninstall`);
+    console.log('─────────────────\n');
+
+    if (!keepConfig && !force) {
+      if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.error('Refusing to prompt without a TTY. Re-run with --force to confirm uninstall.');
+        process.exit(1);
+      }
+
+      const existing = [configFile, disclosureFile, dbFile].filter(f => fs.existsSync(f));
+      const list = existing.length ? existing.map(f => `  - ${f}`).join('\n') : '  (no local config/database files found)';
+      const ok = await promptYesNo(
+        `This will stop the pm2 process "a2a" and delete:\n${list}\nProceed? (y/N) `
+      );
+      if (!ok) {
+        console.log('\nCancelled.\n');
+        return;
+      }
+    }
+
+    function pm2Exists() {
+      const res = spawnSync('pm2', ['--version'], { stdio: 'ignore', timeout: 4000 });
+      if (res.error && res.error.code === 'ENOENT') return false;
+      return res.status === 0;
+    }
+
+    function pm2HasProcess(name) {
+      const res = spawnSync('pm2', ['describe', name], { encoding: 'utf8', timeout: 6000 });
+      if (res.error && res.error.code === 'ENOENT') return false;
+      return res.status === 0;
+    }
+
+    function pm2StopAndDelete(name) {
+      if (!pm2Exists()) return { ok: true, skipped: true };
+      if (!pm2HasProcess(name)) return { ok: true, skipped: true };
+
+      const stop = spawnSync('pm2', ['stop', name], { encoding: 'utf8', timeout: 8000 });
+      if (stop.status !== 0) {
+        const msg = (stop.stderr || stop.stdout || '').trim();
+        return { ok: false, error: msg || 'pm2 stop failed' };
+      }
+
+      const del = spawnSync('pm2', ['delete', name], { encoding: 'utf8', timeout: 8000 });
+      if (del.status !== 0) {
+        const msg = (del.stderr || del.stdout || '').trim();
+        return { ok: false, error: msg || 'pm2 delete failed' };
+      }
+
+      return { ok: true };
+    }
+
+    function rmFileSafe(filePath) {
+      try {
+        fs.rmSync(filePath, { force: true });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
+    }
+
+    process.stdout.write('Stopping server... ');
+    const stopped = pm2StopAndDelete('a2a');
+    if (!stopped.ok) {
+      console.log('❌');
+      console.error(`  ${stopped.error}`);
+      process.exit(1);
+    }
+    console.log('✅');
+
+    let configOk = true;
+    let dbOk = true;
+
+    if (!keepConfig) {
+      process.stdout.write('Removing config... ');
+      const c1 = rmFileSafe(configFile);
+      const c2 = rmFileSafe(disclosureFile);
+      configOk = Boolean(c1.ok && c2.ok);
+      console.log(configOk ? '✅' : '❌');
+      if (!configOk) {
+        if (!c1.ok) console.error(`  ${configFile}: ${c1.error}`);
+        if (!c2.ok) console.error(`  ${disclosureFile}: ${c2.error}`);
+      }
+
+      process.stdout.write('Removing database... ');
+      const d1 = rmFileSafe(dbFile);
+      dbOk = Boolean(d1.ok);
+      console.log(dbOk ? '✅' : '❌');
+      if (!dbOk) {
+        console.error(`  ${dbFile}: ${d1.error}`);
+      }
+
+      if (!configOk || !dbOk) {
+        process.exit(1);
+      }
+    } else {
+      console.log('Removing config... ⏭️');
+      console.log('Removing database... ⏭️');
+    }
+
+    console.log('\nTo complete removal:');
+    console.log('  npm uninstall -g a2acalling\n');
+    console.log(`Config preserved: ${keepConfig ? 'yes' : 'no'}`);
+    console.log(`Location: ${configDir}`);
   },
 
   update: async (args) => {
@@ -1578,6 +1940,11 @@ https://github.com/onthegonow/a2a_calling`;
     console.log("  a2a onboard --submit '<json>'\n");
   },
 
+  version: () => {
+    const pkg = require('../package.json');
+    console.log(pkg.version);
+  },
+
   help: () => {
     console.log(`A2A Calling - Agent-to-Agent Communication
 
@@ -1657,6 +2024,10 @@ Server:
 
   install             Install A2A for OpenClaw
   setup               Auto setup (gateway-aware dashboard install)
+  uninstall           Stop server and remove local config/DB
+    --keep-config     Preserve config/DB (for reinstall)
+    --force           Skip confirmation prompt
+  version             Show installed package version
 
 Examples:
   a2a create --name "bappybot" --owner "Benjamin Pollack" --expires 7d
@@ -1679,6 +2050,8 @@ if (!commands[command]) {
   console.log('Run "a2a help" for usage.');
   process.exit(1);
 }
+
+enforceOnboarding(command);
 
 // Handle async commands
 const result = commands[command](args);

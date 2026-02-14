@@ -17,6 +17,80 @@ const MANIFEST_FILE = path.join(CONFIG_DIR, 'a2a-disclosure.json');
 
 const TIER_HIERARCHY = ['public', 'friends', 'family'];
 const logger = createLogger({ component: 'a2a.disclosure' });
+const SKIP_FILES = new Set(['heartbeat', 'skill', 'claude']);
+
+function normalizeTopic(raw) {
+  return String(raw || '').trim();
+}
+
+function dedupeByTopic(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const topic = normalizeTopic(item && item.topic);
+    if (!topic || seen.has(topic.toLowerCase())) continue;
+    seen.add(topic.toLowerCase());
+    out.push({
+      topic,
+      detail: normalizeTopic(item && item.detail)
+    });
+  }
+  return out;
+}
+
+function parseTopicLine(rawLine) {
+  const line = normalizeTopic(rawLine);
+  if (!line) return null;
+
+  const splitPoint = line.search(/\s+[-–—:]\s+/);
+  if (splitPoint > 10) {
+    const topic = normalizeTopic(line.slice(0, splitPoint));
+    const detail = normalizeTopic(line.slice(splitPoint + 3));
+    return { topic, detail };
+  }
+
+  return { topic: line, detail: '' };
+}
+
+function isValidTopic(line) {
+  if (!line || line.length < 5) return false;
+  if (line.includes('`')) return false;
+  if (line.includes('http')) return false;
+  if (line.includes('**:')) return false;
+  if (line.startsWith('//')) return false;
+  if (line.includes('()')) return false;
+  if (/\d{4}-\d{2}-\d{2}/.test(line)) return false;
+  if (line.toLowerCase().includes('todo')) return false;
+  if (line.toLowerCase().includes('fixme')) return false;
+  return true;
+}
+
+function truncateAtWordBoundary(text, max = 60) {
+  const normalized = normalizeTopic(text);
+  if (normalized.length <= max) return normalized;
+
+  const truncated = normalized.slice(0, max);
+  const lastSpace = truncated.lastIndexOf(' ');
+  return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + '...';
+}
+
+function extractFromSection(content, sectionNames) {
+  const source = normalizeTopic(content);
+  if (!source) return [];
+  const safeSectionNames = sectionNames.map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = new RegExp(`##\\s*(?:${safeSectionNames.join('|')})[^\\n]*\\n([\\s\\S]*?)(?=\\n##|$)`, 'i');
+  const match = source.match(pattern);
+  if (!match) return [];
+
+  return match[1]
+    .split('\n')
+    .map(line => normalizeTopic(line))
+    .filter(line => line && (line.startsWith('-') || line.startsWith('*') || line.includes(' - ') || /[A-Za-z0-9]/.test(line)))
+    .map(line => line.replace(/^[\s*-]+/, ''))
+    .filter(Boolean)
+    .map(parseTopicLine)
+    .filter(topic => topic && isValidTopic(topic.topic));
+}
 
 /**
  * Load manifest from disk. Returns {} if not found.
@@ -128,8 +202,108 @@ function formatTopicsForPrompt(tierTopics) {
  * For proper topic extraction, use buildExtractionPrompt() to instruct
  * an agent, then validate the result with validateDisclosureSubmission().
  */
-function generateDefaultManifest() {
+function generateDefaultManifest(contextFiles = {}) {
   const now = new Date().toISOString();
+  const source = {};
+  const raw = contextFiles || {};
+  Object.keys(raw).forEach((key) => {
+    if (!SKIP_FILES.has(key.toLowerCase())) {
+      source[key] = raw[key];
+    }
+  });
+
+  const userContent = String(source.user || '');
+  const soulContent = String(source.soul || '');
+  function extractFromSource(content, sectionNames) {
+    const sectionPattern = new RegExp(
+      `##\\s*(?:${sectionNames.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})[^\\n]*\\n([\\s\\S]*?)(?=\\n##|$)`,
+      'i'
+    );
+    const match = String(content || '').match(sectionPattern);
+    if (!match) {
+      return [];
+    }
+
+    return String(match[1] || '')
+      .split('\n')
+      .map(line => normalizeTopic(line))
+      .filter(line => line.startsWith('-') || line.startsWith('*'))
+      .map(line => normalizeTopic(line.replace(/^[\s\-\*]+/, '')))
+      .map(parseTopicLine)
+      .filter(topic => topic && isValidTopic(topic.topic))
+      .map(topic => ({
+        topic: truncateAtWordBoundary(topic.topic, 60),
+        detail: truncateAtWordBoundary(topic.detail || '', 120)
+      }));
+  }
+
+  const candidateTopics = dedupeByTopic([
+    ...extractFromSource(userContent, ['Goals', 'Interests', 'Projects', 'Current']),
+    ...extractFromSource(soulContent, ['Goals', 'Interests', 'Projects', 'Current', 'Values', 'Personal'])
+  ]);
+
+  if (candidateTopics.length === 0) {
+    return {
+      version: 1,
+      generated_at: now,
+      updated_at: now,
+      topics: {
+        public: {
+          lead_with: [{ topic: 'What I do', detail: 'Brief professional description' }],
+          discuss_freely: [{ topic: 'General interests', detail: 'Non-sensitive topics and hobbies' }],
+          deflect: [{ topic: 'Personal details', detail: 'Redirect to direct owner contact' }]
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: ['API keys', 'Other users\' data', 'Financial figures'],
+      personality_notes: 'Direct and technical. Prefers depth over breadth.'
+    };
+  }
+
+  const publicLead = [];
+  const publicDiscuss = [];
+  const publicDeflect = [];
+  const friendsLead = [];
+  const friendsDiscuss = [];
+  const familyDiscuss = [];
+
+  candidateTopics.forEach((entry, index) => {
+    const topic = truncateAtWordBoundary(entry.topic || '', 60);
+    const detail = truncateAtWordBoundary(entry.detail || 'Open discussion topic.', 120);
+    if (!topic) return;
+
+    const node = { topic, detail };
+    if (index < 2) {
+      publicLead.push(node);
+      return;
+    }
+    if (index < 6) {
+      publicDiscuss.push(node);
+      return;
+    }
+    if (index < 8) {
+      friendsLead.push(node);
+      return;
+    }
+    if (index < 12) {
+      friendsDiscuss.push(node);
+      return;
+    }
+    if (index < 14) {
+      familyDiscuss.push(node);
+    }
+  });
+
+  if (publicLead.length === 0) {
+    publicLead.push({ topic: 'Open source', detail: 'General product and engineering topics.' });
+  }
+  if (publicDiscuss.length === 0) {
+    publicDiscuss.push({ topic: 'Collaboration', detail: 'Ways to collaborate and support each other.' });
+  }
+  if (publicDeflect.length === 0) {
+    publicDeflect.push({ topic: 'Personal details', detail: 'Redirect to direct owner contact.' });
+  }
 
   return {
     version: 1,
@@ -137,15 +311,23 @@ function generateDefaultManifest() {
     updated_at: now,
     topics: {
       public: {
-        lead_with: [{ topic: 'What I do', detail: 'Brief professional description' }],
-        discuss_freely: [{ topic: 'General interests', detail: 'Non-sensitive topics and hobbies' }],
-        deflect: [{ topic: 'Personal details', detail: 'Redirect to direct owner contact' }]
+        lead_with: publicLead,
+        discuss_freely: publicDiscuss,
+        deflect: publicDeflect
       },
-      friends: { lead_with: [], discuss_freely: [], deflect: [] },
-      family: { lead_with: [], discuss_freely: [], deflect: [] }
+      friends: {
+        lead_with: friendsLead,
+        discuss_freely: friendsDiscuss,
+        deflect: []
+      },
+      family: {
+        lead_with: [],
+        discuss_freely: familyDiscuss,
+        deflect: []
+      }
     },
     never_disclose: ['API keys', 'Other users\' data', 'Financial figures'],
-    personality_notes: 'Direct and technical. Prefers depth over breadth.'
+    personality_notes: 'Direct and practical. Open to collaboration with clear boundaries.'
   };
 }
 
