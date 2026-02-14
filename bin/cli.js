@@ -70,29 +70,28 @@ function getConvStore() {
 
 const store = new TokenStore();
 
+// ── enforceOnboarding ────────────────────────────────────────────────────
+// If onboarding is incomplete or the config is missing/invalid, run the
+// full quickstart flow inline — verbose, with direct stdio. The agent sees
+// the banner, port selection, server start, and disclosure prompt right here.
+//
+// This is the primary onboarding entry point for agents. npm postinstall
+// silently starts the server (npm captures its output), so the first time
+// the agent runs ANY `a2a` command, this function fires and gives the agent
+// the full verbose walkthrough it needs to complete setup.
+//
+// Returns a Promise if quickstart needs to run (caller must await), or
+// undefined if onboarding is already complete.
 function enforceOnboarding(command) {
   if (ONBOARDING_EXEMPT.has(command)) {
     return;
   }
 
   if (!isOnboarded()) {
-    // Check if we're mid-onboarding (server running, awaiting disclosure)
-    try {
-      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-      if (cfg.onboarding?.step === 'awaiting_disclosure') {
-        console.log('\nA2A setup in progress. Disclosure topics not yet submitted.\n');
-        console.log("Next: run `a2a quickstart --submit '<json>'` (or `a2a onboard --submit`)\n");
-        process.exit(1);
-      }
-    } catch (e) {
-      if (e.code !== 'ENOENT' && e.name !== 'SyntaxError') {
-        console.error(`Warning: could not read config: ${e.message}`);
-      }
-    }
-
-    console.log('\nA2A not configured yet.\n');
-    console.log('Next: run `a2a quickstart`\n');
-    process.exit(1);
+    // Run the full quickstart flow inline — verbose output, direct stdio.
+    // This replaces the original command; after onboarding the agent can
+    // re-run their intended command.
+    return commands.quickstart({ flags: {}, positional: [] });
   }
 }
 
@@ -263,70 +262,6 @@ function printStepHeader(label) {
 
 function printSection(title) {
   console.log('\n━━━ ' + title + ' ━━━');
-}
-
-function readWorkspaceContext(baseDir = process.cwd()) {
-  const base = baseDir || process.cwd();
-  const workspaceFiles = {
-    USER: { filename: 'USER.md' },
-    SOUL: { filename: 'SOUL.md' },
-    HEARTBEAT: { filename: 'HEARTBEAT.md' },
-    SKILL: { filename: 'SKILL.md' },
-    CLAUDE: { filename: 'CLAUDE.md' }
-  };
-
-  const found = {};
-  for (const key of Object.keys(workspaceFiles)) {
-    found[key] = fs.existsSync(path.join(base, workspaceFiles[key].filename));
-  }
-
-  const memoryDir = path.join(base, 'memory');
-  let memoryCount = 0;
-  if (fs.existsSync(memoryDir)) {
-    try {
-      memoryCount = fs.readdirSync(memoryDir).filter(item => item.endsWith('.md')).length;
-    } catch (err) {
-      memoryCount = 0;
-    }
-  }
-  found.MEMORY = memoryCount;
-
-  return {
-    workspace: base,
-    found,
-    memoryCount
-  };
-}
-
-function printWorkspaceScan(context) {
-  const fileLabels = {
-    USER: 'USER.md — identity hints',
-    SOUL: 'SOUL.md — personality notes',
-    HEARTBEAT: 'HEARTBEAT.md — scheduled tasks',
-    SKILL: 'SKILL.md — capabilities',
-    CLAUDE: 'CLAUDE.md — agent instructions'
-  };
-  const found = Object.entries(fileLabels)
-    .filter(([key]) => context.found[key])
-    .map(([, label]) => label);
-  if (context.memoryCount > 0) found.push(`${context.memoryCount} memory file(s)`);
-
-  if (found.length) {
-    console.log(`Workspace context: ${found.join(', ')}`);
-  } else {
-    console.log('Workspace context: no context files found (disclosure topics will be minimal)');
-  }
-}
-
-function getDisclosurePromptFiles(context) {
-  return {
-    'USER.md': context.found.USER,
-    'SOUL.md': context.found.SOUL,
-    'HEARTBEAT.md': context.found.HEARTBEAT,
-    'SKILL.md': context.found.SKILL,
-    'CLAUDE.md': context.found.CLAUDE,
-    'memory/*.md': context.memoryCount > 0
-  };
 }
 
 async function inspectPorts(preferredPort = null) {
@@ -1854,13 +1789,21 @@ if (!commands[command]) {
   process.exit(1);
 }
 
-enforceOnboarding(command);
-
-// Handle async commands
-const result = commands[command](args);
-if (result instanceof Promise) {
-  result.catch(err => {
+// If onboarding is incomplete, enforceOnboarding runs quickstart inline
+// (verbose, full output) and returns a Promise. Otherwise returns undefined
+// and we proceed to the requested command.
+const onboardResult = enforceOnboarding(command);
+if (onboardResult instanceof Promise) {
+  onboardResult.catch(err => {
     console.error(err.message);
     process.exit(1);
   });
+} else {
+  const result = commands[command](args);
+  if (result instanceof Promise) {
+    result.catch(err => {
+      console.error(err.message);
+      process.exit(1);
+    });
+  }
 }

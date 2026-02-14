@@ -456,36 +456,33 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('enforceOnboarding blocks non-exempt commands when not onboarded', () => {
+  test('enforceOnboarding runs quickstart when not onboarded', () => {
     tmp = helpers.tmpConfigDir('onboard-enforce');
-    const { execFileSync } = require('child_process');
+    const { spawnSync } = require('child_process');
     const path = require('path');
 
     const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
     const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
 
-    let threw = false;
-    try {
-      execFileSync(process.execPath, [cliPath, 'list'], {
-        env,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-    } catch (err) {
-      threw = true;
-      const output = (err.stdout || '') + (err.stderr || '');
-      assert.ok(output.includes('a2a quickstart'), 'Should tell agent to run quickstart');
-    }
-    assert.ok(threw, 'Should exit with non-zero code when not onboarded');
+    // Running a non-exempt command (list) when not onboarded should
+    // automatically run the full quickstart flow instead of blocking.
+    const result = spawnSync(process.execPath, [cliPath, 'list'], {
+      env,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    const output = (result.stdout || '') + (result.stderr || '');
+    assert.includes(output, 'A2A Calling', 'Should run quickstart banner');
 
     tmp.cleanup();
   });
 
-  test('enforceOnboarding shows awaiting_disclosure message mid-onboarding', () => {
+  test('enforceOnboarding shows disclosure prompt when awaiting_disclosure', () => {
     tmp = helpers.tmpConfigDir('onboard-enforce-mid');
     const fs = require('fs');
     const path = require('path');
-    const { execFileSync } = require('child_process');
+    const { spawnSync } = require('child_process');
 
     const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
     const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
@@ -498,20 +495,17 @@ module.exports = function (test, assert, helpers) {
       tiers: {}
     }));
 
-    let threw = false;
-    try {
-      execFileSync(process.execPath, [cliPath, 'list'], {
-        env,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
-    } catch (err) {
-      threw = true;
-      const output = (err.stdout || '') + (err.stderr || '');
-      assert.ok(output.includes('onboard --submit'), 'Should tell agent to submit disclosure');
-      assert.ok(output.includes('setup in progress') || output.includes('not yet submitted'), 'Should indicate setup is in progress');
-    }
-    assert.ok(threw, 'Should exit with non-zero code when mid-onboarding');
+    // Running a non-exempt command when mid-onboarding should run quickstart,
+    // which detects awaiting_disclosure and shows the disclosure prompt.
+    const result = spawnSync(process.execPath, [cliPath, 'list'], {
+      env,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    const output = (result.stdout || '') + (result.stderr || '');
+    assert.includes(output, 'Disclosure', 'Should show disclosure extraction prompt');
+    assert.includes(output, 'quickstart --submit', 'Should tell agent how to submit');
 
     tmp.cleanup();
   });
@@ -659,16 +653,16 @@ module.exports = function (test, assert, helpers) {
   });
 
   // ── Issue #23: Postinstall script test ──
-  test('postinstall launches quickstart and completes setup without TTY', () => {
+  test('postinstall silently creates config and starts server', () => {
     const { spawnSync } = require('child_process');
     const fs = require('fs');
     const path = require('path');
 
     const postinstallPath = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
-    const tmpDir = helpers.tmpConfigDir('postinstall-no-tty');
+    const tmpDir = helpers.tmpConfigDir('postinstall-silent');
 
-    // Non-interactive global install — quickstart should auto-accept defaults
-    // and complete setup (config save, server start) without requiring a TTY.
+    // Postinstall runs quickstart silently (npm captures all output).
+    // It should still create the config and start the server.
     const env = {
       ...process.env,
       npm_config_global: 'true',
@@ -683,14 +677,11 @@ module.exports = function (test, assert, helpers) {
 
     assert.equal(result.status, 0, 'Should exit 0');
 
-    // Postinstall saves full onboarding output to a2a-onboarding.txt as a
-    // reliable fallback (npm pipes lifecycle stdio, so the output may bypass
-    // our piped test stdio via /dev/tty or /proc/ppid/fd).
-    const onboardingFile = path.join(tmpDir.dir, 'a2a-onboarding.txt');
-    assert.ok(fs.existsSync(onboardingFile), 'Should save onboarding output to file');
-    const saved = fs.readFileSync(onboardingFile, 'utf8');
-    assert.includes(saved, 'Starting Server', 'Saved output should reach server start phase');
-    assert.includes(saved, 'Disclosure', 'Saved output should include disclosure prompt');
+    // Config should exist with onboarding state advanced
+    const configPath = path.join(tmpDir.dir, 'a2a-config.json');
+    assert.ok(fs.existsSync(configPath), 'Should create config file');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.equal(config.onboarding.step, 'awaiting_disclosure', 'Should advance to awaiting_disclosure');
 
     tmpDir.cleanup();
   });
