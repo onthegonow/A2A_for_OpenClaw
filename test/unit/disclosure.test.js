@@ -2,7 +2,7 @@
  * Disclosure Manifest Tests
  *
  * Covers: manifest load/save, tier merging, topic formatting,
- * default manifest generation, and context file parsing.
+ * default manifest generation, context file reading, and disclosure validation.
  */
 
 module.exports = function (test, assert, helpers) {
@@ -168,40 +168,20 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('generateDefaultManifest extracts goals from USER.md content', () => {
+  test('generateDefaultManifest returns minimal starter regardless of context files', () => {
     const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      user: `# About Me
-## Goals
-- Build AI authentication tools
-- Launch luxury goods marketplace
-- Expand into Asian markets
-`
-    });
+    const manifest = disc.generateDefaultManifest();
 
-    // First 2 goals go to lead_with, rest to discuss_freely
-    const leadTopics = manifest.topics.public.lead_with.map(t => t.detail);
-    assert.ok(leadTopics.some(t => t.includes('AI authentication')));
-    tmp.cleanup();
-  });
-
-  test('generateDefaultManifest extracts personality from SOUL.md', () => {
-    const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      soul: `Refined and precise. Values quality above all.
-Prefers deep technical discussions over small talk.
-
-## Values
-- Craftsmanship
-- Integrity
-- Curiosity
-`
-    });
-
-    assert.includes(manifest.personality_notes, 'Refined');
-    // Values become friends-tier topics
-    const friendTopics = manifest.topics.friends.discuss_freely.map(t => t.topic);
-    assert.ok(friendTopics.some(t => t.includes('Craftsmanship')));
+    // Should return only the minimal starter
+    assert.equal(manifest.topics.public.lead_with.length, 1);
+    assert.equal(manifest.topics.public.lead_with[0].topic, 'What I do');
+    assert.equal(manifest.topics.public.discuss_freely.length, 1);
+    assert.equal(manifest.topics.public.deflect.length, 1);
+    assert.equal(manifest.topics.friends.lead_with.length, 0);
+    assert.equal(manifest.topics.friends.discuss_freely.length, 0);
+    assert.equal(manifest.topics.family.lead_with.length, 0);
+    assert.equal(manifest.topics.family.discuss_freely.length, 0);
+    assert.greaterThan(manifest.never_disclose.length, 0);
     tmp.cleanup();
   });
 
@@ -263,54 +243,6 @@ Prefers deep technical discussions over small talk.
     assert.ok(result.memory.includes('Another note'));
     tmp.cleanup();
   });
-
-  // ── Expanded Manifest Generation ───────────────────────────────
-
-  test('generateDefaultManifest ignores SKILL.md bullet lists for disclosure topics', () => {
-    const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      skill: `# My Skill
-- Handle API authentication
-- Process payment webhooks
-- Generate PDF reports
-`
-    });
-
-    const publicDiscuss = manifest.topics.public.discuss_freely.map(t => t.detail);
-    assert.equal(publicDiscuss.some(t => t.includes('API authentication')), false);
-    tmp.cleanup();
-  });
-
-  test('generateDefaultManifest uses memory content to add topics', () => {
-    const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      memory: `- Working on distributed systems architecture
-- Interested in real-time collaboration tools
-`
-    });
-
-    const friendsDiscuss = manifest.topics.friends.discuss_freely.map(t => t.detail);
-    assert.ok(friendsDiscuss.some(t => t.includes('distributed systems')));
-    tmp.cleanup();
-  });
-
-  test('generateDefaultManifest uses CLAUDE.md context', () => {
-    const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      claude: `# Project
-## Quick Context
-- A2A enables agent-to-agent communication
-- Token management for scoped permissions
-`
-    });
-
-    const publicDiscuss = manifest.topics.public.discuss_freely.map(t => t.detail);
-    assert.ok(publicDiscuss.some(t => t.includes('agent-to-agent')));
-    tmp.cleanup();
-  });
-
-  // Note: SKILL.md is intentionally NOT used to generate disclosure topics, to avoid
-  // pulling in onboarding instructions or other operational bullet lists as "topics".
 
   // ── Disclosure Submission Validation ──────────────────────────
 
