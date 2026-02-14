@@ -266,7 +266,7 @@ Prefers deep technical discussions over small talk.
 
   // ── Expanded Manifest Generation ───────────────────────────────
 
-  test('generateDefaultManifest uses skill content to add topics', () => {
+  test('generateDefaultManifest ignores SKILL.md bullet lists for disclosure topics', () => {
     const disc = freshDisclosure();
     const manifest = disc.generateDefaultManifest({
       skill: `# My Skill
@@ -277,7 +277,7 @@ Prefers deep technical discussions over small talk.
     });
 
     const publicDiscuss = manifest.topics.public.discuss_freely.map(t => t.detail);
-    assert.ok(publicDiscuss.some(t => t.includes('API authentication')));
+    assert.equal(publicDiscuss.some(t => t.includes('API authentication')), false);
     tmp.cleanup();
   });
 
@@ -309,15 +309,6 @@ Prefers deep technical discussions over small talk.
     tmp.cleanup();
   });
 
-  test('generateDefaultManifest with only new context fields returns non-starter', () => {
-    const disc = freshDisclosure();
-    const manifest = disc.generateDefaultManifest({
-      skill: '- Handle webhooks\n- Process data pipelines'
-    });
-
-    // Should not be the minimal starter (which only has generic topics)
-    const publicDiscuss = manifest.topics.public.discuss_freely.map(t => t.detail);
-    assert.ok(publicDiscuss.some(t => t.includes('webhooks') || t.includes('pipelines')));
-    tmp.cleanup();
-  });
+  // Note: SKILL.md is intentionally NOT used to generate disclosure topics, to avoid
+  // pulling in onboarding instructions or other operational bullet lists as "topics".
 };

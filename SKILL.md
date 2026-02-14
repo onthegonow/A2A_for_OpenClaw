@@ -96,7 +96,7 @@ Deterministic onboarding flow (sequential, flags-based):
 
 1. Background bootstrap (config + disclosure)
 2. Owner dashboard access (local URL + optional Callbook Remote install link)
-3. Set permission tiers: populate and confirm tier `topics` + `goals`
+3. Set permission tiers: populate tier `topics` + `goals` (schema-validated and saved)
 4. Port scan + reverse proxy guidance (if needed for public hostname)
 5. External IP confirmation and public reachability check (public hostname only)
 
@@ -110,12 +110,14 @@ a2a quickstart --port 3001
 a2a quickstart --hostname YOUR_DOMAIN:443 --port 3001
 ```
 
-Quickstart will print a proposed tier configuration. After the user reviews it, re-run with:
+Quickstart prints and saves a tier configuration immediately (validated by the config layer). If you want to override the Friends tier topics/interests, rerun with:
 
 ```bash
-a2a quickstart --port 3001 --confirm-tiers
-# or (public hostname)
-a2a quickstart --hostname YOUR_DOMAIN:443 --port 3001 --confirm-tiers
+# Provide topics directly
+a2a quickstart --port 3001 --friends-topics "chat,search,openclaw,a2a"
+
+# Or prompt interactively for Friends tier topics
+a2a quickstart --port 3001 --interactive
 ```
 
 If reverse proxy/ingress is required, Quickstart will stop and ask for explicit confirmation (`--confirm-ingress`).

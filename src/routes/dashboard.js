@@ -1069,7 +1069,16 @@ function createDashboardApiRouter(options = {}) {
     if (body.topics !== undefined) update.topics = sanitizeStringArray(body.topics, 200, 160);
     if (body.goals !== undefined) update.goals = sanitizeStringArray(body.goals, 200, 160);
 
-    context.config.setTier(tierId, update);
+    try {
+      context.config.setTier(tierId, update);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_tier_config',
+        code: err.code || 'A2A_CONFIG_INVALID_TIER_CONFIG',
+        message: err.message
+      });
+    }
 
     if (body.manifest) {
       const manifest = loadManifest();
@@ -1099,17 +1108,35 @@ function createDashboardApiRouter(options = {}) {
 
     const copyFrom = normalizeTierId(body.copy_from || '');
     if (copyFrom && cfg.tiers && cfg.tiers[copyFrom]) {
-      context.config.setTier(tierId, { ...cfg.tiers[copyFrom] });
+      try {
+        context.config.setTier(tierId, { ...cfg.tiers[copyFrom] });
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          error: 'invalid_tier_config',
+          code: err.code || 'A2A_CONFIG_INVALID_TIER_CONFIG',
+          message: err.message
+        });
+      }
     } else {
-      context.config.setTier(tierId, {
-        name: sanitizeString(body.name || tierId, 120),
-        description: sanitizeString(body.description || 'Custom tier', 300),
-        capabilities: sanitizeStringArray(body.capabilities || []),
-        topics: sanitizeStringArray(body.topics || []),
-        goals: sanitizeStringArray(body.goals || []),
-        disclosure: sanitizeString(body.disclosure || 'minimal', 40),
-        examples: sanitizeStringArray(body.examples || [], 20, 120)
-      });
+      try {
+        context.config.setTier(tierId, {
+          name: sanitizeString(body.name || tierId, 120),
+          description: sanitizeString(body.description || 'Custom tier', 300),
+          capabilities: sanitizeStringArray(body.capabilities || []),
+          topics: sanitizeStringArray(body.topics || []),
+          goals: sanitizeStringArray(body.goals || []),
+          disclosure: sanitizeString(body.disclosure || 'minimal', 40),
+          examples: sanitizeStringArray(body.examples || [], 20, 120)
+        });
+      } catch (err) {
+        return res.status(400).json({
+          success: false,
+          error: 'invalid_tier_config',
+          code: err.code || 'A2A_CONFIG_INVALID_TIER_CONFIG',
+          message: err.message
+        });
+      }
     }
 
     return res.json({ success: true, tier_id: tierId });
@@ -1127,7 +1154,16 @@ function createDashboardApiRouter(options = {}) {
       return res.status(404).json({ success: false, error: 'source_tier_not_found' });
     }
 
-    context.config.setTier(toTier, { ...cfg.tiers[fromTier] });
+    try {
+      context.config.setTier(toTier, { ...cfg.tiers[fromTier] });
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        error: 'invalid_tier_config',
+        code: err.code || 'A2A_CONFIG_INVALID_TIER_CONFIG',
+        message: err.message
+      });
+    }
 
     const manifest = loadManifest();
     if (manifest.topics && manifest.topics[fromTier]) {

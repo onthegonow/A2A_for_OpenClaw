@@ -1105,19 +1105,26 @@ https://github.com/onthegonow/a2a_calling`;
     // ── Step 1: Background bootstrap (config + manifest) ─────────
     let contextFiles = {};
     let manifest = {};
-    try {
-      contextFiles = disc.readContextFiles(workspaceDir);
-      manifest = disc.loadManifest();
-      if (!manifest || Object.keys(manifest).length === 0) {
-        const generated = disc.generateDefaultManifest(contextFiles);
-        disc.saveManifest(generated);
-        manifest = generated;
-      }
-    } catch (err) {
-      // Non-fatal: onboarding can proceed even if manifest fails.
-      contextFiles = {};
-      manifest = {};
-    }
+	    try {
+	      contextFiles = disc.readContextFiles(workspaceDir);
+	      const forceManifest = Boolean(args.flags.force || args.flags['regen-manifest'] || args.flags.regenManifest);
+	      if (forceManifest) {
+	        const generated = disc.generateDefaultManifest(contextFiles);
+	        disc.saveManifest(generated);
+	        manifest = generated;
+	      } else {
+	        manifest = disc.loadManifest();
+	        if (!manifest || Object.keys(manifest).length === 0) {
+	          const generated = disc.generateDefaultManifest(contextFiles);
+	          disc.saveManifest(generated);
+	          manifest = generated;
+	        }
+	      }
+	    } catch (err) {
+	      // Non-fatal: onboarding can proceed even if manifest fails.
+	      contextFiles = {};
+	      manifest = {};
+	    }
 
     console.log('\nA2A deterministic onboarding');
     console.log('──────────────────────────');
@@ -1180,32 +1187,84 @@ https://github.com/onthegonow/a2a_calling`;
       }
     }
 
-    // ── Step 3: Permission tiers (topics + goals) ───────────────
-    const onboardingAfterAccess = config.getOnboarding();
-    if (!onboardingAfterAccess.tiers_confirmed) {
-      const recommendations = buildTierRecommendations(contextFiles, manifest);
+	    // ── Step 3: Permission tiers (topics + goals) ───────────────
+	    const onboardingAfterAccess = config.getOnboarding();
+	    if (!onboardingAfterAccess.tiers_confirmed) {
+	      const recommendations = buildTierRecommendations(contextFiles, manifest);
 
-      config.setTier('public', recommendations.public);
-      config.setTier('friends', recommendations.friends);
-      config.setTier('family', recommendations.family);
+	      const parseFreeTextList = (raw) => {
+	        if (raw === undefined || raw === null || raw === true) return [];
+	        const text = String(raw || '').trim();
+	        if (!text) return [];
+	        return text
+	          .split(/[\n,]+/g)
+	          .map(s => s.trim())
+	          .filter(Boolean);
+	      };
 
-      printTierSummary(recommendations);
+	      const promptLine = async (question) => {
+	        const readline = require('readline');
+	        return await new Promise(resolve => {
+	          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+	          rl.question(question, (answer) => {
+	            rl.close();
+	            resolve(String(answer || '').trim());
+	          });
+	        });
+	      };
 
-      if (!args.flags['confirm-tiers']) {
-        console.log('3️⃣  Confirm tiers');
-        console.log('Review the topics/goals above. To confirm and continue, run:');
-        console.log(`  a2a quickstart --port ${backendPort} --confirm-tiers`);
-        console.log('Optional (remote access):');
-        console.log(`  a2a quickstart --hostname YOUR_DOMAIN:443 --port ${backendPort} --confirm-tiers`);
-        console.log('');
-        return;
-      }
+	      // Optional owner override: Friends tier topics/interests (most important tier).
+	      const interactive = Boolean(
+	        args.flags.interactive ||
+	        args.flags['ask-friends-topics'] ||
+	        args.flags.askFriendsTopics
+	      );
+	      let friendsTopicsOverride = parseFreeTextList(args.flags['friends-topics'] || args.flags.friendsTopics);
+	      const noWorkspaceContext = !contextFiles.user && !contextFiles.heartbeat && !contextFiles.soul &&
+	        !contextFiles.memory && !contextFiles.claude;
+	      const shouldPromptFriendsTopics = (interactive || noWorkspaceContext) &&
+	        friendsTopicsOverride.length === 0 &&
+	        process.stdin.isTTY &&
+	        process.stdout.isTTY;
+	      if (shouldPromptFriendsTopics) {
+	        const suggested = (recommendations.friends.topics || []).slice(0, 12).join(', ');
+	        const answer = await promptLine(`Friends-tier topics/interests (comma-separated).\nSuggested: ${suggested}\n> `);
+	        friendsTopicsOverride = parseFreeTextList(answer);
+	      }
 
-      config.setOnboarding({
-        step: 'tiers',
-        tiers_confirmed: true
-      });
-    }
+	      if (friendsTopicsOverride.length > 0) {
+	        const normalized = uniqueNonEmpty(friendsTopicsOverride.map(slugify).filter(Boolean), 24);
+	        recommendations.friends.topics = uniqueNonEmpty(
+	          [...(recommendations.public.topics || []), ...normalized],
+	          24
+	        );
+	        recommendations.family.topics = uniqueNonEmpty(
+	          [...(recommendations.friends.topics || []), ...(recommendations.family.topics || [])],
+	          30
+	        );
+	      }
+
+	      try {
+	        config.setTier('public', recommendations.public);
+	        config.setTier('friends', recommendations.friends);
+	        config.setTier('family', recommendations.family);
+	      } catch (err) {
+	        console.error('\n❌ Tier configuration validation failed.');
+	        console.error(`   ${err.message}`);
+	        if (err.hint) {
+	          console.error(`   Hint: ${err.hint}`);
+	        }
+	        console.error('');
+	        process.exit(1);
+	      }
+
+	      printTierSummary(recommendations);
+
+	      config.setOnboarding({
+	        step: 'tiers',
+	        tiers_confirmed: true
+	      });
+	    }
 
     // ── Step 4: Port scan + reverse proxy guidance (if needed) ──
     console.log('\n4️⃣  Port scan + reverse proxy');
@@ -1239,13 +1298,13 @@ https://github.com/onthegonow/a2a_calling`;
       console.log(`  /api/a2a/*   -> http://127.0.0.1:${backendPort}`);
       console.log(`  /dashboard/* -> http://127.0.0.1:${backendPort}`);
       console.log(`  /callbook/*  -> http://127.0.0.1:${backendPort}`);
-      console.log('');
-      console.log('If you have configured your reverse proxy and want to continue, run:');
-      console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --confirm-tiers --confirm-ingress`);
-      console.log('');
-      if (!args.flags['confirm-ingress']) {
-        return;
-      }
+	      console.log('');
+	      console.log('If you have configured your reverse proxy and want to continue, run:');
+	      console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --confirm-ingress`);
+	      console.log('');
+	      if (!args.flags['confirm-ingress']) {
+	        return;
+	      }
     } else {
       console.log('✅ No reverse proxy required based on invite host/port.');
     }
@@ -1299,13 +1358,13 @@ https://github.com/onthegonow/a2a_calling`;
       const extPing = await externalPingCheck(expectedPingUrl);
       if (extPing.ok) {
         console.log(`✅ External ping OK (${extPing.provider})`);
-      } else if (!args.flags['skip-verify']) {
-        console.log('⚠️  External ping FAILED (server may not be publicly reachable yet).');
-        console.log('Fix ingress (DNS/reverse proxy/firewall), then rerun with:');
-        console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --confirm-tiers --confirm-ingress`);
-        console.log('');
-        return;
-      } else {
+	      } else if (!args.flags['skip-verify']) {
+	        console.log('⚠️  External ping FAILED (server may not be publicly reachable yet).');
+	        console.log('Fix ingress (DNS/reverse proxy/firewall), then rerun with:');
+	        console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --confirm-ingress`);
+	        console.log('');
+	        return;
+	      } else {
         console.log('⚠️  External ping FAILED (skipped via --skip-verify).');
       }
     }
@@ -1453,15 +1512,14 @@ https://github.com/onthegonow/a2a_calling`;
 
     const contextFiles = readContextFiles(workspaceDir);
     // Print what was found
-    const sources = {
-      'USER.md': contextFiles.user,
-      'HEARTBEAT.md': contextFiles.heartbeat,
-      'SOUL.md': contextFiles.soul,
-      'SKILL.md': contextFiles.skill,
-      'CLAUDE.md': contextFiles.claude,
-      'memory/*.md': contextFiles.memory,
-      'Installed skills': contextFiles.skills
-    };
+	    const sources = {
+	      'USER.md': contextFiles.user,
+	      'HEARTBEAT.md': contextFiles.heartbeat,
+	      'SOUL.md': contextFiles.soul,
+	      'SKILL.md': contextFiles.skill,
+	      'CLAUDE.md': contextFiles.claude,
+	      'memory/*.md': contextFiles.memory
+	    };
     for (const [name, content] of Object.entries(sources)) {
       console.log(`   ${content ? '\u2705' : '\u274c'} ${name}`);
     }
@@ -1537,14 +1595,16 @@ Server:
   server              Start the A2A server
     --port, -p        Port to listen on (default: 3001)
   
-  quickstart          Deterministic onboarding (access → tiers → ingress → verify)
+  quickstart          Onboarding (access → tiers → ingress → verify)
     --hostname        Public hostname for remote access (e.g. myserver.com:443)
     --public-port     Port to assume when --hostname omits a port (default: 443)
     --port            A2A server port to run locally (default: 3001)
-    --confirm-tiers   Confirm tier topics/goals and continue
+    --friends-topics  Override Friends tier topics/interests (comma or newline-separated)
+    --interactive     Prompt for Friends tier topics if needed
     --confirm-ingress Confirm reverse proxy/ingress is configured and continue
     --skip-verify     Skip external reachability check (not recommended)
-    --force           Reset onboarding and start over
+    --force           Reset onboarding + regenerate disclosure manifest
+    --regen-manifest  Regenerate disclosure manifest (no onboarding reset)
   
   onboard             Generate disclosure manifest from workspace context
     --force           Re-run even if already onboarded

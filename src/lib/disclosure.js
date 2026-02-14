@@ -146,7 +146,7 @@ function generateDefaultManifest(contextFiles = {}) {
   const soulContent = contextFiles.soul || '';
 
   const hasContent = userContent || heartbeatContent || soulContent ||
-    contextFiles.skill || contextFiles.memory || contextFiles.skills || contextFiles.claude;
+    contextFiles.memory || contextFiles.claude;
 
   if (!hasContent) {
     // Minimal starter manifest
@@ -263,21 +263,6 @@ function generateDefaultManifest(contextFiles = {}) {
     }
   }
 
-  // Extract capability keywords from SKILL.md and installed skills
-  const skillContent = (contextFiles.skill || '') + '\n' + (contextFiles.skills || '');
-  if (skillContent.trim()) {
-    const capabilityLines = skillContent
-      .split('\n')
-      .filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'))
-      .map(l => l.replace(/^[\s\-\*]+/, '').trim())
-      .filter(l => l.length > 5 && l.length < 120)
-      .slice(0, 6);
-
-    capabilityLines.forEach(cap => {
-      manifest.topics.public.discuss_freely.push({ topic: cap.slice(0, 60), detail: cap });
-    });
-  }
-
   // Extract topic keywords from memory files
   if (contextFiles.memory) {
     const memoryLines = contextFiles.memory
@@ -350,7 +335,8 @@ function readContextFiles(workspaceDir) {
     heartbeat: read('HEARTBEAT.md'),
     soul: read('SOUL.md'),
     skill: read('SKILL.md'),
-    claude: read('CLAUDE.md')
+    claude: read('CLAUDE.md'),
+    skills: ''
   };
 
   // Scan memory/*.md
@@ -365,32 +351,6 @@ function readContextFiles(workspaceDir) {
       }).filter(Boolean).join('\n---\n');
     } catch (e) {}
   }
-
-  // Scan installed skills from both OpenClaw and standalone paths
-  const homeDir = process.env.HOME || '/tmp';
-  const skillsDirs = [
-    process.env.OPENCLAW_SKILLS || path.join(homeDir, '.openclaw', 'skills'),
-    path.join(CONFIG_DIR, 'skills')
-  ];
-  const skillFragments = [];
-  const seenSkillDirs = new Set();
-  for (const skillsDir of skillsDirs) {
-    if (!fs.existsSync(skillsDir) || seenSkillDirs.has(skillsDir)) continue;
-    seenSkillDirs.add(skillsDir);
-    try {
-      const dirs = fs.readdirSync(skillsDir).filter(d => {
-        try { return fs.statSync(path.join(skillsDir, d)).isDirectory(); }
-        catch (e) { return false; }
-      });
-      for (const d of dirs) {
-        try {
-          const content = fs.readFileSync(path.join(skillsDir, d, 'SKILL.md'), 'utf8');
-          if (content) skillFragments.push(content);
-        } catch (e) {}
-      }
-    } catch (e) {}
-  }
-  result.skills = skillFragments.join('\n---\n');
 
   return result;
 }

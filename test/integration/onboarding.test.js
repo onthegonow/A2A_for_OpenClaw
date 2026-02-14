@@ -214,7 +214,7 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
-  test('quickstart is deterministic: requires tier confirmation before completing', async () => {
+  test('quickstart completes onboarding with validated auto-tier configuration', async () => {
     tmp = helpers.tmpConfigDir('onboard-quickstart');
     const fs = require('fs');
     const path = require('path');
@@ -243,16 +243,6 @@ module.exports = function (test, assert, helpers) {
 
     try {
       execFileSync(process.execPath, [cliPath, 'quickstart', '--port', backendPort], {
-        env,
-        stdio: 'ignore'
-      });
-
-      delete require.cache[require.resolve('../../src/lib/config')];
-      const { A2AConfig } = require('../../src/lib/config');
-      const config1 = new A2AConfig();
-      assert.equal(config1.isOnboarded(), false);
-
-      execFileSync(process.execPath, [cliPath, 'quickstart', '--port', backendPort, '--confirm-tiers'], {
         env,
         stdio: 'ignore'
       });

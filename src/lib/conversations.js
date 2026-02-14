@@ -47,6 +47,7 @@ class ConversationStore {
         // Best effort - ignore on platforms without chmod support.
       }
       this._migrate();
+      this._ensureLatestSchema(Database);
       return this.db;
     } catch (err) {
       if (err.code === 'MODULE_NOT_FOUND') {
@@ -126,6 +127,79 @@ class ConversationStore {
       CREATE INDEX IF NOT EXISTS idx_conversations_contact ON conversations(contact_id);
       CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations(status);
     `);
+  }
+
+  _ensureLatestSchema(Database) {
+    // Prototype-mode stance: do not attempt in-place migrations.
+    // If schema is missing required columns, back up and recreate the DB.
+    try {
+      const info = this.db.prepare('PRAGMA table_info(conversations)').all();
+      if (!Array.isArray(info) || info.length === 0) {
+        return;
+      }
+      const cols = new Set(info.map(row => row && row.name).filter(Boolean));
+      const required = [
+        'joint_action_items',
+        'collaboration_opportunity'
+      ];
+      const missing = required.filter(c => !cols.has(c));
+      if (missing.length === 0) {
+        return;
+      }
+
+      const backupPath = `${this.dbPath}.bak.${Date.now()}`;
+      logger.warn('Conversation DB schema mismatch; resetting to latest schema', {
+        event: 'conversation_db_schema_reset',
+        data: {
+          db_path: this.dbPath,
+          backup_path: backupPath,
+          missing_columns: missing
+        }
+      });
+
+      try { this.db.close(); } catch (_) {}
+      this.db = null;
+
+      try {
+        fs.renameSync(this.dbPath, backupPath);
+      } catch (err) {
+        try {
+          fs.copyFileSync(this.dbPath, backupPath);
+          fs.unlinkSync(this.dbPath);
+        } catch (err2) {
+          // If we can't move the old DB out of the way, keep going without resetting.
+          logger.error('Failed to back up conversations DB for schema reset', {
+            event: 'conversation_db_schema_reset_backup_failed',
+            error: err2,
+            error_code: 'CONVERSATION_DB_SCHEMA_RESET_BACKUP_FAILED',
+            hint: 'Check file permissions on a2a-conversations.db and ensure the process can rename/unlink it.',
+            data: {
+              db_path: this.dbPath,
+              backup_path: backupPath
+            }
+          });
+          const reopen = new Database(this.dbPath);
+          this.db = reopen;
+          return;
+        }
+      }
+
+      this.db = new Database(this.dbPath);
+      try {
+        fs.chmodSync(this.dbPath, 0o600);
+      } catch (err) {
+        // Best effort.
+      }
+      this._migrate();
+    } catch (err) {
+      // Best effort: leave existing DB in place if schema validation fails unexpectedly.
+      logger.error('Conversation DB schema validation failed', {
+        event: 'conversation_db_schema_validation_failed',
+        error: err,
+        error_code: 'CONVERSATION_DB_SCHEMA_VALIDATION_FAILED',
+        hint: 'If this persists, delete ~/.config/openclaw/a2a-conversations.db (prototype mode) and restart.'
+      });
+    }
   }
 
   /**

@@ -117,6 +117,14 @@ module.exports = function (test, assert, helpers) {
     tmp.cleanup();
   });
 
+  test('setTier validates topics/goals schema', () => {
+    const config = freshConfig();
+    assert.throws(() => config.setTier('friends', { topics: 'chat' }));
+    assert.throws(() => config.setTier('friends', { goals: { a: 1 } }));
+    assert.throws(() => config.setTier('friends', { topics: ['ok', 123] }));
+    tmp.cleanup();
+  });
+
   // ── Agent Info ────────────────────────────────────────────────
 
   test('setAgent and getAgent round-trip', () => {
