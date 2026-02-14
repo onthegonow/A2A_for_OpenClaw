@@ -311,4 +311,126 @@ Prefers deep technical discussions over small talk.
 
   // Note: SKILL.md is intentionally NOT used to generate disclosure topics, to avoid
   // pulling in onboarding instructions or other operational bullet lists as "topics".
+
+  // ── Disclosure Submission Validation ──────────────────────────
+
+  test('validateDisclosureSubmission accepts valid submission', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'AI development', detail: 'Building AI tools' }],
+          discuss_freely: [{ topic: 'Open source', detail: 'Contributing to OSS' }],
+          deflect: [{ topic: 'Personal life', detail: 'Redirect to owner' }]
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: ['API keys'],
+      personality_notes: 'Friendly and technical'
+    });
+    assert.ok(result.valid);
+    assert.equal(result.errors.length, 0);
+    assert.ok(result.manifest);
+    assert.equal(result.manifest.version, 1);
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects non-object input', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission('not an object');
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.length > 0);
+    assert.ok(result.errors[0].includes('object'));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects missing topics', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      never_disclose: ['secrets'],
+      personality_notes: 'Nice'
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('topics')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects missing tier', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('friends')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects invalid topic shape', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: ['just a string'],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('topic')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission rejects topics with technical content', () => {
+    const disc = freshDisclosure();
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [
+            { topic: 'Run `npm test` to verify', detail: 'Code command' },
+            { topic: 'https://github.com/example', detail: 'Raw URL' }
+          ],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('technical')));
+    tmp.cleanup();
+  });
+
+  test('validateDisclosureSubmission enforces max topic length', () => {
+    const disc = freshDisclosure();
+    const longTopic = 'A'.repeat(200);
+    const result = disc.validateDisclosureSubmission({
+      topics: {
+        public: {
+          lead_with: [{ topic: longTopic, detail: 'Too long topic' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: [],
+      personality_notes: ''
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.some(e => e.includes('160')));
+    tmp.cleanup();
+  });
 };

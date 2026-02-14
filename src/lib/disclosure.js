@@ -315,6 +315,110 @@ function generateDefaultManifest(contextFiles = {}) {
 }
 
 /**
+ * Check if a string contains technical content that shouldn't appear in
+ * disclosure topics (code snippets, URLs, markdown formatting, camelCase).
+ */
+function isTechnicalContent(line) {
+  return /`/.test(line) ||
+    /https?:\/\//.test(line) ||
+    /\*\*:/.test(line) ||
+    /:\*\*/.test(line) ||
+    /[a-z][A-Z]/.test(line);
+}
+
+/**
+ * Validate an agent-submitted disclosure submission against the expected schema.
+ * Returns { valid: boolean, manifest: object|null, errors: string[] }.
+ */
+function validateDisclosureSubmission(data) {
+  const errors = [];
+
+  // Must be a non-null object
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { valid: false, manifest: null, errors: ['Submission must be a non-null object'] };
+  }
+
+  // Require topics object
+  if (!data.topics || typeof data.topics !== 'object' || Array.isArray(data.topics)) {
+    errors.push('Submission must include a "topics" object');
+    return { valid: false, manifest: null, errors };
+  }
+
+  // Require all three tiers
+  for (const tier of TIER_HIERARCHY) {
+    if (!data.topics[tier] || typeof data.topics[tier] !== 'object') {
+      errors.push(`Missing required tier: "${tier}" in topics`);
+    }
+  }
+  if (errors.length > 0) {
+    return { valid: false, manifest: null, errors };
+  }
+
+  // Validate each tier's structure
+  const requiredLists = ['lead_with', 'discuss_freely', 'deflect'];
+  for (const tier of TIER_HIERARCHY) {
+    const tierData = data.topics[tier];
+    for (const listName of requiredLists) {
+      if (!Array.isArray(tierData[listName])) {
+        errors.push(`topics.${tier}.${listName} must be an array`);
+        continue;
+      }
+      for (let i = 0; i < tierData[listName].length; i++) {
+        const item = tierData[listName][i];
+        if (!item || typeof item !== 'object' || typeof item.topic !== 'string' || typeof item.detail !== 'string') {
+          errors.push(`topics.${tier}.${listName}[${i}]: each topic item must have "topic" (string) and "detail" (string)`);
+          continue;
+        }
+        if (item.topic.length > 160) {
+          errors.push(`topics.${tier}.${listName}[${i}]: topic exceeds 160 character limit (got ${item.topic.length})`);
+        }
+        if (item.detail.length > 500) {
+          errors.push(`topics.${tier}.${listName}[${i}]: detail exceeds 500 character limit (got ${item.detail.length})`);
+        }
+        if (isTechnicalContent(item.topic)) {
+          errors.push(`topics.${tier}.${listName}[${i}]: contains technical content (code, URLs, or markdown formatting) — use plain language`);
+        }
+      }
+    }
+  }
+
+  // Validate never_disclose (optional, defaults to sensible list)
+  if (data.never_disclose !== undefined) {
+    if (!Array.isArray(data.never_disclose)) {
+      errors.push('"never_disclose" must be an array of strings');
+    } else {
+      for (let i = 0; i < data.never_disclose.length; i++) {
+        if (typeof data.never_disclose[i] !== 'string') {
+          errors.push(`never_disclose[${i}] must be a string`);
+        }
+      }
+    }
+  }
+
+  // Validate personality_notes (optional)
+  if (data.personality_notes !== undefined && typeof data.personality_notes !== 'string') {
+    errors.push('"personality_notes" must be a string');
+  }
+
+  if (errors.length > 0) {
+    return { valid: false, manifest: null, errors };
+  }
+
+  // Build valid manifest
+  const now = new Date().toISOString();
+  const manifest = {
+    version: 1,
+    generated_at: now,
+    updated_at: now,
+    topics: data.topics,
+    never_disclose: data.never_disclose || ['API keys', 'Other users\' data', 'Financial figures'],
+    personality_notes: data.personality_notes || ''
+  };
+
+  return { valid: true, manifest, errors: [] };
+}
+
+/**
  * Read context files from an OpenClaw workspace directory.
  * Returns { user, heartbeat, soul, skill, claude, memory, skills } with file contents or empty strings.
  */
@@ -362,5 +466,7 @@ module.exports = {
   formatTopicsForPrompt,
   generateDefaultManifest,
   readContextFiles,
+  validateDisclosureSubmission,
+  isTechnicalContent,
   MANIFEST_FILE
 };
