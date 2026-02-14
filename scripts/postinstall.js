@@ -15,12 +15,18 @@
 //      so the full onboarding completes unattended: port selection, hostname
 //      detection, server start, and disclosure prompt output.
 //
-//   2. stdout → stderr. npm suppresses lifecycle script stdout (piped to its
-//      internal log buffer). stderr passes through to the caller. By mapping
-//      the child's stdout to fd 2 (stderr), the entire onboarding walkthrough
-//      is visible to the installing agent or terminal — banner, port selection,
-//      server start confirmation, and the disclosure prompt all come through.
-//      stdin is piped with no input so prompts auto-accept defaults.
+//   2. Bypassing npm's output capture. npm v7+ pipes lifecycle script stdout
+//      AND stderr to an internal buffer, only showing them on failure. This
+//      means normal console.log/console.error from postinstall is invisible.
+//      To make onboarding output visible:
+//
+//      a) Run quickstart with piped stdio, capturing all its output.
+//      b) Save the output to a2a-onboarding.txt in the config dir (reliable
+//         fallback — agents can always read this file).
+//      c) Try /dev/tty (interactive terminals — bypasses npm entirely).
+//      d) Try /proc/$PPID/fd/2 (Linux — writes directly to npm's stderr fd,
+//         which IS the caller's stderr, bypassing npm's pipe buffer).
+//      e) Last resort: process.stderr.write (npm may still buffer this).
 //
 //   3. Never fail the install. If quickstart can't launch (e.g. missing node
 //      binary edge case), we print a hint and exit 0. A broken postinstall
@@ -35,16 +41,17 @@ if (process.env.CI || process.env.CONTINUOUS_INTEGRATION) process.exit(0);
 if (process.env.DOCKER) process.exit(0);
 if (process.env.npm_config_global !== 'true') process.exit(0);
 
+const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
 const initCwd = process.env.INIT_CWD || process.env.HOME || process.cwd();
 const cliPath = path.join(__dirname, '..', 'bin', 'cli.js');
 
-// Launch quickstart with stdout→stderr so npm doesn't swallow the output.
+// Run quickstart with piped stdio so we capture all its output.
 // stdin is piped (empty) so all prompts auto-accept their defaults.
 const result = spawnSync(process.execPath, [cliPath, 'quickstart'], {
-  stdio: ['pipe', 2, 2],
+  stdio: ['pipe', 'pipe', 'pipe'],
   cwd: initCwd,
   env: {
     ...process.env,
@@ -53,10 +60,58 @@ const result = spawnSync(process.execPath, [cliPath, 'quickstart'], {
 });
 
 if (result.error) {
-  console.error('\nCould not auto-launch onboarding.');
-  console.error(`Reason: ${result.error.message}`);
-  console.error('\nRun manually: a2a quickstart\n');
+  process.stderr.write('\nCould not auto-launch onboarding.\n');
+  process.stderr.write(`Reason: ${result.error.message}\n`);
+  process.stderr.write('\nRun manually: a2a quickstart\n\n');
   process.exit(0); // don't fail the install
 }
+
+const output = (result.stdout || '').toString() + (result.stderr || '').toString();
+
+// ── Always save to file (reliable fallback) ──────────────────────────────
+// Agents can read this after install regardless of output visibility.
+try {
+  const configDir = process.env.A2A_CONFIG_DIR
+    || path.join(process.env.HOME || '/root', '.config', 'openclaw');
+  if (fs.existsSync(configDir)) {
+    fs.writeFileSync(path.join(configDir, 'a2a-onboarding.txt'), output);
+  }
+} catch (_) {}
+
+// ── Make output visible to the caller ────────────────────────────────────
+// npm pipes BOTH stdout and stderr of lifecycle scripts (v7+), so writing
+// to our own fds goes into npm's buffer. We need to bypass npm entirely.
+
+function tryWrite(output) {
+  // Strategy 1: /dev/tty — interactive terminals.
+  // npm runs postinstall with piped stdio, but /dev/tty talks directly to
+  // the user's terminal. Works for humans, not for agents.
+  try {
+    const fd = fs.openSync('/dev/tty', 'w');
+    fs.writeSync(fd, output);
+    fs.closeSync(fd);
+    return true;
+  } catch (_) {}
+
+  // Strategy 2: /proc/$PPID/fd/2 — Linux, write to npm's stderr directly.
+  // npm's stderr IS the caller's stderr (the agent's output stream).
+  // This bypasses npm's pipe buffer because we open the fd independently.
+  try {
+    const fd = fs.openSync(`/proc/${process.ppid}/fd/2`, 'w');
+    fs.writeSync(fd, output);
+    fs.closeSync(fd);
+    return true;
+  } catch (_) {}
+
+  // Strategy 3: process.stderr — last resort, npm may still buffer this.
+  try {
+    process.stderr.write(output);
+    return true;
+  } catch (_) {}
+
+  return false;
+}
+
+tryWrite(output);
 
 process.exit(result.status || 0);

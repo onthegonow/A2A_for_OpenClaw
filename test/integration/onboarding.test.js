@@ -661,6 +661,7 @@ module.exports = function (test, assert, helpers) {
   // ── Issue #23: Postinstall script test ──
   test('postinstall launches quickstart and completes setup without TTY', () => {
     const { spawnSync } = require('child_process');
+    const fs = require('fs');
     const path = require('path');
 
     const postinstallPath = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
@@ -680,9 +681,16 @@ module.exports = function (test, assert, helpers) {
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    const output = (result.stdout || '') + (result.stderr || '');
-    assert.includes(output, 'Starting Server', 'Should reach server start phase');
     assert.equal(result.status, 0, 'Should exit 0');
+
+    // Postinstall saves full onboarding output to a2a-onboarding.txt as a
+    // reliable fallback (npm pipes lifecycle stdio, so the output may bypass
+    // our piped test stdio via /dev/tty or /proc/ppid/fd).
+    const onboardingFile = path.join(tmpDir.dir, 'a2a-onboarding.txt');
+    assert.ok(fs.existsSync(onboardingFile), 'Should save onboarding output to file');
+    const saved = fs.readFileSync(onboardingFile, 'utf8');
+    assert.includes(saved, 'Starting Server', 'Saved output should reach server start phase');
+    assert.includes(saved, 'Disclosure', 'Saved output should include disclosure prompt');
 
     tmpDir.cleanup();
   });
