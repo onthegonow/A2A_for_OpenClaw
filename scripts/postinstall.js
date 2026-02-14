@@ -15,9 +15,12 @@
 //      so the full onboarding completes unattended: port selection, hostname
 //      detection, server start, and disclosure prompt output.
 //
-//   2. stdio: 'inherit'. The onboarding output goes straight to whatever
-//      called npm — if that's a terminal the user sees it; if it's an agent
-//      the agent reads it. No /dev/tty tricks needed.
+//   2. stdout → stderr. npm suppresses lifecycle script stdout (piped to its
+//      internal log buffer). stderr passes through to the caller. By mapping
+//      the child's stdout to fd 2 (stderr), the entire onboarding walkthrough
+//      is visible to the installing agent or terminal — banner, port selection,
+//      server start confirmation, and the disclosure prompt all come through.
+//      stdin is piped with no input so prompts auto-accept defaults.
 //
 //   3. Never fail the install. If quickstart can't launch (e.g. missing node
 //      binary edge case), we print a hint and exit 0. A broken postinstall
@@ -38,9 +41,10 @@ const { spawnSync } = require('child_process');
 const initCwd = process.env.INIT_CWD || process.env.HOME || process.cwd();
 const cliPath = path.join(__dirname, '..', 'bin', 'cli.js');
 
-// Launch quickstart — prompts auto-accept defaults when there's no TTY.
+// Launch quickstart with stdout→stderr so npm doesn't swallow the output.
+// stdin is piped (empty) so all prompts auto-accept their defaults.
 const result = spawnSync(process.execPath, [cliPath, 'quickstart'], {
-  stdio: 'inherit',
+  stdio: ['pipe', 2, 2],
   cwd: initCwd,
   env: {
     ...process.env,
