@@ -1372,15 +1372,6 @@ https://github.com/onthegonow/a2a_calling`;
     console.log(`    Port: ${serverPort}`);
     console.log(`    Public host: ${publicHost}`);
 
-    if (!interactive) {
-      console.log('\n  Non-interactive mode detected (no TTY).');
-      console.log('  Not starting the server automatically.\n');
-      console.log('  Next steps:');
-      console.log('    1. Re-run in a terminal: a2a quickstart');
-      console.log(`    2. Or start manually:  a2a server --port ${serverPort}\n`);
-      return;
-    }
-
     const startServer = await promptYesNo('Start the A2A server now? [Y/n] ');
     if (!startServer) {
       console.log('\nServer not started. Run with:\n  a2a server --port <port> --hostname <host>\n');

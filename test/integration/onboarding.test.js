@@ -659,18 +659,19 @@ module.exports = function (test, assert, helpers) {
   });
 
   // ── Issue #23: Postinstall script test ──
-  test('postinstall prints fallback hint when no TTY is available', () => {
+  test('postinstall launches quickstart and completes setup without TTY', () => {
     const { spawnSync } = require('child_process');
     const path = require('path');
 
     const postinstallPath = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
+    const tmpDir = helpers.tmpConfigDir('postinstall-no-tty');
 
-    // Force non-interactive behavior so the postinstall script emits a short
-    // "run quickstart manually" hint instead of trying to attach to /dev/tty.
+    // Non-interactive global install — quickstart should auto-accept defaults
+    // and complete setup (config save, server start) without requiring a TTY.
     const env = {
       ...process.env,
       npm_config_global: 'true',
-      A2A_POSTINSTALL_DISABLE_TTY: '1'
+      A2A_CONFIG_DIR: tmpDir.dir
     };
 
     const result = spawnSync(process.execPath, [postinstallPath], {
@@ -680,8 +681,10 @@ module.exports = function (test, assert, helpers) {
     });
 
     const output = (result.stdout || '') + (result.stderr || '');
-    assert.includes(output, 'a2a quickstart', 'Should tell user to run quickstart manually');
-    assert.equal(result.status, 0, 'Should exit 0 even when a2a is not found');
+    assert.includes(output, 'Starting Server', 'Should reach server start phase');
+    assert.equal(result.status, 0, 'Should exit 0');
+
+    tmpDir.cleanup();
   });
 
   // ── Issue #23: Postinstall skips in CI ──
