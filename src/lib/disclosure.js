@@ -32,7 +32,37 @@ function dedupeByTopic(items) {
     seen.add(topic.toLowerCase());
     out.push({
       topic,
-      detail: normalizeTopic(item && item.detail)
+      description: normalizeTopic(item && (item.description || item.detail))
+    });
+  }
+  return out;
+}
+
+function dedupeByObjective(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const objective = normalizeTopic(item && item.objective);
+    if (!objective || seen.has(objective.toLowerCase())) continue;
+    seen.add(objective.toLowerCase());
+    out.push({
+      objective,
+      description: normalizeTopic(item && item.description)
+    });
+  }
+  return out;
+}
+
+function dedupeDoNotDiscuss(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const topic = normalizeTopic(item && item.topic);
+    if (!topic || seen.has(topic.toLowerCase())) continue;
+    seen.add(topic.toLowerCase());
+    out.push({
+      topic,
+      reason: normalizeTopic(item && item.reason)
     });
   }
   return out;
@@ -118,11 +148,11 @@ function saveManifest(manifest) {
  * Get topics for a given tier, merged down the hierarchy.
  * family gets everything, friends gets friends+public, public gets public only.
  *
- * Returns { lead_with, discuss_freely, deflect, never_disclose }
+ * Returns { topics, objectives, do_not_discuss, never_disclose }
  */
 function getTopicsForTier(tier) {
   const manifest = loadManifest();
-  const topics = manifest.topics || {};
+  const tiers = manifest.tiers || manifest.topics || {};
 
   const tierIndex = TIER_HIERARCHY.indexOf(tier);
   if (tierIndex === -1) {
@@ -134,26 +164,42 @@ function getTopicsForTier(tier) {
   const tiersToMerge = TIER_HIERARCHY.slice(0, tierIndex + 1);
 
   const merged = {
-    lead_with: [],
-    discuss_freely: [],
-    deflect: [],
+    topics: [],
+    objectives: [],
+    do_not_discuss: [],
     never_disclose: manifest.never_disclose || []
   };
 
   for (const t of tiersToMerge) {
-    const tierTopics = topics[t] || {};
-    if (tierTopics.lead_with) merged.lead_with.push(...tierTopics.lead_with);
-    if (tierTopics.discuss_freely) merged.discuss_freely.push(...tierTopics.discuss_freely);
-    if (tierTopics.deflect) merged.deflect.push(...tierTopics.deflect);
+    const tierData = tiers[t] || {};
+    // Support both new format (topics/objectives/do_not_discuss) and legacy (lead_with/discuss_freely/deflect)
+    if (tierData.topics) {
+      merged.topics.push(...tierData.topics);
+    } else {
+      // Legacy format fallback
+      if (tierData.lead_with) merged.topics.push(...tierData.lead_with);
+      if (tierData.discuss_freely) merged.topics.push(...tierData.discuss_freely);
+    }
+    if (tierData.objectives) merged.objectives.push(...tierData.objectives);
+    if (tierData.do_not_discuss) {
+      merged.do_not_discuss.push(...tierData.do_not_discuss);
+    } else if (tierData.deflect) {
+      // Legacy format fallback
+      merged.do_not_discuss.push(...tierData.deflect.map(d => ({
+        topic: d.topic,
+        reason: d.detail || d.reason
+      })));
+    }
   }
 
-  // Deflect items: remove any that already appear in lead_with or discuss_freely
-  // (higher tiers promote topics from deflect to discuss/lead)
-  const promoted = new Set([
-    ...merged.lead_with.map(t => t.topic),
-    ...merged.discuss_freely.map(t => t.topic)
-  ]);
-  merged.deflect = merged.deflect.filter(t => !promoted.has(t.topic));
+  // Remove do_not_discuss items that appear in topics (higher tiers promote them)
+  const promoted = new Set(merged.topics.map(t => (t.topic || '').toLowerCase()));
+  merged.do_not_discuss = merged.do_not_discuss.filter(t => !promoted.has((t.topic || '').toLowerCase()));
+
+  // Dedupe
+  merged.topics = dedupeByTopic(merged.topics);
+  merged.objectives = dedupeByObjective(merged.objectives);
+  merged.do_not_discuss = dedupeDoNotDiscuss(merged.do_not_discuss);
 
   return merged;
 }
@@ -162,18 +208,32 @@ function getTopicsForTier(tier) {
  * Format topic lists into readable bullet points for prompt injection.
  */
 function formatTopicsForPrompt(tierTopics) {
-  const formatList = (items) => {
+  const formatTopicList = (items) => {
     if (!items || items.length === 0) return '  (none specified)';
-    return items.map(item => `  - ${item.topic}: ${item.detail}`).join('\n');
+    return items.map(item => `  - ${item.topic}: ${item.description || item.detail || ''}`).join('\n');
+  };
+
+  const formatObjectiveList = (items) => {
+    if (!items || items.length === 0) return '  (none specified)';
+    return items.map(item => `  - ${item.objective}: ${item.description || ''}`).join('\n');
+  };
+
+  const formatDoNotDiscuss = (items) => {
+    if (!items || items.length === 0) return '  (none specified)';
+    return items.map(item => `  - ${item.topic}: ${item.reason || ''}`).join('\n');
   };
 
   return {
-    leadWithTopics: formatList(tierTopics.lead_with),
-    discussFreelyTopics: formatList(tierTopics.discuss_freely),
-    deflectTopics: formatList(tierTopics.deflect),
+    topics: formatTopicList(tierTopics.topics),
+    objectives: formatObjectiveList(tierTopics.objectives),
+    doNotDiscuss: formatDoNotDiscuss(tierTopics.do_not_discuss),
     neverDisclose: tierTopics.never_disclose?.length
       ? tierTopics.never_disclose.map(item => `  - ${item}`).join('\n')
-      : '  (none specified)'
+      : '  (none specified)',
+    // Legacy compatibility
+    leadWithTopics: formatTopicList(tierTopics.topics?.slice(0, 3) || tierTopics.lead_with),
+    discussFreelyTopics: formatTopicList(tierTopics.topics?.slice(3) || tierTopics.discuss_freely),
+    deflectTopics: formatDoNotDiscuss(tierTopics.do_not_discuss || tierTopics.deflect)
   };
 }
 
@@ -226,86 +286,71 @@ function generateDefaultManifest(contextFiles = {}) {
 
   if (candidateTopics.length === 0) {
     return {
-      version: 1,
+      version: 2,
       generated_at: now,
       updated_at: now,
-      topics: {
+      tiers: {
         public: {
-          lead_with: [{ topic: 'What I do', detail: 'Brief professional description' }],
-          discuss_freely: [{ topic: 'General interests', detail: 'Non-sensitive topics and hobbies' }],
-          deflect: [{ topic: 'Personal details', detail: 'Redirect to direct owner contact' }]
+          topics: [{ topic: 'What I do', description: 'Brief professional description' }],
+          objectives: [{ objective: 'Networking', description: 'Connect with others in the field' }],
+          do_not_discuss: [{ topic: 'Personal details', reason: 'Redirect to direct owner contact' }]
         },
-        friends: { lead_with: [], discuss_freely: [], deflect: [] },
-        family: { lead_with: [], discuss_freely: [], deflect: [] }
+        friends: { topics: [], objectives: [], do_not_discuss: [] },
+        family: { topics: [], objectives: [], do_not_discuss: [] }
       },
       never_disclose: ['API keys', 'Other users\' data', 'Financial figures'],
       personality_notes: 'Direct and technical. Prefers depth over breadth.'
     };
   }
 
-  const publicLead = [];
-  const publicDiscuss = [];
-  const publicDeflect = [];
-  const friendsLead = [];
-  const friendsDiscuss = [];
-  const familyDiscuss = [];
+  const publicTopics = [];
+  const publicObjectives = [];
+  const friendsTopics = [];
+  const friendsObjectives = [];
+  const familyTopics = [];
 
   candidateTopics.forEach((entry, index) => {
-    const topic = truncateAtWordBoundary(entry.topic || '', 60);
-    const detail = truncateAtWordBoundary(entry.detail || 'Open discussion topic.', 120);
+    const topic = truncateAtWordBoundary(entry.topic || '', 160);
+    const description = truncateAtWordBoundary(entry.description || entry.detail || 'Open discussion topic.', 500);
     if (!topic) return;
 
-    const node = { topic, detail };
-    if (index < 2) {
-      publicLead.push(node);
+    const node = { topic, description };
+    if (index < 5) {
+      publicTopics.push(node);
       return;
     }
-    if (index < 6) {
-      publicDiscuss.push(node);
+    if (index < 10) {
+      friendsTopics.push(node);
       return;
     }
-    if (index < 8) {
-      friendsLead.push(node);
-      return;
-    }
-    if (index < 12) {
-      friendsDiscuss.push(node);
-      return;
-    }
-    if (index < 14) {
-      familyDiscuss.push(node);
-    }
+    familyTopics.push(node);
   });
 
-  if (publicLead.length === 0) {
-    publicLead.push({ topic: 'Open source', detail: 'General product and engineering topics.' });
-  }
-  if (publicDiscuss.length === 0) {
-    publicDiscuss.push({ topic: 'Collaboration', detail: 'Ways to collaborate and support each other.' });
-  }
-  if (publicDeflect.length === 0) {
-    publicDeflect.push({ topic: 'Personal details', detail: 'Redirect to direct owner contact.' });
+  if (publicTopics.length === 0) {
+    publicTopics.push({ topic: 'Open source', description: 'General product and engineering topics.' });
   }
 
   return {
-    version: 1,
+    version: 2,
     generated_at: now,
     updated_at: now,
-    topics: {
+    tiers: {
       public: {
-        lead_with: publicLead,
-        discuss_freely: publicDiscuss,
-        deflect: publicDeflect
+        topics: publicTopics,
+        objectives: publicObjectives.length > 0 ? publicObjectives : [
+          { objective: 'Grow network', description: 'Connect with others working on similar problems' }
+        ],
+        do_not_discuss: [{ topic: 'Personal details', reason: 'Redirect to direct owner contact' }]
       },
       friends: {
-        lead_with: friendsLead,
-        discuss_freely: friendsDiscuss,
-        deflect: []
+        topics: friendsTopics,
+        objectives: friendsObjectives,
+        do_not_discuss: []
       },
       family: {
-        lead_with: [],
-        discuss_freely: familyDiscuss,
-        deflect: []
+        topics: familyTopics,
+        objectives: [],
+        do_not_discuss: []
       }
     },
     never_disclose: ['API keys', 'Other users\' data', 'Financial figures'],
@@ -337,16 +382,17 @@ function validateDisclosureSubmission(data) {
     return { valid: false, manifest: null, errors: ['Submission must be a non-null object'] };
   }
 
-  // Require topics object
-  if (!data.topics || typeof data.topics !== 'object' || Array.isArray(data.topics)) {
-    errors.push('Submission must include a "topics" object');
+  // Support both new format (tiers) and legacy format (topics)
+  const tiersData = data.tiers || data.topics;
+  if (!tiersData || typeof tiersData !== 'object' || Array.isArray(tiersData)) {
+    errors.push('Submission must include a "tiers" object (or legacy "topics" object)');
     return { valid: false, manifest: null, errors };
   }
 
   // Require all three tiers
   for (const tier of TIER_HIERARCHY) {
-    if (!data.topics[tier] || typeof data.topics[tier] !== 'object') {
-      errors.push(`Missing required tier: "${tier}" in topics`);
+    if (!tiersData[tier] || typeof tiersData[tier] !== 'object') {
+      errors.push(`Missing required tier: "${tier}"`);
     }
   }
   if (errors.length > 0) {
@@ -354,42 +400,108 @@ function validateDisclosureSubmission(data) {
   }
 
   // Reject extra tiers beyond the known hierarchy
-  const extraTiers = Object.keys(data.topics).filter(t => !TIER_HIERARCHY.includes(t));
+  const extraTiers = Object.keys(tiersData).filter(t => !TIER_HIERARCHY.includes(t));
   if (extraTiers.length > 0) {
     errors.push(`Unknown tiers: ${extraTiers.join(', ')} — only public, friends, family are allowed`);
   }
 
-  // Validate each tier's structure
-  const requiredLists = ['lead_with', 'discuss_freely', 'deflect'];
-  const LIST_LIMITS = { lead_with: 10, discuss_freely: 20, deflect: 10 };
+  // Detect format: new (topics/objectives/do_not_discuss) or legacy (lead_with/discuss_freely/deflect)
+  const isNewFormat = tiersData.public && (
+    Array.isArray(tiersData.public.topics) ||
+    Array.isArray(tiersData.public.objectives) ||
+    Array.isArray(tiersData.public.do_not_discuss)
+  );
+
+  const LIST_LIMITS = { topics: 15, objectives: 8, do_not_discuss: 10 };
+
   for (const tier of TIER_HIERARCHY) {
-    const tierData = data.topics[tier];
-    for (const cat of requiredLists) {
-      if (!Array.isArray(tierData[cat])) {
-        errors.push(`topics.${tier}.${cat} must be an array`);
-        continue;
+    const tierData = tiersData[tier];
+
+    if (isNewFormat) {
+      // Validate new format: topics, objectives, do_not_discuss
+      if (tierData.topics !== undefined) {
+        if (!Array.isArray(tierData.topics)) {
+          errors.push(`tiers.${tier}.topics must be an array`);
+        } else {
+          if (tierData.topics.length > LIST_LIMITS.topics) {
+            errors.push(`tiers.${tier}.topics has ${tierData.topics.length} items — max ${LIST_LIMITS.topics}`);
+          }
+          for (let i = 0; i < tierData.topics.length; i++) {
+            const item = tierData.topics[i];
+            if (!item || typeof item !== 'object' || typeof item.topic !== 'string') {
+              errors.push(`tiers.${tier}.topics[${i}]: must have "topic" (string) and "description" (string)`);
+              continue;
+            }
+            if (item.topic.trim().length === 0) {
+              errors.push(`tiers.${tier}.topics[${i}].topic must not be empty`);
+            }
+            if (item.topic.length > 160) {
+              errors.push(`tiers.${tier}.topics[${i}]: topic exceeds 160 chars`);
+            }
+            const desc = item.description || '';
+            if (desc.length > 500) {
+              errors.push(`tiers.${tier}.topics[${i}]: description exceeds 500 chars`);
+            }
+          }
+        }
       }
-      if (tierData[cat].length > LIST_LIMITS[cat]) {
-        errors.push(`topics.${tier}.${cat} has ${tierData[cat].length} items — max ${LIST_LIMITS[cat]}`);
+
+      if (tierData.objectives !== undefined) {
+        if (!Array.isArray(tierData.objectives)) {
+          errors.push(`tiers.${tier}.objectives must be an array`);
+        } else {
+          if (tierData.objectives.length > LIST_LIMITS.objectives) {
+            errors.push(`tiers.${tier}.objectives has ${tierData.objectives.length} items — max ${LIST_LIMITS.objectives}`);
+          }
+          for (let i = 0; i < tierData.objectives.length; i++) {
+            const item = tierData.objectives[i];
+            if (!item || typeof item !== 'object' || typeof item.objective !== 'string') {
+              errors.push(`tiers.${tier}.objectives[${i}]: must have "objective" (string) and "description" (string)`);
+              continue;
+            }
+            if (item.objective.trim().length === 0) {
+              errors.push(`tiers.${tier}.objectives[${i}].objective must not be empty`);
+            }
+          }
+        }
       }
-      for (let i = 0; i < tierData[cat].length; i++) {
-        const item = tierData[cat][i];
-        if (!item || typeof item !== 'object' || typeof item.topic !== 'string' || typeof item.detail !== 'string') {
-          errors.push(`topics.${tier}.${cat}[${i}]: each topic item must have "topic" (string) and "detail" (string)`);
+
+      if (tierData.do_not_discuss !== undefined) {
+        if (!Array.isArray(tierData.do_not_discuss)) {
+          errors.push(`tiers.${tier}.do_not_discuss must be an array`);
+        } else {
+          if (tierData.do_not_discuss.length > LIST_LIMITS.do_not_discuss) {
+            errors.push(`tiers.${tier}.do_not_discuss has ${tierData.do_not_discuss.length} items — max ${LIST_LIMITS.do_not_discuss}`);
+          }
+          for (let i = 0; i < tierData.do_not_discuss.length; i++) {
+            const item = tierData.do_not_discuss[i];
+            if (!item || typeof item !== 'object' || typeof item.topic !== 'string') {
+              errors.push(`tiers.${tier}.do_not_discuss[${i}]: must have "topic" (string) and "reason" (string)`);
+            }
+          }
+        }
+      }
+    } else {
+      // Validate legacy format: lead_with, discuss_freely, deflect
+      const requiredLists = ['lead_with', 'discuss_freely', 'deflect'];
+      const LEGACY_LIMITS = { lead_with: 10, discuss_freely: 20, deflect: 10 };
+      for (const cat of requiredLists) {
+        if (!Array.isArray(tierData[cat])) {
+          errors.push(`topics.${tier}.${cat} must be an array`);
           continue;
         }
-        if (item.topic.trim().length === 0) {
-          errors.push(`topics.${tier}.${cat}[${i}].topic must not be empty`);
-          continue;
+        if (tierData[cat].length > LEGACY_LIMITS[cat]) {
+          errors.push(`topics.${tier}.${cat} has ${tierData[cat].length} items — max ${LEGACY_LIMITS[cat]}`);
         }
-        if (item.topic.length > 160) {
-          errors.push(`topics.${tier}.${cat}[${i}]: topic exceeds 160 character limit (got ${item.topic.length})`);
-        }
-        if (item.detail.length > 500) {
-          errors.push(`topics.${tier}.${cat}[${i}]: detail exceeds 500 character limit (got ${item.detail.length})`);
-        }
-        if (isTechnicalContent(item.topic) || isTechnicalContent(item.detail)) {
-          errors.push(`topics.${tier}.${cat}[${i}]: contains technical content (code, URLs, or markdown formatting) — use plain language`);
+        for (let i = 0; i < tierData[cat].length; i++) {
+          const item = tierData[cat][i];
+          if (!item || typeof item !== 'object' || typeof item.topic !== 'string') {
+            errors.push(`topics.${tier}.${cat}[${i}]: must have "topic" (string) and "detail" (string)`);
+            continue;
+          }
+          if (item.topic.trim().length === 0) {
+            errors.push(`topics.${tier}.${cat}[${i}].topic must not be empty`);
+          }
         }
       }
     }
@@ -426,30 +538,63 @@ function validateDisclosureSubmission(data) {
     return { valid: false, manifest: null, errors };
   }
 
-  // Rebuild topics from only validated keys to prevent extra properties passing through
-  const cleanTopics = {};
-  for (const tier of TIER_HIERARCHY) {
-    cleanTopics[tier] = {};
-    for (const cat of ['lead_with', 'discuss_freely', 'deflect']) {
-      cleanTopics[tier][cat] = (data.topics[tier][cat] || []).map(item => ({
-        topic: item.topic,
-        detail: item.detail
-      }));
-    }
-  }
-
-  // Build valid manifest
+  // Rebuild clean structure (isNewFormat already set above)
   const now = new Date().toISOString();
-  const manifest = {
-    version: 1,
-    generated_at: now,
-    updated_at: now,
-    topics: cleanTopics,
-    never_disclose: data.never_disclose || ['API keys', 'Other users\' data', 'Financial figures'],
-    personality_notes: data.personality_notes || ''
-  };
 
-  return { valid: true, manifest, errors: [] };
+  if (isNewFormat) {
+    // New format: tiers with topics/objectives/do_not_discuss
+    const cleanTiers = {};
+    for (const tier of TIER_HIERARCHY) {
+      cleanTiers[tier] = {
+        topics: (tiersData[tier].topics || []).map(item => ({
+          topic: item.topic,
+          description: item.description || ''
+        })),
+        objectives: (tiersData[tier].objectives || []).map(item => ({
+          objective: item.objective,
+          description: item.description || ''
+        })),
+        do_not_discuss: (tiersData[tier].do_not_discuss || []).map(item => ({
+          topic: item.topic,
+          reason: item.reason || ''
+        }))
+      };
+    }
+
+    const manifest = {
+      version: 2,
+      generated_at: now,
+      updated_at: now,
+      tiers: cleanTiers,
+      never_disclose: data.never_disclose || ['API keys', 'Other users\' data', 'Financial figures'],
+      personality_notes: data.personality_notes || ''
+    };
+
+    return { valid: true, manifest, errors: [] };
+  } else {
+    // Legacy format: topics with lead_with/discuss_freely/deflect
+    const cleanTopics = {};
+    for (const tier of TIER_HIERARCHY) {
+      cleanTopics[tier] = {};
+      for (const cat of ['lead_with', 'discuss_freely', 'deflect']) {
+        cleanTopics[tier][cat] = (tiersData[tier][cat] || []).map(item => ({
+          topic: item.topic,
+          detail: item.detail || ''
+        }));
+      }
+    }
+
+    const manifest = {
+      version: 1,
+      generated_at: now,
+      updated_at: now,
+      topics: cleanTopics,
+      never_disclose: data.never_disclose || ['API keys', 'Other users\' data', 'Financial figures'],
+      personality_notes: data.personality_notes || ''
+    };
+
+    return { valid: true, manifest, errors: [] };
+  }
 }
 
 /**
@@ -520,7 +665,35 @@ function buildExtractionPrompt(availableFiles) {
 Look for these files in your workspace directory and read the ones that exist. Extract disclosure topics from USER.md and SOUL.md primarily.`;
   }
 
-  const jsonBlock = '```json\n{\n  "topics": {\n    "public": {\n      "lead_with": [\n        { "topic": "Short label (max 160 chars)", "detail": "Longer description of the topic" }\n      ],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "friends": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    },\n    "family": {\n      "lead_with": [],\n      "discuss_freely": [],\n      "deflect": []\n    }\n  },\n  "never_disclose": ["API keys", "Credentials", "Financial figures"],\n  "personality_notes": "Brief description of communication style"\n}\n```';
+  const jsonBlock = `\`\`\`json
+{
+  "tiers": {
+    "public": {
+      "topics": [
+        { "topic": "Short label (max 160 chars)", "description": "Longer description of the topic" }
+      ],
+      "objectives": [
+        { "objective": "What you want to achieve", "description": "Longer description of this goal" }
+      ],
+      "do_not_discuss": [
+        { "topic": "Topic to avoid", "reason": "Why this should be redirected" }
+      ]
+    },
+    "friends": {
+      "topics": [],
+      "objectives": [],
+      "do_not_discuss": []
+    },
+    "family": {
+      "topics": [],
+      "objectives": [],
+      "do_not_discuss": []
+    }
+  },
+  "never_disclose": ["API keys", "Credentials", "Financial figures"],
+  "personality_notes": "Brief description of communication style"
+}
+\`\`\``;
 
   return `## A2A Disclosure Extraction
 
@@ -530,21 +703,35 @@ ${fileSection}
 
 Focus on what the OWNER cares about, works on, and wants to discuss — NOT on agent instructions, code documentation, or operational tasks.
 
-### What to extract
+### Tier Inheritance
 
-For each trust tier, identify topics the owner would want to discuss:
+- **public** — base tier, anyone can see these
+- **friends** — inherits all PUBLIC topics/objectives, plus additional friend-only items
+- **family** — inherits all FRIENDS and PUBLIC items, plus additional family-only items
 
-- **public** — safe for anyone: professional role, public interests, general project descriptions
-- **friends** — for trusted contacts: current goals, collaboration interests, values, detailed project work
-- **family** — inner circle only: personal interests, private projects, sensitive plans
+Family callers see everything. Friends see friends + public. Public callers see only public.
 
-For each tier, categorize topics as:
-- **lead_with** — proactively bring up (max 3 per tier)
-- **discuss_freely** — happy to discuss if asked (max 8 per tier)
-- **deflect** — redirect or decline (max 3 per tier)
+### What to extract for each tier
+
+**topics** — Things the owner is interested in or working on:
+- Professional role and expertise
+- Current projects and interests
+- Hobbies and activities
+- Max 8 topics per tier
+
+**objectives** — What the owner wants to achieve in conversations:
+- Networking goals
+- Collaboration interests
+- Opportunities they're seeking
+- Max 4 objectives per tier
+
+**do_not_discuss** — Topics to redirect or decline (can be empty):
+- Personal matters (for public tier)
+- Sensitive subjects
+- Max 3 per tier
 
 Also identify:
-- **never_disclose** — information that should never be shared regardless of tier (API keys, credentials, financial data, etc.)
+- **never_disclose** — information that should NEVER be shared regardless of tier (API keys, credentials, financial data, etc.)
 - **personality_notes** — a 1-2 sentence description of the owner's communication style
 
 ### What NOT to extract
@@ -565,11 +752,11 @@ ${jsonBlock}
 ### Rules
 
 1. Each "topic" string must be a short, human-readable label (max 160 chars)
-2. Each "detail" string explains the topic more fully (max 500 chars)
+2. Each "description" string explains the topic more fully (max 500 chars)
 3. Topics should be things a person would discuss, not technical artifacts
-4. Higher tiers (friends, family) inherit lower-tier topics automatically — don't duplicate
+4. Higher tiers inherit lower-tier items automatically — only add NEW items at each tier
 5. Present this to the owner for review before submitting
-6. The owner may edit, remove, or add topics before final submission`;
+6. The owner may edit, remove, or add items before final submission`;
 }
 
 module.exports = {

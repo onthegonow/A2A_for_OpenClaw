@@ -1032,9 +1032,14 @@ function createDashboardApiRouter(options = {}) {
         disclosure: configTier.disclosure || 'minimal',
         examples: sanitizeStringArray(configTier.examples || [], 20, 120),
         manifest: {
-          lead_with: manifestTier.lead_with || [],
-          discuss_freely: manifestTier.discuss_freely || [],
-          deflect: manifestTier.deflect || []
+          // Support both new format (topics/objectives/do_not_discuss) and legacy
+          topics: manifestTier.topics || manifestTier.lead_with || [],
+          objectives: manifestTier.objectives || [],
+          do_not_discuss: manifestTier.do_not_discuss || manifestTier.deflect || [],
+          // Legacy fields for backwards compatibility
+          lead_with: manifestTier.lead_with || manifestTier.topics?.slice(0, 3) || [],
+          discuss_freely: manifestTier.discuss_freely || manifestTier.topics?.slice(3) || [],
+          deflect: manifestTier.deflect || manifestTier.do_not_discuss || []
         }
       };
     });

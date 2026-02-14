@@ -335,9 +335,18 @@ async function handleDisclosureSubmit(args, commandLabel = 'onboard') {
 
   // Sync tier config from manifest
   const manifest = result.manifest;
-  function flattenTopics(sections) {
+  
+  // Helper to extract topic names from both new and legacy formats
+  function getTierTopics(tierData) {
+    if (!tierData) return [];
+    // New format: topics array
+    if (Array.isArray(tierData.topics)) {
+      return tierData.topics.map(t => String(t && t.topic || '').trim()).filter(Boolean);
+    }
+    // Legacy format: lead_with + discuss_freely + deflect
     const out = [];
-    for (const section of sections) {
+    for (const section of [tierData.lead_with, tierData.discuss_freely, tierData.deflect]) {
+      if (!Array.isArray(section)) continue;
       for (const item of section) {
         const t = String(item && item.topic || '').trim();
         if (t && !out.includes(t)) out.push(t);
@@ -346,24 +355,20 @@ async function handleDisclosureSubmit(args, commandLabel = 'onboard') {
     return out;
   }
 
+  // Get tiers data (support both new 'tiers' key and legacy 'topics' key)
+  const tiersData = manifest.tiers || manifest.topics || {};
+
   try {
     config.setTier('public', {
-      topics: flattenTopics([manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect]),
+      topics: getTierTopics(tiersData.public),
       disclosure: 'public'
     });
     config.setTier('friends', {
-      topics: flattenTopics([
-        manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect,
-        manifest.topics.friends.lead_with, manifest.topics.friends.discuss_freely, manifest.topics.friends.deflect
-      ]),
+      topics: [...getTierTopics(tiersData.public), ...getTierTopics(tiersData.friends)],
       disclosure: 'minimal'
     });
     config.setTier('family', {
-      topics: flattenTopics([
-        manifest.topics.public.lead_with, manifest.topics.public.discuss_freely, manifest.topics.public.deflect,
-        manifest.topics.friends.lead_with, manifest.topics.friends.discuss_freely, manifest.topics.friends.deflect,
-        manifest.topics.family.lead_with, manifest.topics.family.discuss_freely, manifest.topics.family.deflect
-      ]),
+      topics: [...getTierTopics(tiersData.public), ...getTierTopics(tiersData.friends), ...getTierTopics(tiersData.family)],
       disclosure: 'minimal'
     });
   } catch (err) {
@@ -382,10 +387,7 @@ async function handleDisclosureSubmit(args, commandLabel = 'onboard') {
   const hostname = config.getAgent().hostname || process.env.A2A_HOSTNAME || 'localhost';
   if (args.flags.name) config.setAgent({ name: agentName });
 
-  const publicTopics = flattenTopics([
-    manifest.topics.public.lead_with,
-    manifest.topics.public.discuss_freely
-  ]);
+  const publicTopics = getTierTopics(tiersData.public);
 
   const { token } = store.create({
     name: agentName,

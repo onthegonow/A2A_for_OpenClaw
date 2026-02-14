@@ -184,24 +184,38 @@ function extractSignalPhrases(text, pattern, maxItems = 3) {
 
 function collectTopicKeywords(tierTopics) {
   const keywords = new Set();
-  const sourceLists = ['lead_with', 'discuss_freely'];
+  
+  // Support both new format (topics) and legacy format (lead_with/discuss_freely)
+  const topicsList = tierTopics?.topics || [
+    ...(tierTopics?.lead_with || []),
+    ...(tierTopics?.discuss_freely || [])
+  ];
+  const objectivesList = tierTopics?.objectives || [];
 
-  for (const listName of sourceLists) {
-    for (const item of tierTopics?.[listName] || []) {
-      for (const part of [item?.topic, item?.detail]) {
-        if (!part) {
-          continue;
-        }
-        const terms = String(part)
-          .toLowerCase()
-          .split(/[^a-z0-9]+/)
-          .filter(term => term.length >= 4);
-        for (const term of terms.slice(0, 6)) {
-          keywords.add(term);
-          if (keywords.size >= 48) {
-            return Array.from(keywords);
-          }
-        }
+  for (const item of topicsList) {
+    for (const part of [item?.topic, item?.description, item?.detail]) {
+      if (!part) continue;
+      const terms = String(part)
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(term => term.length >= 4);
+      for (const term of terms.slice(0, 6)) {
+        keywords.add(term);
+        if (keywords.size >= 48) return Array.from(keywords);
+      }
+    }
+  }
+
+  for (const item of objectivesList) {
+    for (const part of [item?.objective, item?.description]) {
+      if (!part) continue;
+      const terms = String(part)
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(term => term.length >= 4);
+      for (const term of terms.slice(0, 6)) {
+        keywords.add(term);
+        if (keywords.size >= 48) return Array.from(keywords);
       }
     }
   }
