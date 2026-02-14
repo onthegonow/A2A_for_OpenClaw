@@ -23,9 +23,10 @@
 //      a) Run quickstart with piped stdio, capturing all its output.
 //      b) Save the output to a2a-onboarding.txt in the config dir (reliable
 //         fallback — agents can always read this file).
-//      c) Try /dev/tty (interactive terminals — bypasses npm entirely).
-//      d) Try /proc/$PPID/fd/2 (Linux — writes directly to npm's stderr fd,
-//         which IS the caller's stderr, bypassing npm's pipe buffer).
+//      c) Try /proc/$PPID/fd/2 FIRST (Linux — writes directly to npm's
+//         stderr fd, which IS the caller's output stream. Agents capture
+//         via pipes, so this is the primary delivery path).
+//      d) Try /dev/tty (macOS/non-Linux — interactive terminals).
 //      e) Last resort: process.stderr.write (npm may still buffer this).
 //
 //   3. Never fail the install. If quickstart can't launch (e.g. missing node
@@ -83,21 +84,23 @@ try {
 // to our own fds goes into npm's buffer. We need to bypass npm entirely.
 
 function tryWrite(output) {
-  // Strategy 1: /dev/tty — interactive terminals.
-  // npm runs postinstall with piped stdio, but /dev/tty talks directly to
-  // the user's terminal. Works for humans, not for agents.
+  // Strategy 1: /proc/$PPID/fd/2 — Linux, write to npm's stderr directly.
+  // npm's stderr IS the caller's stderr (the agent's output stream).
+  // This bypasses npm's pipe buffer because we open the fd independently.
+  // This is tried FIRST because agents are the primary users — their output
+  // is captured via pipes, and /dev/tty would send output to a terminal
+  // device they can't read from.
   try {
-    const fd = fs.openSync('/dev/tty', 'w');
+    const fd = fs.openSync(`/proc/${process.ppid}/fd/2`, 'w');
     fs.writeSync(fd, output);
     fs.closeSync(fd);
     return true;
   } catch (_) {}
 
-  // Strategy 2: /proc/$PPID/fd/2 — Linux, write to npm's stderr directly.
-  // npm's stderr IS the caller's stderr (the agent's output stream).
-  // This bypasses npm's pipe buffer because we open the fd independently.
+  // Strategy 2: /dev/tty — interactive terminals (macOS, non-Linux).
+  // Talks directly to the user's terminal, bypassing npm's pipe.
   try {
-    const fd = fs.openSync(`/proc/${process.ppid}/fd/2`, 'w');
+    const fd = fs.openSync('/dev/tty', 'w');
     fs.writeSync(fd, output);
     fs.closeSync(fd);
     return true;
