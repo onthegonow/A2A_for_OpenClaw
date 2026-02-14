@@ -172,24 +172,9 @@ function getTopicsForTier(tier) {
 
   for (const t of tiersToMerge) {
     const tierData = tiers[t] || {};
-    // Support both new format (topics/objectives/do_not_discuss) and legacy (lead_with/discuss_freely/deflect)
-    if (tierData.topics) {
-      merged.topics.push(...tierData.topics);
-    } else {
-      // Legacy format fallback
-      if (tierData.lead_with) merged.topics.push(...tierData.lead_with);
-      if (tierData.discuss_freely) merged.topics.push(...tierData.discuss_freely);
-    }
+    if (tierData.topics) merged.topics.push(...tierData.topics);
     if (tierData.objectives) merged.objectives.push(...tierData.objectives);
-    if (tierData.do_not_discuss) {
-      merged.do_not_discuss.push(...tierData.do_not_discuss);
-    } else if (tierData.deflect) {
-      // Legacy format fallback
-      merged.do_not_discuss.push(...tierData.deflect.map(d => ({
-        topic: d.topic,
-        reason: d.detail || d.reason
-      })));
-    }
+    if (tierData.do_not_discuss) merged.do_not_discuss.push(...tierData.do_not_discuss);
   }
 
   // Remove do_not_discuss items that appear in topics (higher tiers promote them)
@@ -229,11 +214,7 @@ function formatTopicsForPrompt(tierTopics) {
     doNotDiscuss: formatDoNotDiscuss(tierTopics.do_not_discuss),
     neverDisclose: tierTopics.never_disclose?.length
       ? tierTopics.never_disclose.map(item => `  - ${item}`).join('\n')
-      : '  (none specified)',
-    // Legacy compatibility
-    leadWithTopics: formatTopicList(tierTopics.topics?.slice(0, 3) || tierTopics.lead_with),
-    discussFreelyTopics: formatTopicList(tierTopics.topics?.slice(3) || tierTopics.discuss_freely),
-    deflectTopics: formatDoNotDiscuss(tierTopics.do_not_discuss || tierTopics.deflect)
+      : '  (none specified)'
   };
 }
 
@@ -405,102 +386,72 @@ function validateDisclosureSubmission(data) {
     errors.push(`Unknown tiers: ${extraTiers.join(', ')} — only public, friends, family are allowed`);
   }
 
-  // Detect format: new (topics/objectives/do_not_discuss) or legacy (lead_with/discuss_freely/deflect)
-  const isNewFormat = tiersData.public && (
-    Array.isArray(tiersData.public.topics) ||
-    Array.isArray(tiersData.public.objectives) ||
-    Array.isArray(tiersData.public.do_not_discuss)
-  );
-
   const LIST_LIMITS = { topics: 15, objectives: 8, do_not_discuss: 10 };
 
   for (const tier of TIER_HIERARCHY) {
     const tierData = tiersData[tier];
 
-    if (isNewFormat) {
-      // Validate new format: topics, objectives, do_not_discuss
-      if (tierData.topics !== undefined) {
-        if (!Array.isArray(tierData.topics)) {
-          errors.push(`tiers.${tier}.topics must be an array`);
-        } else {
-          if (tierData.topics.length > LIST_LIMITS.topics) {
-            errors.push(`tiers.${tier}.topics has ${tierData.topics.length} items — max ${LIST_LIMITS.topics}`);
-          }
-          for (let i = 0; i < tierData.topics.length; i++) {
-            const item = tierData.topics[i];
-            if (!item || typeof item !== 'object' || typeof item.topic !== 'string') {
-              errors.push(`tiers.${tier}.topics[${i}]: must have "topic" (string) and "description" (string)`);
-              continue;
-            }
-            if (item.topic.trim().length === 0) {
-              errors.push(`tiers.${tier}.topics[${i}].topic must not be empty`);
-            }
-            if (item.topic.length > 160) {
-              errors.push(`tiers.${tier}.topics[${i}]: topic exceeds 160 chars`);
-            }
-            const desc = item.description || '';
-            if (desc.length > 500) {
-              errors.push(`tiers.${tier}.topics[${i}]: description exceeds 500 chars`);
-            }
-          }
+    // Validate topics array
+    if (tierData.topics !== undefined) {
+      if (!Array.isArray(tierData.topics)) {
+        errors.push(`tiers.${tier}.topics must be an array`);
+      } else {
+        if (tierData.topics.length > LIST_LIMITS.topics) {
+          errors.push(`tiers.${tier}.topics has ${tierData.topics.length} items — max ${LIST_LIMITS.topics}`);
         }
-      }
-
-      if (tierData.objectives !== undefined) {
-        if (!Array.isArray(tierData.objectives)) {
-          errors.push(`tiers.${tier}.objectives must be an array`);
-        } else {
-          if (tierData.objectives.length > LIST_LIMITS.objectives) {
-            errors.push(`tiers.${tier}.objectives has ${tierData.objectives.length} items — max ${LIST_LIMITS.objectives}`);
-          }
-          for (let i = 0; i < tierData.objectives.length; i++) {
-            const item = tierData.objectives[i];
-            if (!item || typeof item !== 'object' || typeof item.objective !== 'string') {
-              errors.push(`tiers.${tier}.objectives[${i}]: must have "objective" (string) and "description" (string)`);
-              continue;
-            }
-            if (item.objective.trim().length === 0) {
-              errors.push(`tiers.${tier}.objectives[${i}].objective must not be empty`);
-            }
-          }
-        }
-      }
-
-      if (tierData.do_not_discuss !== undefined) {
-        if (!Array.isArray(tierData.do_not_discuss)) {
-          errors.push(`tiers.${tier}.do_not_discuss must be an array`);
-        } else {
-          if (tierData.do_not_discuss.length > LIST_LIMITS.do_not_discuss) {
-            errors.push(`tiers.${tier}.do_not_discuss has ${tierData.do_not_discuss.length} items — max ${LIST_LIMITS.do_not_discuss}`);
-          }
-          for (let i = 0; i < tierData.do_not_discuss.length; i++) {
-            const item = tierData.do_not_discuss[i];
-            if (!item || typeof item !== 'object' || typeof item.topic !== 'string') {
-              errors.push(`tiers.${tier}.do_not_discuss[${i}]: must have "topic" (string) and "reason" (string)`);
-            }
-          }
-        }
-      }
-    } else {
-      // Validate legacy format: lead_with, discuss_freely, deflect
-      const requiredLists = ['lead_with', 'discuss_freely', 'deflect'];
-      const LEGACY_LIMITS = { lead_with: 10, discuss_freely: 20, deflect: 10 };
-      for (const cat of requiredLists) {
-        if (!Array.isArray(tierData[cat])) {
-          errors.push(`topics.${tier}.${cat} must be an array`);
-          continue;
-        }
-        if (tierData[cat].length > LEGACY_LIMITS[cat]) {
-          errors.push(`topics.${tier}.${cat} has ${tierData[cat].length} items — max ${LEGACY_LIMITS[cat]}`);
-        }
-        for (let i = 0; i < tierData[cat].length; i++) {
-          const item = tierData[cat][i];
+        for (let i = 0; i < tierData.topics.length; i++) {
+          const item = tierData.topics[i];
           if (!item || typeof item !== 'object' || typeof item.topic !== 'string') {
-            errors.push(`topics.${tier}.${cat}[${i}]: must have "topic" (string) and "detail" (string)`);
+            errors.push(`tiers.${tier}.topics[${i}]: must have "topic" (string) and "description" (string)`);
             continue;
           }
           if (item.topic.trim().length === 0) {
-            errors.push(`topics.${tier}.${cat}[${i}].topic must not be empty`);
+            errors.push(`tiers.${tier}.topics[${i}].topic must not be empty`);
+          }
+          if (item.topic.length > 160) {
+            errors.push(`tiers.${tier}.topics[${i}]: topic exceeds 160 chars`);
+          }
+          const desc = item.description || '';
+          if (desc.length > 500) {
+            errors.push(`tiers.${tier}.topics[${i}]: description exceeds 500 chars`);
+          }
+        }
+      }
+    }
+
+    // Validate objectives array
+    if (tierData.objectives !== undefined) {
+      if (!Array.isArray(tierData.objectives)) {
+        errors.push(`tiers.${tier}.objectives must be an array`);
+      } else {
+        if (tierData.objectives.length > LIST_LIMITS.objectives) {
+          errors.push(`tiers.${tier}.objectives has ${tierData.objectives.length} items — max ${LIST_LIMITS.objectives}`);
+        }
+        for (let i = 0; i < tierData.objectives.length; i++) {
+          const item = tierData.objectives[i];
+          if (!item || typeof item !== 'object' || typeof item.objective !== 'string') {
+            errors.push(`tiers.${tier}.objectives[${i}]: must have "objective" (string) and "description" (string)`);
+            continue;
+          }
+          if (item.objective.trim().length === 0) {
+            errors.push(`tiers.${tier}.objectives[${i}].objective must not be empty`);
+          }
+        }
+      }
+    }
+
+    // Validate do_not_discuss array
+    if (tierData.do_not_discuss !== undefined) {
+      if (!Array.isArray(tierData.do_not_discuss)) {
+        errors.push(`tiers.${tier}.do_not_discuss must be an array`);
+      } else {
+        if (tierData.do_not_discuss.length > LIST_LIMITS.do_not_discuss) {
+          errors.push(`tiers.${tier}.do_not_discuss has ${tierData.do_not_discuss.length} items — max ${LIST_LIMITS.do_not_discuss}`);
+        }
+        for (let i = 0; i < tierData.do_not_discuss.length; i++) {
+          const item = tierData.do_not_discuss[i];
+          if (!item || typeof item !== 'object' || typeof item.topic !== 'string') {
+            errors.push(`tiers.${tier}.do_not_discuss[${i}]: must have "topic" (string) and "reason" (string)`);
           }
         }
       }
@@ -538,63 +489,38 @@ function validateDisclosureSubmission(data) {
     return { valid: false, manifest: null, errors };
   }
 
-  // Rebuild clean structure (isNewFormat already set above)
+  // Rebuild clean structure
   const now = new Date().toISOString();
 
-  if (isNewFormat) {
-    // New format: tiers with topics/objectives/do_not_discuss
-    const cleanTiers = {};
-    for (const tier of TIER_HIERARCHY) {
-      cleanTiers[tier] = {
-        topics: (tiersData[tier].topics || []).map(item => ({
-          topic: item.topic,
-          description: item.description || ''
-        })),
-        objectives: (tiersData[tier].objectives || []).map(item => ({
-          objective: item.objective,
-          description: item.description || ''
-        })),
-        do_not_discuss: (tiersData[tier].do_not_discuss || []).map(item => ({
-          topic: item.topic,
-          reason: item.reason || ''
-        }))
-      };
-    }
-
-    const manifest = {
-      version: 2,
-      generated_at: now,
-      updated_at: now,
-      tiers: cleanTiers,
-      never_disclose: data.never_disclose || ['API keys', 'Other users\' data', 'Financial figures'],
-      personality_notes: data.personality_notes || ''
+  // Build clean manifest with new format only
+  const cleanTiers = {};
+  for (const tier of TIER_HIERARCHY) {
+    cleanTiers[tier] = {
+      topics: (tiersData[tier].topics || []).map(item => ({
+        topic: item.topic,
+        description: item.description || ''
+      })),
+      objectives: (tiersData[tier].objectives || []).map(item => ({
+        objective: item.objective,
+        description: item.description || ''
+      })),
+      do_not_discuss: (tiersData[tier].do_not_discuss || []).map(item => ({
+        topic: item.topic,
+        reason: item.reason || ''
+      }))
     };
-
-    return { valid: true, manifest, errors: [] };
-  } else {
-    // Legacy format: topics with lead_with/discuss_freely/deflect
-    const cleanTopics = {};
-    for (const tier of TIER_HIERARCHY) {
-      cleanTopics[tier] = {};
-      for (const cat of ['lead_with', 'discuss_freely', 'deflect']) {
-        cleanTopics[tier][cat] = (tiersData[tier][cat] || []).map(item => ({
-          topic: item.topic,
-          detail: item.detail || ''
-        }));
-      }
-    }
-
-    const manifest = {
-      version: 1,
-      generated_at: now,
-      updated_at: now,
-      topics: cleanTopics,
-      never_disclose: data.never_disclose || ['API keys', 'Other users\' data', 'Financial figures'],
-      personality_notes: data.personality_notes || ''
-    };
-
-    return { valid: true, manifest, errors: [] };
   }
+
+  const manifest = {
+    version: 2,
+    generated_at: now,
+    updated_at: now,
+    tiers: cleanTiers,
+    never_disclose: data.never_disclose || ['API keys', 'Other users\' data', 'Financial figures'],
+    personality_notes: data.personality_notes || ''
+  };
+
+  return { valid: true, manifest, errors: [] };
 }
 
 /**

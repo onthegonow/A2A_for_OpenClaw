@@ -1032,14 +1032,9 @@ function createDashboardApiRouter(options = {}) {
         disclosure: configTier.disclosure || 'minimal',
         examples: sanitizeStringArray(configTier.examples || [], 20, 120),
         manifest: {
-          // Support both new format (topics/objectives/do_not_discuss) and legacy
-          topics: manifestTier.topics || manifestTier.lead_with || [],
+          topics: manifestTier.topics || [],
           objectives: manifestTier.objectives || [],
-          do_not_discuss: manifestTier.do_not_discuss || manifestTier.deflect || [],
-          // Legacy fields for backwards compatibility
-          lead_with: manifestTier.lead_with || manifestTier.topics?.slice(0, 3) || [],
-          discuss_freely: manifestTier.discuss_freely || manifestTier.topics?.slice(3) || [],
-          deflect: manifestTier.deflect || manifestTier.do_not_discuss || []
+          do_not_discuss: manifestTier.do_not_discuss || []
         }
       };
     });
@@ -1087,11 +1082,11 @@ function createDashboardApiRouter(options = {}) {
 
     if (body.manifest) {
       const manifest = loadManifest();
-      manifest.topics = manifest.topics || {};
-      manifest.topics[tierId] = {
-        lead_with: parseTopicObjects(body.manifest.lead_with),
-        discuss_freely: parseTopicObjects(body.manifest.discuss_freely),
-        deflect: parseTopicObjects(body.manifest.deflect)
+      manifest.tiers = manifest.tiers || {};
+      manifest.tiers[tierId] = {
+        topics: parseTopicObjects(body.manifest.topics),
+        objectives: parseTopicObjects(body.manifest.objectives),
+        do_not_discuss: parseTopicObjects(body.manifest.do_not_discuss)
       };
       saveManifest(manifest);
     }

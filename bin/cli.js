@@ -336,23 +336,10 @@ async function handleDisclosureSubmit(args, commandLabel = 'onboard') {
   // Sync tier config from manifest
   const manifest = result.manifest;
   
-  // Helper to extract topic names from both new and legacy formats
+  // Helper to extract topic names
   function getTierTopics(tierData) {
-    if (!tierData) return [];
-    // New format: topics array
-    if (Array.isArray(tierData.topics)) {
-      return tierData.topics.map(t => String(t && t.topic || '').trim()).filter(Boolean);
-    }
-    // Legacy format: lead_with + discuss_freely + deflect
-    const out = [];
-    for (const section of [tierData.lead_with, tierData.discuss_freely, tierData.deflect]) {
-      if (!Array.isArray(section)) continue;
-      for (const item of section) {
-        const t = String(item && item.topic || '').trim();
-        if (t && !out.includes(t)) out.push(t);
-      }
-    }
-    return out;
+    if (!tierData || !Array.isArray(tierData.topics)) return [];
+    return tierData.topics.map(t => String(t && t.topic || '').trim()).filter(Boolean);
   }
 
   // Get tiers data (support both new 'tiers' key and legacy 'topics' key)

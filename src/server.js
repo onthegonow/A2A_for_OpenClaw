@@ -185,11 +185,7 @@ function extractSignalPhrases(text, pattern, maxItems = 3) {
 function collectTopicKeywords(tierTopics) {
   const keywords = new Set();
   
-  // Support both new format (topics) and legacy format (lead_with/discuss_freely)
-  const topicsList = tierTopics?.topics || [
-    ...(tierTopics?.lead_with || []),
-    ...(tierTopics?.discuss_freely || [])
-  ];
+  const topicsList = tierTopics?.topics || [];
   const objectivesList = tierTopics?.objectives || [];
 
   for (const item of topicsList) {

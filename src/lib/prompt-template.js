@@ -49,9 +49,9 @@ function buildConnectionPrompt(options) {
   } = options;
 
   const {
-    leadWithTopics = '  (none specified)',
-    discussFreelyTopics = '  (none specified)',
-    deflectTopics = '  (none specified)',
+    topics = '  (none specified)',
+    objectives = '  (none specified)',
+    doNotDiscuss = '  (none specified)',
     neverDisclose = '  (none specified)'
   } = tierTopics || {};
 
@@ -62,17 +62,16 @@ Your job is NOT to answer questions and hang up. Your job is to have a real conv
 
 == WHAT YOU BRING TO THE TABLE ==
 
-${ownerName} is currently focused on:
-${leadWithTopics}
+${ownerName}'s topics of interest:
+${topics}
 
-Other areas of active interest:
-${discussFreelyTopics}
+== OBJECTIVES FOR THIS CALL ==
 
-== STRATEGIC GOALS FOR THIS CALL ==
-
-${tierGoals && tierGoals.length > 0
-    ? `At the ${accessTier} access level, ${ownerName}'s objectives are:\n${formatList(tierGoals)}\n\nPursue these goals naturally during conversation. Surface opportunities that align with them.`
-    : `No specific goals configured for this tier. Focus on general discovery and relationship building.`}
+${objectives !== '  (none specified)'
+    ? `What ${ownerName} wants to achieve:\n${objectives}`
+    : (tierGoals && tierGoals.length > 0
+      ? `At the ${accessTier} access level, ${ownerName}'s objectives are:\n${formatList(tierGoals)}`
+      : `No specific objectives configured. Focus on general discovery and relationship building.`)}
 
 == WHAT THEY SHARED WITH YOU ==
 
@@ -123,16 +122,13 @@ PACING RULES:
 
 Access level for this call: ${accessTier}
 
-LEAD WITH (proactively share):
-${leadWithTopics}
+TOPICS (discuss openly):
+${topics}
 
-DISCUSS FREELY (share when relevant):
-${discussFreelyTopics}
+DO NOT DISCUSS (redirect):
+${doNotDiscuss}
 
-DEFLECT (acknowledge but redirect):
-${deflectTopics}
-
-When deflecting, don't say "I can't discuss that." Instead redirect naturally, acknowledge without detail, or suggest the owners connect directly.
+When redirecting, don't say "I can't discuss that." Instead redirect naturally, acknowledge without detail, or suggest the owners connect directly.
 
 NEVER disclose:
 ${neverDisclose}
@@ -178,9 +174,9 @@ function buildAdaptiveConnectionPrompt(options) {
   } = options;
 
   const {
-    leadWithTopics = '  (none specified)',
-    discussFreelyTopics = '  (none specified)',
-    deflectTopics = '  (none specified)',
+    topics = '  (none specified)',
+    objectives = '  (none specified)',
+    doNotDiscuss = '  (none specified)',
     neverDisclose = '  (none specified)'
   } = tierTopics || {};
 
@@ -217,17 +213,16 @@ ${openQuestions}
 
 == WHAT YOU BRING TO THE TABLE ==
 
-${ownerName} is currently focused on:
-${leadWithTopics}
+${ownerName}'s topics of interest:
+${topics}
 
-Other areas of active interest:
-${discussFreelyTopics}
+== OBJECTIVES FOR THIS CALL ==
 
-== STRATEGIC GOALS FOR THIS CALL ==
-
-${tierGoals && tierGoals.length > 0
-    ? `At the ${accessTier} access level, ${ownerName}'s objectives are:\n${formatList(tierGoals)}\n\nPursue these goals naturally during conversation. Surface opportunities that align with them.`
-    : `No specific goals configured for this tier. Focus on general discovery and relationship building.`}
+${objectives !== '  (none specified)'
+    ? `What ${ownerName} wants to achieve:\n${objectives}`
+    : (tierGoals && tierGoals.length > 0
+      ? `At the ${accessTier} access level, ${ownerName}'s objectives are:\n${formatList(tierGoals)}`
+      : `No specific objectives configured. Focus on general discovery and relationship building.`)}
 
 == WHAT THEY SHARED WITH YOU ==
 
@@ -265,16 +260,13 @@ Pacing:
 
 Access level for this call: ${accessTier}
 
-LEAD WITH (proactively share):
-${leadWithTopics}
+TOPICS (discuss openly):
+${topics}
 
-DISCUSS FREELY (share when relevant):
-${discussFreelyTopics}
+DO NOT DISCUSS (redirect):
+${doNotDiscuss}
 
-DEFLECT (acknowledge but redirect):
-${deflectTopics}
-
-When deflecting, do not mention policy mechanics. Redirect naturally and suggest direct owner follow-up when needed.
+When redirecting, do not mention policy mechanics. Redirect naturally and suggest direct owner follow-up when needed.
 
 NEVER disclose:
 ${neverDisclose}
