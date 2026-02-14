@@ -257,6 +257,62 @@ module.exports = function (test, assert, helpers) {
     }
   });
 
+  test('quickstart allows --confirm-ingress to bypass external ping failure', async () => {
+    tmp = helpers.tmpConfigDir('onboard-quickstart-external-ping');
+    const fs = require('fs');
+    const path = require('path');
+    const http = require('http');
+    const { execFile } = require('child_process');
+
+    const workspaceDir = path.join(tmp.dir, 'ws');
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, 'USER.md'), '## Goals\n- Build cool tools\n');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir, A2A_WORKSPACE: workspaceDir };
+
+    // Backend server for local reachability check.
+    const server = http.createServer((req, res) => {
+      if (req.method === 'GET' && req.url === '/api/a2a/ping') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ pong: true }));
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const backendPort = String(server.address().port);
+
+    try {
+      // Use a public-looking hostname that will NOT return a2a pong at /api/a2a/ping.
+      // External ping should fail, but --confirm-ingress must allow onboarding to continue.
+      await new Promise((resolve, reject) => {
+        execFile(process.execPath, [
+          cliPath,
+          'quickstart',
+          '--hostname',
+          'example.com',
+          '--port',
+          backendPort,
+          '--confirm-ingress'
+        ], {
+          env,
+          stdio: 'ignore'
+        }, (err) => (err ? reject(err) : resolve()));
+      });
+
+      delete require.cache[require.resolve('../../src/lib/config')];
+      const { A2AConfig } = require('../../src/lib/config');
+      const config = new A2AConfig();
+      assert.equal(config.isOnboarded(), true);
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+      tmp.cleanup();
+    }
+  });
+
   test('Golda profile exercises all tier levels correctly', () => {
     tmp = helpers.tmpConfigDir('onboard-tiers');
     delete require.cache[require.resolve('../../src/lib/disclosure')];

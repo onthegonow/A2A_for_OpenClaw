@@ -983,12 +983,21 @@ https://github.com/onthegonow/a2a_calling`;
 	      }
 	    }
 
-    async function externalPingCheck(targetUrl) {
-      const providers = [
-        {
-          name: 'allorigins',
-          buildUrl: () => {
-            const u = new URL('https://api.allorigins.win/raw');
+	    async function externalPingCheck(targetUrl) {
+	      // Try direct access first. In practice this is the most reliable signal:
+	      // it avoids flaky third-party proxies and catches obvious scheme/port mistakes.
+	      try {
+	        const direct = await fetchUrlText(targetUrl, 2500);
+	        return { ok: looksLikePong(direct.body), provider: 'direct', statusCode: direct.statusCode };
+	      } catch (err) {
+	        // Fall back to remote fetch providers below.
+	      }
+
+	      const providers = [
+	        {
+	          name: 'allorigins',
+	          buildUrl: () => {
+	            const u = new URL('https://api.allorigins.win/raw');
             u.searchParams.set('url', targetUrl);
             return u.toString();
           }
@@ -1352,22 +1361,25 @@ https://github.com/onthegonow/a2a_calling`;
 	      }
 	    }
 
-    if (inviteLooksLocal) {
-      console.log('Skipping external reachability check: invite host looks local/unroutable.');
-    } else {
-      const extPing = await externalPingCheck(expectedPingUrl);
-      if (extPing.ok) {
-        console.log(`✅ External ping OK (${extPing.provider})`);
-	      } else if (!args.flags['skip-verify']) {
+	    if (inviteLooksLocal) {
+	      console.log('Skipping external reachability check: invite host looks local/unroutable.');
+	    } else {
+	      const extPing = await externalPingCheck(expectedPingUrl);
+	      if (extPing.ok) {
+	        console.log(`✅ External ping OK (${extPing.provider})`);
+	      } else if (args.flags['skip-verify']) {
+	        console.log('⚠️  External ping FAILED (skipped via --skip-verify).');
+	      } else if (args.flags['confirm-ingress']) {
+	        console.log('⚠️  External ping FAILED (continuing due to --confirm-ingress).');
+	      } else {
 	        console.log('⚠️  External ping FAILED (server may not be publicly reachable yet).');
-	        console.log('Fix ingress (DNS/reverse proxy/firewall), then rerun with:');
+	        console.log('Fix ingress (DNS/reverse proxy/firewall), then rerun. If you want to proceed anyway:');
 	        console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --confirm-ingress`);
+	        console.log(`  a2a quickstart --hostname ${inviteHost} --port ${backendPort} --skip-verify`);
 	        console.log('');
 	        return;
-	      } else {
-        console.log('⚠️  External ping FAILED (skipped via --skip-verify).');
-      }
-    }
+	      }
+	    }
 
     if (!config.getOnboarding().verify_confirmed) {
       config.setOnboarding({
