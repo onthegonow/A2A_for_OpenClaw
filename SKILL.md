@@ -27,53 +27,26 @@ metadata:
 
 Enable agent-to-agent communication across OpenClaw instances.
 
-## FIRST RUN GATE (Check Before EVERY /a2a Command)
-
-Before processing any `/a2a` command that depends on tiers/disclosure (tokens, invites, calls), check onboarding status.
-
-Exceptions (do not gate):
-- `/a2a gui` / `/a2a dashboard`
-- `/a2a uninstall`
-
-Onboarding check:
+## Install & Onboarding
 
 ```bash
-node - <<'NODE'
-const fs = require('fs');
-const path = require('path');
-
-const dir = process.env.A2A_CONFIG_DIR ||
-  process.env.OPENCLAW_CONFIG_DIR ||
-  path.join(process.env.HOME || '/tmp', '.config', 'openclaw');
-const file = path.join(dir, 'a2a-config.json');
-
-let ok = false;
-try {
-  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
-  ok = cfg.onboarding &&
-    cfg.onboarding.version === 2 &&
-    cfg.onboarding.step === 'complete';
-} catch (e) {}
-
-process.stdout.write(ok ? 'onboarded\n' : 'not_onboarded\n');
-NODE
+npm install -g a2acalling
 ```
 
-**If it prints `not_onboarded`:**
-- DO NOT process the requested command yet
-- Tell the user: "A2A needs initial setup. Let me configure your agent's disclosure topics first."
-- Run the deterministic Quickstart flow below to completion (flags-based, step-by-step)
-- Only THEN proceed with the user's original command
+Onboarding is automatic. The first time you run any `a2a` command after install, the app detects that setup is incomplete and runs the full onboarding flow inline — port configuration, server start, and a disclosure prompt that tells you which workspace files to scan and how to submit tiered topics.
 
-**If it prints `onboarded`:** proceed normally.
+To manually trigger onboarding (or re-run it):
 
-**Context gathering for onboarding:** Read ALL available context to generate personalized tier topics:
-- **Primary:** USER.md, HEARTBEAT.md, SOUL.md
-- **Skills:** SKILL.md files (workspace + ~/.openclaw/skills/*)
-- **Memory:** memory/*.md files
-- **Project:** CLAUDE.md
+```bash
+a2a quickstart          # run onboarding
+a2a quickstart --force  # re-run from scratch
+```
 
-Extract: professional context, interests, goals, skills, sensitive areas. Group them into Public/Friends/Family tiers based on sensitivity.
+After the onboarding walkthrough prints, scan your workspace files (USER.md, SOUL.md, etc.), build the disclosure JSON, and submit:
+
+```bash
+a2a quickstart --submit '<json>'
+```
 
 ## Network Ingress (Internet-Facing Invites)
 
