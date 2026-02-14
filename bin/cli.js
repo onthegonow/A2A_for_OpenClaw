@@ -1402,10 +1402,37 @@ https://github.com/onthegonow/a2a_calling`;
     if (externalIp) {
       const verifyUrl = `http://${publicHost}/api/a2a/ping`;
       if (serverPort !== 80) {
-        console.log(`\n  Note: Port ${serverPort} must be reachable externally.`);
-        console.log(`  Reverse-proxy /api/a2a/* to localhost:${serverPort}, or open the port in your firewall.`);
+        // Check what's using port 80
+        const port80Status = await isPortListening(80, '127.0.0.1', { timeoutMs: 250 });
+        
+        console.log(`\n  ━━━ Reverse Proxy Setup ━━━`);
+        console.log(`  Server running on port ${serverPort}, but external callers expect port 80/443.`);
+        if (port80Status.listening) {
+          console.log(`  Port 80: in use (likely nginx, caddy, or another web server)`);
+        } else {
+          console.log(`  Port 80: available (but A2A is on ${serverPort})`);
+        }
+        console.log(`\n  RECOMMENDED: Configure your web server to proxy A2A requests:\n`);
+        console.log(`  For nginx, add to your server block:`);
+        console.log(`    location /api/a2a/ {`);
+        console.log(`      proxy_pass http://127.0.0.1:${serverPort}/api/a2a/;`);
+        console.log(`      proxy_http_version 1.1;`);
+        console.log(`      proxy_set_header Host $host;`);
+        console.log(`    }`);
+        console.log(`\n  For Caddy:`);
+        console.log(`    handle /api/a2a/* {`);
+        console.log(`      reverse_proxy 127.0.0.1:${serverPort}`);
+        console.log(`    }`);
+        console.log(`\n  After configuring, update the invite hostname to use port 80:`);
+        console.log(`    Current: ${publicHost}`);
+        console.log(`    Should be: ${externalIp} (without port, defaults to 80)`);
+        console.log(`\n  Or open port ${serverPort} directly in your firewall if no proxy is used.`);
+        console.log(`  ━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log(`\n  ACTION REQUIRED: Ask your owner if they want to configure a reverse proxy.`);
+        console.log(`  If they say yes, help them add the nginx/caddy config above.`);
+        console.log(`  If they say no or skip, the invite will use port ${serverPort} directly.`);
       }
-      console.log(`  Verify: curl -s ${verifyUrl}`);
+      console.log(`\n  Verify: curl -s ${verifyUrl}`);
     }
 
     // Save server config and advance onboarding state to awaiting_disclosure.
