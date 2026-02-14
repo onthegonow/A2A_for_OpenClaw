@@ -18,7 +18,6 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const readline = require('readline');
 const { spawn } = require('child_process');
 const { TokenStore } = require('../src/lib/tokens');
 const { A2AClient } = require('../src/lib/client');
@@ -85,7 +84,11 @@ function enforceOnboarding(command) {
         console.log("Next: run `a2a onboard --submit '<json>'`\n");
         process.exit(1);
       }
-    } catch (e) {}
+    } catch (e) {
+      if (e.code !== 'ENOENT' && e.name !== 'SyntaxError') {
+        console.error(`Warning: could not read config: ${e.message}`);
+      }
+    }
 
     console.log('\nA2A not configured yet.\n');
     console.log('Next: run `a2a quickstart`\n');
@@ -198,7 +201,7 @@ function parseArgs(argv) {
 
 async function promptYesNo(question) {
   return await new Promise(resolve => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, (answer) => {
       rl.close();
       const normalized = String(answer || '').trim().toLowerCase();
@@ -966,7 +969,11 @@ https://github.com/onthegonow/a2a_calling`;
     try {
       const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
       currentStep = cfg.onboarding?.step || 'not_started';
-    } catch (e) {}
+    } catch (e) {
+      if (e.code !== 'ENOENT' && e.name !== 'SyntaxError') {
+        console.error(`  Warning: could not read config: ${e.message}`);
+      }
+    }
     if (currentStep === 'awaiting_disclosure' && !args.flags.force) {
       console.log('\nStep 1 already complete. Server is running.\n');
       console.log('Step 2 of 4: Configure disclosure topics\n');
@@ -987,49 +994,74 @@ https://github.com/onthegonow/a2a_calling`;
     // ── Step 1 of 4: Setting up A2A server ──────────────────
     console.log('\nStep 1 of 4: Setting up A2A server\n');
 
-    // 1a. Check port 80
-    console.log('  1a. Checking port 80...');
-    const port80Result = await tryBindPort(80);
+    const preferredPort = parsePort(args.flags.port || args.flags.p, null);
 
+    // If user specified a port, try that first
     let serverPort;
-    let needsProxy = false;
+    let usingAlternatePort = false;
 
-    if (port80Result.ok) {
-      // Port 80 is free and we can bind
-      console.log('      Port 80 available.');
-      serverPort = 80;
-    } else if (port80Result.code === 'EACCES') {
-      // Port 80 is free but we don't have permission
-      console.log('      Port 80 is available but requires elevated privileges.');
-      console.log('      A2A needs to bind to a port to function. Rerun with:');
-      console.log('        sudo npm install -g a2acalling\n');
-      console.log('      Onboarding cannot continue without a bound port.');
-      process.exit(1);
-    } else {
-      // Port 80 is occupied (EADDRINUSE or other)
-      console.log('      Port 80 is in use by another process.');
-      console.log('  1b. Scanning for available port...');
-
-      // Generate candidates starting at 3001
-      const candidates = [];
-      for (let p = 3001; p < 3101; p++) candidates.push(p);
-      serverPort = await findAvailablePort(candidates);
-
-      if (!serverPort) {
-        console.log('      Could not find a bindable port. Rerun with elevated privileges:');
-        console.log('        sudo npm install -g a2acalling');
+    if (preferredPort) {
+      console.log(`  1a. Checking preferred port ${preferredPort}...`);
+      const preferredResult = await tryBindPort(preferredPort);
+      if (preferredResult.ok) {
+        console.log(`  Port ${preferredPort} available.`);
+        serverPort = preferredPort;
+        usingAlternatePort = preferredPort !== 80;
+      } else if (preferredResult.code === 'EACCES') {
+        console.log(`  Port ${preferredPort} requires elevated privileges.`);
+        console.log('  Rerun with: sudo npm install -g a2acalling\n');
         process.exit(1);
+      } else {
+        console.log(`  Port ${preferredPort} is in use. Scanning for alternatives...`);
+        const candidates = [];
+        for (let p = 3001; p < 3101; p++) candidates.push(p);
+        serverPort = await findAvailablePort(candidates);
+        if (!serverPort) {
+          console.log('  Could not find a bindable port. Rerun with elevated privileges:');
+          console.log('    sudo npm install -g a2acalling');
+          process.exit(1);
+        }
+        console.log(`  Port ${serverPort} available.`);
+        usingAlternatePort = true;
       }
-      console.log(`      Port ${serverPort} available.`);
-      needsProxy = true;
+    } else {
+      // Default: check port 80 first, then scan
+      console.log('  1a. Checking port 80...');
+      const port80Result = await tryBindPort(80);
+
+      if (port80Result.ok) {
+        console.log('  Port 80 available.');
+        serverPort = 80;
+      } else if (port80Result.code === 'EACCES') {
+        console.log('  Port 80 is available but requires elevated privileges.');
+        console.log('  A2A needs to bind to a port to function. Rerun with:');
+        console.log('    sudo npm install -g a2acalling\n');
+        console.log('  Onboarding cannot continue without a bound port.');
+        process.exit(1);
+      } else {
+        console.log('  Port 80 is in use by another process.');
+        console.log('  1b. Scanning for available port...');
+
+        const candidates = [];
+        for (let p = 3001; p < 3101; p++) candidates.push(p);
+        serverPort = await findAvailablePort(candidates);
+
+        if (!serverPort) {
+          console.log('  Could not find a bindable port. Rerun with elevated privileges:');
+          console.log('    sudo npm install -g a2acalling');
+          process.exit(1);
+        }
+        console.log(`  Port ${serverPort} available.`);
+        usingAlternatePort = true;
+      }
     }
 
     // Start server
-    console.log(`      Starting A2A server on port ${serverPort}...`);
+    console.log(`  Starting A2A server on port ${serverPort}...`);
 
     async function startServer(port) {
       const listening = await isPortListening(port, '127.0.0.1', { timeoutMs: 250 });
-      if (listening.listening) return false;
+      if (listening.listening) return { started: false, existing: true };
       const serverScript = path.join(__dirname, '../src/server.js');
       const child = spawn(process.execPath, [serverScript], {
         env: { ...process.env, PORT: String(port) },
@@ -1038,7 +1070,7 @@ https://github.com/onthegonow/a2a_calling`;
       });
       child.unref();
       await new Promise(r => setTimeout(r, 300));
-      return true;
+      return { started: true, pid: child.pid };
     }
 
     async function waitForServer(port) {
@@ -1050,43 +1082,58 @@ https://github.com/onthegonow/a2a_calling`;
       return false;
     }
 
-    await startServer(serverPort);
+    const serverResult = await startServer(serverPort);
+    if (serverResult.existing) {
+      console.log('  Existing server detected on this port.');
+    }
     const serverUp = await waitForServer(serverPort);
     if (!serverUp) {
-      console.log('      Server failed to start. Check logs and retry:');
-      console.log(`        PORT=${serverPort} node ${path.join(__dirname, '../src/server.js')}`);
+      console.log('  Server failed to start. Check logs and retry:');
+      console.log(`    PORT=${serverPort} node ${path.join(__dirname, '../src/server.js')}`);
       process.exit(1);
     }
-    console.log('      Server running.\n');
+    console.log('  Server running.\n');
+
+    // Store server PID for cleanup
+    if (serverResult.pid) {
+      config.setOnboarding({ server_pid: serverResult.pid, server_port: serverPort });
+    }
 
     // Detect external IP
     const ipResult = await getExternalIp();
-    const externalIp = ipResult.ip || 'YOUR_EXTERNAL_IP';
-    const publicHost = needsProxy ? externalIp : (serverPort === 80 ? externalIp : `${externalIp}:${serverPort}`);
+    if (!ipResult.ip) {
+      console.log('  Warning: Could not detect external IP address.');
+      console.log('  You will need to set your hostname manually:');
+      console.log(`    a2a onboard --hostname YOUR_IP${serverPort !== 80 ? ':' + serverPort : ''}\n`);
+    }
+    const externalIp = ipResult.ip || null;
+    const publicHost = externalIp
+      ? (serverPort === 80 ? externalIp : `${externalIp}:${serverPort}`)
+      : `localhost:${serverPort}`;
 
     // Save server config
     config.setAgent({ hostname: publicHost });
 
-    if (needsProxy) {
+    if (usingAlternatePort) {
       console.log('  External access required.');
       console.log('  Something is already bound to port 80 on this machine.');
       console.log('  Two options to make your A2A server reachable:\n');
-      console.log('  Option A (strongly recommended): Set up a reverse proxy.');
+      console.log('  Option A (recommended): Set up a reverse proxy (HTTP or HTTPS).');
       console.log(`    Configure your web server to forward /api/a2a/* to localhost:${serverPort}.`);
-      console.log('    Most server owners already have port 80 open — a reverse proxy');
-      console.log('    avoids firewall changes entirely.\n');
+      console.log('    If you serve HTTPS on port 443, proxy from there instead.');
+      console.log('    A reverse proxy avoids firewall changes entirely.\n');
       console.log(`  Option B: Open port ${serverPort} in your firewall.`);
       console.log('    This requires the owner to manually allow inbound traffic on');
       console.log(`    port ${serverPort} (e.g. ufw allow ${serverPort}, or cloud provider security group).`);
       console.log('    Most users prefer not to modify firewall settings.\n');
     }
 
-    const verifyUrl = needsProxy
-      ? `http://${externalIp}/api/a2a/ping`
-      : `http://${publicHost}/api/a2a/ping`;
-    console.log('  Verify externally:');
-    console.log(`    curl -s ${verifyUrl}`);
-    console.log('  Or ask your owner to check: https://canyouseeme.org/\n');
+    if (externalIp) {
+      const verifyUrl = `http://${publicHost}/api/a2a/ping`;
+      console.log('  Verify externally:');
+      console.log(`    curl -s ${verifyUrl}`);
+      console.log('  Or ask your owner to check: https://canyouseeme.org/\n');
+    }
 
     config.setOnboarding({ step: 'awaiting_disclosure' });
 
@@ -1419,8 +1466,8 @@ https://github.com/onthegonow/a2a_calling`;
         return;
       }
 
-      // ── Step 3 of 4: Generate first invite ──────────────────
-      console.log('\nStep 3 of 4: Generating your first invite...\n');
+      // ── Step 4 of 4: Generate first invite and complete ─────
+      console.log('\nStep 4 of 4: Generating your first invite...\n');
 
       const agentName = args.flags.name || config.getAgent().name || process.env.A2A_AGENT_NAME || 'my-agent';
       const hostname = config.getAgent().hostname || process.env.A2A_HOSTNAME || 'localhost';
@@ -1447,9 +1494,8 @@ https://github.com/onthegonow/a2a_calling`;
       console.log(`  Invite URL: ${inviteUrl}`);
       console.log('  Share this invite to let other agents call you.\n');
 
-      // ── Step 4 of 4: Complete ───────────────────────────────
       config.completeOnboarding();
-      console.log('Step 4 of 4: Onboarding complete.\n');
+      console.log('Onboarding complete.\n');
       console.log(`  Config: ${CONFIG_PATH}`);
       console.log(`  Disclosure: ${MANIFEST_FILE}`);
       console.log(`  Invite: ${inviteUrl}\n`);
@@ -1523,21 +1569,14 @@ Server:
   server              Start the A2A server
     --port, -p        Port to listen on (default: 3001)
   
-  quickstart          Onboarding (access → tiers → ingress → verify)
-    --hostname        Public hostname for remote access (e.g. myserver.com:443)
-    --public-port     Port to assume when --hostname omits a port (default: 443)
-    --port            A2A server port to run locally (default: 3001)
-    --friends-topics  Override Friends tier topics/interests (comma or newline-separated)
-    --interactive     Prompt for Friends tier topics if needed
-    --confirm-ingress Confirm reverse proxy/ingress is configured and continue
-    --skip-verify     Skip external reachability check (not recommended)
-    --force           Reset onboarding + regenerate disclosure manifest
-    --regen-manifest  Regenerate disclosure manifest (no onboarding reset)
-  
-  onboard             Generate disclosure manifest from workspace context
+  quickstart          Set up A2A server and start onboarding
+    --port, -p        Preferred server port (default: 80, fallback: 3001+)
+    --force           Reset onboarding and re-run from scratch
+
+  onboard             Submit disclosure topics or resume quickstart
+    --submit '<json>' Submit disclosure JSON (Step 3 of onboarding)
+    --name            Agent name for invite generation
     --force           Re-run even if already onboarded
-    --name            Agent name
-    --hostname        Agent hostname
 
   update              Update A2A to latest version (npm or git pull)
     --check, -c       Check for updates without installing

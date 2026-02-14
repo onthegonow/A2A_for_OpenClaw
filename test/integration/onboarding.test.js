@@ -473,4 +473,246 @@ module.exports = function (test, assert, helpers) {
 
     tmp.cleanup();
   });
+
+  // ── Issue #17: Test onboard --submit when already onboarded (topic update) ──
+  test('onboard --submit when already onboarded updates topics without generating invite', () => {
+    tmp = helpers.tmpConfigDir('onboard-submit-update');
+    const fs = require('fs');
+    const path = require('path');
+    const { execFileSync } = require('child_process');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    // Pre-set config as already onboarded (complete)
+    const configPath = path.join(tmp.dir, 'a2a-config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      onboarding: { version: 2, step: 'complete' },
+      agent: { hostname: 'localhost:3001', name: 'test-agent' },
+      tiers: {}
+    }));
+
+    const submission = JSON.stringify({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'Updated topic', detail: 'New description' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: ['Secrets'],
+      personality_notes: 'Updated style'
+    });
+
+    const out = execFileSync(process.execPath, [cliPath, 'onboard', '--submit', submission], {
+      env,
+      encoding: 'utf8'
+    });
+
+    assert.includes(out, 'Disclosure topics updated', 'Should indicate topics were updated');
+    assert.equal(out.includes('Generating your first invite'), false, 'Should NOT generate a new invite');
+    assert.equal(out.includes('Step 4'), false, 'Should NOT show step 4');
+
+    // Verify manifest was updated
+    delete require.cache[require.resolve('../../src/lib/disclosure')];
+    const disc = require('../../src/lib/disclosure');
+    const manifest = disc.loadManifest();
+    assert.equal(manifest.topics.public.lead_with[0].topic, 'Updated topic');
+
+    tmp.cleanup();
+  });
+
+  // ── Issue #18: Test invalid JSON parse error in --submit ──
+  test('onboard --submit rejects malformed JSON with parse error', () => {
+    tmp = helpers.tmpConfigDir('onboard-submit-badjson');
+    const { execFileSync } = require('child_process');
+    const path = require('path');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    let threw = false;
+    try {
+      execFileSync(process.execPath, [cliPath, 'onboard', '--submit', 'not{valid json'], {
+        env,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+    } catch (err) {
+      threw = true;
+      const output = (err.stderr || '') + (err.stdout || '');
+      assert.ok(output.includes('Invalid JSON') || output.includes('Parse error'), 'Should mention JSON parse error');
+    }
+    assert.ok(threw, 'Should exit with non-zero code on malformed JSON');
+
+    tmp.cleanup();
+  });
+
+  // ── Issue #22: Verify tier sync actually updates config tiers ──
+  test('onboard --submit syncs tier config from manifest topics', () => {
+    tmp = helpers.tmpConfigDir('onboard-submit-tiersync');
+    const fs = require('fs');
+    const path = require('path');
+    const { execFileSync } = require('child_process');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    // Pre-set config to awaiting_disclosure
+    const configPath = path.join(tmp.dir, 'a2a-config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      onboarding: { version: 2, step: 'awaiting_disclosure' },
+      agent: { hostname: 'localhost:3001', name: 'test-agent' },
+      tiers: {}
+    }));
+
+    const submission = JSON.stringify({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'Public lead topic', detail: 'Desc' }],
+          discuss_freely: [{ topic: 'Public discuss topic', detail: 'Desc' }],
+          deflect: [{ topic: 'Public deflect topic', detail: 'Desc' }]
+        },
+        friends: {
+          lead_with: [{ topic: 'Friends lead topic', detail: 'Desc' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      },
+      never_disclose: ['API keys'],
+      personality_notes: 'Direct'
+    });
+
+    execFileSync(process.execPath, [cliPath, 'onboard', '--submit', submission], {
+      env,
+      encoding: 'utf8'
+    });
+
+    // Verify tier config was synced
+    delete require.cache[require.resolve('../../src/lib/config')];
+    const { A2AConfig } = require('../../src/lib/config');
+    const config = new A2AConfig();
+    const tiers = config.getTiers();
+
+    // Public tier should have public topics only
+    assert.ok(tiers.public, 'Public tier should exist');
+    assert.includes(tiers.public.topics, 'Public lead topic');
+    assert.includes(tiers.public.topics, 'Public discuss topic');
+    assert.includes(tiers.public.topics, 'Public deflect topic');
+
+    // Friends tier should have public + friends topics
+    assert.ok(tiers.friends, 'Friends tier should exist');
+    assert.includes(tiers.friends.topics, 'Public lead topic');
+    assert.includes(tiers.friends.topics, 'Friends lead topic');
+
+    // Family tier should have all topics
+    assert.ok(tiers.family, 'Family tier should exist');
+    assert.includes(tiers.family.topics, 'Public lead topic');
+    assert.includes(tiers.family.topics, 'Friends lead topic');
+
+    tmp.cleanup();
+  });
+
+  // ── Issue #23: Postinstall script test ──
+  test('postinstall prints setup instructions without launching quickstart', () => {
+    const { execFileSync } = require('child_process');
+    const path = require('path');
+
+    const postinstallPath = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
+
+    // Simulate global install environment
+    const env = { ...process.env, npm_config_global: 'true' };
+
+    const out = execFileSync(process.execPath, [postinstallPath], {
+      env,
+      encoding: 'utf8'
+    });
+
+    assert.includes(out, 'a2a quickstart', 'Should tell user to run quickstart');
+    assert.includes(out, 'installed', 'Should confirm installation');
+  });
+
+  // ── Issue #23: Postinstall skips in CI ──
+  test('postinstall exits silently in CI environment', () => {
+    const { execFileSync } = require('child_process');
+    const path = require('path');
+
+    const postinstallPath = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
+
+    const env = { ...process.env, CI: 'true', npm_config_global: 'true' };
+
+    const out = execFileSync(process.execPath, [postinstallPath], {
+      env,
+      encoding: 'utf8'
+    });
+
+    assert.equal(out, '', 'Should produce no output in CI');
+  });
+
+  // ── Issue #23: Postinstall skips for local installs ──
+  test('postinstall exits silently for non-global installs', () => {
+    const { execFileSync } = require('child_process');
+    const path = require('path');
+
+    const postinstallPath = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
+
+    // npm_config_global is NOT 'true'
+    const env = { ...process.env };
+    delete env.CI;
+    delete env.CONTINUOUS_INTEGRATION;
+    delete env.npm_config_global;
+
+    const out = execFileSync(process.execPath, [postinstallPath], {
+      env,
+      encoding: 'utf8'
+    });
+
+    assert.equal(out, '', 'Should produce no output for local installs');
+  });
+
+  // ── Issue #8: Step numbering is sequential (no duplicates) ──
+  test('onboard --submit step numbering is sequential without duplicates', () => {
+    tmp = helpers.tmpConfigDir('onboard-step-numbers');
+    const fs = require('fs');
+    const path = require('path');
+    const { execFileSync } = require('child_process');
+
+    const cliPath = path.join(__dirname, '..', '..', 'bin', 'cli.js');
+    const env = { ...process.env, A2A_CONFIG_DIR: tmp.dir };
+
+    const configPath = path.join(tmp.dir, 'a2a-config.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+      onboarding: { version: 2, step: 'awaiting_disclosure' },
+      agent: { hostname: 'localhost:3001', name: 'test-agent' },
+      tiers: {}
+    }));
+
+    const submission = JSON.stringify({
+      topics: {
+        public: {
+          lead_with: [{ topic: 'Topic', detail: 'Detail' }],
+          discuss_freely: [],
+          deflect: []
+        },
+        friends: { lead_with: [], discuss_freely: [], deflect: [] },
+        family: { lead_with: [], discuss_freely: [], deflect: [] }
+      }
+    });
+
+    const out = execFileSync(process.execPath, [cliPath, 'onboard', '--submit', submission], {
+      env,
+      encoding: 'utf8'
+    });
+
+    // Count occurrences of each step number
+    const step3Count = (out.match(/Step 3 of 4/g) || []).length;
+    const step4Count = (out.match(/Step 4 of 4/g) || []).length;
+    assert.equal(step3Count, 1, 'Step 3 should appear exactly once');
+    assert.equal(step4Count, 1, 'Step 4 should appear exactly once');
+
+    tmp.cleanup();
+  });
 };
