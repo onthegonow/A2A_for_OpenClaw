@@ -659,16 +659,19 @@ module.exports = function (test, assert, helpers) {
   });
 
   // ── Issue #23: Postinstall script test ──
-  test('postinstall spawns quickstart or prints fallback when a2a not in PATH', () => {
+  test('postinstall prints fallback hint when no TTY is available', () => {
     const { spawnSync } = require('child_process');
     const path = require('path');
 
     const postinstallPath = path.join(__dirname, '..', '..', 'scripts', 'postinstall.js');
 
-    // Simulate global install with empty PATH so a2a binary cannot be found.
-    // The postinstall script uses stdio:'inherit' internally, but we run
-    // the script itself with piped output to capture what it prints.
-    const env = { ...process.env, npm_config_global: 'true', PATH: '/nonexistent' };
+    // Force non-interactive behavior so the postinstall script emits a short
+    // "run quickstart manually" hint instead of trying to attach to /dev/tty.
+    const env = {
+      ...process.env,
+      npm_config_global: 'true',
+      A2A_POSTINSTALL_DISABLE_TTY: '1'
+    };
 
     const result = spawnSync(process.execPath, [postinstallPath], {
       env,
