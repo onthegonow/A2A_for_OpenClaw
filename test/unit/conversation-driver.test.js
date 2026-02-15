@@ -203,6 +203,60 @@ module.exports = function (test, assert, helpers) {
     assert.ok(inbound, 'Should have an inbound message');
   });
 
+  test('driver persists conversation when remote omits conversation_id', async () => {
+    const { ConversationDriver } = require('../../src/lib/conversation-driver');
+
+    const messages = [];
+    let startedConvId = null;
+    const mockConvStore = {
+      startConversation: (opts) => {
+        startedConvId = opts.id;
+        return { id: opts.id };
+      },
+      addMessage: (convId, msg) => {
+        messages.push({ convId, ...msg });
+        return { id: 'msg_test' };
+      },
+      saveCollabState: () => ({ success: true }),
+      concludeConversation: async () => ({ success: true })
+    };
+
+    // Remote does NOT return conversation_id
+    const remoteResponses = [
+      { response: 'Got it', can_continue: false }
+    ];
+
+    const mockRuntime = createMockRuntime([]);
+
+    const driver = new ConversationDriver({
+      runtime: mockRuntime,
+      agentContext: { name: 'test-agent', owner: 'tester' },
+      caller: { name: 'test-caller' },
+      endpoint: 'a2a://localhost:9999/fake_token',
+      convStore: mockConvStore,
+      minTurns: 1,
+      maxTurns: 5
+    });
+
+    const mockClient = createMockClient(remoteResponses);
+    driver.client = mockClient;
+
+    await driver.run('Hello!');
+
+    // Conversation should still be started in DB with a generated ID
+    assert.ok(startedConvId, 'Should have started a conversation in DB');
+    assert.match(startedConvId, /^conv_/, 'Generated ID should start with conv_');
+
+    // Should have stored both outbound and inbound messages
+    assert.ok(messages.length >= 2, `Expected at least 2 messages, got ${messages.length}`);
+    const outbound = messages.find(m => m.direction === 'outbound');
+    const inbound = messages.find(m => m.direction === 'inbound');
+    assert.ok(outbound, 'Should have an outbound message');
+    assert.ok(inbound, 'Should have an inbound message');
+    assert.equal(outbound.content, 'Hello!');
+    assert.equal(inbound.content, 'Got it');
+  });
+
   test('driver handles runtime failure gracefully', async () => {
     const { ConversationDriver } = require('../../src/lib/conversation-driver');
 

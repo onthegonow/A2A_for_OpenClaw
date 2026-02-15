@@ -13,6 +13,7 @@
  *   9. Call A2AClient.end() and conclude locally
  */
 
+const crypto = require('crypto');
 const { A2AClient } = require('./client');
 const {
   buildAdaptiveConnectionPrompt,
@@ -141,7 +142,7 @@ Be concise but specific. No filler.`;
       confidence: 0.25
     };
 
-    // Don't start conversation in DB yet - wait for remote's conversation ID
+    // Placeholder until we get a real ID from the remote (or generate one)
     conversationId = `conv_${Date.now()}_local`;
 
     let nextMessage = openingMessage;
@@ -162,24 +163,26 @@ Be concise but specific. No filler.`;
         break;
       }
 
-      // Update conversation ID from remote if first turn and start DB conversation
-      if (turn === 0 && remoteResponse.conversation_id) {
-        conversationId = remoteResponse.conversation_id;
+      // Start DB conversation on first turn
+      if (turn === 0 && this.convStore && !dbConversationStarted) {
+        // Prefer remote's conversation ID, fall back to generated local one
+        if (remoteResponse.conversation_id) {
+          conversationId = remoteResponse.conversation_id;
+        } else {
+          conversationId = `conv_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+        }
 
-        // Now start the conversation in DB with the remote's ID
-        if (this.convStore) {
-          const convResult = this.convStore.startConversation({
-            id: conversationId,
-            direction: 'outbound'
+        const convResult = this.convStore.startConversation({
+          id: conversationId,
+          direction: 'outbound'
+        });
+        if (convResult.success === false) {
+          logger.warn('Failed to start conversation in DB', {
+            event: 'driver_start_conversation_failed',
+            error: convResult.error
           });
-          if (convResult.success === false) {
-            logger.warn('Failed to start conversation in DB', {
-              event: 'driver_start_conversation_failed',
-              error: convResult.error
-            });
-          } else {
-            dbConversationStarted = true;
-          }
+        } else {
+          dbConversationStarted = true;
         }
       }
 
