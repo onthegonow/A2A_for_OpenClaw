@@ -1841,9 +1841,55 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
       }
     }
 
+    // Kill server by PID from config (detached process started by quickstart)
+    function killServerPid() {
+      try {
+        const { A2AConfig } = require('../src/lib/config');
+        const config = new A2AConfig();
+        const onboarding = config.getOnboarding();
+        const pid = onboarding.server_pid;
+        if (!pid) return { ok: true, skipped: true };
+
+        // Check if process is alive
+        try {
+          process.kill(pid, 0); // signal 0 = existence check
+        } catch (e) {
+          // Process doesn't exist — already dead
+          return { ok: true, skipped: true };
+        }
+
+        // Kill it
+        process.kill(pid, 'SIGTERM');
+
+        // Wait briefly and verify it's gone
+        const start = Date.now();
+        while (Date.now() - start < 3000) {
+          try {
+            process.kill(pid, 0);
+            spawnSync('sleep', ['0.1'], { timeout: 500 });
+          } catch (e) {
+            // Process is gone
+            return { ok: true, pid };
+          }
+        }
+
+        // Still alive after 3s — force kill
+        try {
+          process.kill(pid, 'SIGKILL');
+          return { ok: true, pid, forced: true };
+        } catch (e) {
+          return { ok: true, pid };
+        }
+      } catch (err) {
+        // Config read failed — not fatal, continue with pm2 path
+        return { ok: true, skipped: true };
+      }
+    }
+
     process.stdout.write('Stopping server... ');
+    const pidResult = killServerPid();
     const stopped = pm2StopAndDelete('a2a');
-    if (!stopped.ok) {
+    if (!pidResult.ok && !stopped.ok) {
       console.log('❌');
       console.error(`  ${stopped.error}`);
       process.exit(1);
