@@ -166,8 +166,8 @@ function parseInvite(inviteUrl) {
 function resolveHttpParts(host) {
   const isLocalhost = host === 'localhost' || host.startsWith('localhost:') || host.startsWith('127.');
   const hasExplicitPort = host.includes(':');
-  const port = hasExplicitPort ? Number.parseInt(host.split(':')[1], 10) : (isLocalhost ? 80 : 443);
-  const protocol = isLocalhost || (hasExplicitPort && port !== 443) ? 'http' : 'https';
+  const port = hasExplicitPort ? Number.parseInt(host.split(':')[1], 10) : 80;
+  const protocol = isLocalhost || port === 80 || (hasExplicitPort && port !== 443) ? 'http' : 'https';
   const hostname = host.split(':')[0];
   return { protocol, hostname, port };
 }

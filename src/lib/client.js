@@ -42,9 +42,9 @@ function resolveProtocolAndPort(host) {
     hostname === '::1' ||
     hostname.startsWith('127.');
 
-  const port = hasExplicitPort ? parsed.port : (isLocalhost ? 80 : 443);
+  const port = hasExplicitPort ? parsed.port : 80;
   // Use HTTP for localhost or explicit non-443 ports, HTTPS otherwise.
-  const useHttp = isLocalhost || (hasExplicitPort && port !== 443);
+  const useHttp = isLocalhost || port === 80 || (hasExplicitPort && port !== 443);
   const protocol = useHttp ? http : https;
 
   return { protocol, hostname, port };

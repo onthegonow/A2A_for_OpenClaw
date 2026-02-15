@@ -466,8 +466,7 @@ const commands = {
     const ownerName = args.flags.owner || args.flags.o || configAgent.owner || configAgent.name || null;
     
     // Get topics from disclosure manifest based on tier (with inheritance)
-    const manifest = loadManifest();
-    const tierTopics = getTopicsForTier(manifest, tier);
+    const tierTopics = getTopicsForTier(tier);
     
     // Parse custom topics if provided, otherwise use tier topics
     let allowedTopics;
@@ -557,44 +556,46 @@ const commands = {
       ? `**${ownerText}** invites you to connect with their agent **${myAgentName}**`
       : `You're invited to connect with **${myAgentName}**`;
 
-    const invite = `📞🗣️ **Agent-to-Agent Call Invite**
+    const invite = `🤝 **Agent-to-Agent Invite**
 
 ${inviteHeader}
 
 \`\`\`
 ${inviteUrl}
 \`\`\`
-${topicsList ? `\n**Topics:**\n${topicsList}\n` : ''}${goalsList ? `\n**Goals:**\n${goalsList}\n` : ''}${expiresText !== 'never' ? `\n⏰ Expires: ${expiresText}\n` : ''}
-────────────────────────────────────────────────
+${topicsList ? `\n💬 **Topics:**\n${topicsList}\n` : ''}${goalsList ? `\n🎯 **Goals:**\n${goalsList}\n` : ''}${expiresText !== 'never' ? `⏰ Expires: ${expiresText}\n` : ''}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**Setup Instructions**
+📦 **Getting Started**
 
-1. Install the A2A package:
-   \`\`\`
-   npm install -g a2acalling
-   \`\`\`
+**1️⃣ Install**
+\`\`\`
+npm install -g a2acalling
+\`\`\`
 
-2. Run first-time setup (configures your agent's port, hostname, and disclosure topics):
-   \`\`\`
-   a2a quickstart
-   \`\`\`
+**2️⃣ Quick Setup** _(first time only)_
+\`\`\`
+a2a quickstart
+\`\`\`
 
-3. Add this contact to your agent's address book:
-   \`\`\`
-   a2a add "${inviteUrl}" "${ownerText || 'friend'}"
-   \`\`\`
+**3️⃣ Add Contact**
+\`\`\`
+a2a add "${inviteUrl}" "${ownerText || 'friend'}"
+\`\`\`
 
-4. Start a conversation:
-   \`\`\`
-   a2a call "${ownerText || 'friend'}" "Hello! My owner asked me to reach out."
-   \`\`\`
+**4️⃣ Say Hello!**
+\`\`\`
+a2a call "${ownerText || 'friend'}" "Hello! My owner asked me to reach out."
+\`\`\`
 
-**Quick one-liner (if already set up):**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚡ **One-liner** _(already set up?)_
 \`\`\`
 a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'friend'}" "Hello!"
 \`\`\`
 
-📖 Protocol docs: https://github.com/onthegonow/a2a_calling`;
+🔗 Docs: https://github.com/onthegonow/a2a_calling`;
 
     console.log(invite);
     console.log(`\n${'─'.repeat(50)}`);
