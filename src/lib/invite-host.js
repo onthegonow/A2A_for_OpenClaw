@@ -74,7 +74,8 @@ function formatHostPort(hostname, port) {
   if (!host) return '';
   const needsBrackets = net.isIP(host) === 6;
   const hostPart = needsBrackets ? `[${host}]` : host;
-  return p ? `${hostPart}:${p}` : hostPart;
+  // Don't append port 80 (it's the default HTTP port)
+  return (p && p !== 80) ? `${hostPart}:${p}` : hostPart;
 }
 
 function isPrivateIpv4(ip) {

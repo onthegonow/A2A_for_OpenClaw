@@ -407,15 +407,36 @@ async function resolveInviteHostname() {
   try {
     const { A2AConfig } = require('../src/lib/config');
     const config = new A2AConfig();
+    const agent = config.getAgent() || {};
+    const onboarding = config.getAll().onboarding || {};
+    
+    // If hostname is set without a port (e.g., "149.28.213.47"), assume port 80 
+    // (user configured reverse proxy or direct bind to 80)
+    // If hostname has a port (e.g., "149.28.213.47:3007"), use that port
+    // If no hostname set, use server_port from onboarding
+    const hostname = agent.hostname || '';
+    const hasExplicitPort = hostname.includes(':') && !hostname.startsWith('[');
+    
+    let defaultPort;
+    if (hasExplicitPort) {
+      defaultPort = null; // Will be parsed from hostname
+    } else if (hostname && !hostname.includes('localhost')) {
+      // External hostname without port = assume port 80 (reverse proxy or direct)
+      defaultPort = 80;
+    } else {
+      // Local or no hostname - use actual server port
+      defaultPort = onboarding.server_port || process.env.PORT || process.env.A2A_PORT || 80;
+    }
+    
     const resolved = await resolveInviteHost({
       config,
-      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001
+      defaultPort
     });
     return resolved;
   } catch (err) {
     return resolveInviteHost({
       fallbackHost: process.env.OPENCLAW_HOSTNAME || process.env.HOSTNAME || 'localhost',
-      defaultPort: process.env.PORT || process.env.A2A_PORT || 3001
+      defaultPort: process.env.PORT || process.env.A2A_PORT || 80
     });
   }
 }
