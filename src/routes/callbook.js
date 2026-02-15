@@ -117,10 +117,10 @@ function createCallbookRouter() {
           setStatus('Connected. Session cookie stored in your browser.', 'ok');
           openBtn.style.display = 'inline-block';
           openBtn.addEventListener('click', () => {
-            window.location.href = result.dashboard_path || '/dashboard/';
+            window.location.href = result.dashboard_path || '/api/a2a/dashboard/';
           });
           window.setTimeout(() => {
-            window.location.href = result.dashboard_path || '/dashboard/';
+            window.location.href = result.dashboard_path || '/api/a2a/dashboard/';
           }, 350);
         } catch (err) {
           setStatus('Failed: ' + err.message, 'error');

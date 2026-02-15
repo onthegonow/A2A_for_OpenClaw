@@ -451,7 +451,7 @@ function createDashboardApiRouter(options = {}) {
     return res.json({
       success: true,
       device: result.device,
-      dashboard_path: '/dashboard/'
+      dashboard_path: '/api/a2a/dashboard/'
     });
   });
 
