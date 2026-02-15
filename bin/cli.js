@@ -1391,35 +1391,74 @@ https://github.com/onthegonow/a2a_calling`;
     if (externalIp) {
       const verifyUrl = `http://${publicHost}/api/a2a/ping`;
       if (serverPort !== 80) {
-        // Check what's using port 80
+        // Check what's using port 80 and detect web servers
         const port80Status = await isPortListening(80, '127.0.0.1', { timeoutMs: 250 });
+        const { spawnSync } = require('child_process');
+        const hasNginx = spawnSync('which', ['nginx'], { encoding: 'utf8' }).status === 0;
+        const hasCaddy = spawnSync('which', ['caddy'], { encoding: 'utf8' }).status === 0;
+        const hasSudo = spawnSync('sudo', ['-n', 'true'], { encoding: 'utf8' }).status === 0;
         
-        console.log(`\n  ━━━ Reverse Proxy Setup ━━━`);
-        console.log(`  Server running on port ${serverPort}, but external callers expect port 80/443.`);
+        console.log(`\n  ━━━ IMPORTANT: Port Configuration ━━━`);
+        console.log(`\n  A2A works best on port 80. Other ports require firewall configuration.`);
+        console.log(`  Current: A2A server on port ${serverPort}`);
+        
         if (port80Status.listening) {
-          console.log(`  Port 80: in use (likely nginx, caddy, or another web server)`);
+          console.log(`  Port 80: IN USE (likely ${hasNginx ? 'nginx' : hasCaddy ? 'caddy' : 'a web server'})`);
+          console.log(`\n  RECOMMENDED: Configure reverse proxy to route /api/a2a/* from port 80 to ${serverPort}`);
+          console.log(`  This is the easiest option — no firewall changes needed.\n`);
+          
+          if (hasNginx) {
+            console.log(`  ── nginx config (add to /etc/nginx/sites-available/default) ──`);
+            console.log(`  location /api/a2a/ {`);
+            console.log(`      proxy_pass http://127.0.0.1:${serverPort}/api/a2a/;`);
+            console.log(`      proxy_http_version 1.1;`);
+            console.log(`      proxy_set_header Host $host;`);
+            console.log(`      proxy_set_header X-Real-IP $remote_addr;`);
+            console.log(`  }`);
+            console.log(`  ────────────────────────────────────────────────────────────`);
+            console.log(`\n  To apply: sudo nano /etc/nginx/sites-available/default`);
+            console.log(`            (add the location block inside your server {})`);
+            console.log(`            sudo nginx -t && sudo systemctl reload nginx`);
+          }
+          
+          if (hasCaddy) {
+            console.log(`\n  ── Caddy config ──`);
+            console.log(`  handle /api/a2a/* {`);
+            console.log(`      reverse_proxy 127.0.0.1:${serverPort}`);
+            console.log(`  }`);
+            console.log(`  ───────────────────`);
+          }
+          
+          console.log(`\n  After configuring, your invite hostname should be: ${externalIp}`);
+          console.log(`  (port 80 is the default, so no port number needed)`);
+          
         } else {
-          console.log(`  Port 80: available (but A2A is on ${serverPort})`);
+          console.log(`  Port 80: AVAILABLE`);
+          console.log(`\n  RECOMMENDED: Restart A2A on port 80 for easiest setup.`);
+          console.log(`  Run: a2a stop && a2a start --port 80`);
+          if (!hasSudo) {
+            console.log(`  Note: Port 80 may require sudo. Try: sudo a2a start --port 80`);
+          }
         }
-        console.log(`\n  RECOMMENDED: Configure your web server to proxy A2A requests:\n`);
-        console.log(`  For nginx, add to your server block:`);
-        console.log(`    location /api/a2a/ {`);
-        console.log(`      proxy_pass http://127.0.0.1:${serverPort}/api/a2a/;`);
-        console.log(`      proxy_http_version 1.1;`);
-        console.log(`      proxy_set_header Host $host;`);
-        console.log(`    }`);
-        console.log(`\n  For Caddy:`);
-        console.log(`    handle /api/a2a/* {`);
-        console.log(`      reverse_proxy 127.0.0.1:${serverPort}`);
-        console.log(`    }`);
-        console.log(`\n  After configuring, update the invite hostname to use port 80:`);
-        console.log(`    Current: ${publicHost}`);
-        console.log(`    Should be: ${externalIp} (without port, defaults to 80)`);
-        console.log(`\n  Or open port ${serverPort} directly in your firewall if no proxy is used.`);
-        console.log(`  ━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-        console.log(`\n  ACTION REQUIRED: Ask your owner if they want to configure a reverse proxy.`);
-        console.log(`  If they say yes, help them add the nginx/caddy config above.`);
-        console.log(`  If they say no or skip, the invite will use port ${serverPort} directly.`);
+        
+        console.log(`\n  ── Alternative: Firewall route (more complex) ──`);
+        console.log(`  If you can't use port 80, open port ${serverPort} in your firewall:`);
+        console.log(`    sudo ufw allow ${serverPort}/tcp   # Ubuntu/Debian`);
+        console.log(`    sudo firewall-cmd --add-port=${serverPort}/tcp --permanent && sudo firewall-cmd --reload  # RHEL/CentOS`);
+        console.log(`  Your invite will then use: ${publicHost}`);
+        
+        console.log(`\n  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+        console.log(`\n  AGENT ACTION: Configure ingress for A2A to receive external calls.`);
+        console.log(`  Options (in order of preference):`);
+        if (!port80Status.listening) {
+          console.log(`    1. Restart on port 80: a2a stop && ${hasSudo ? '' : 'sudo '}a2a start --port 80`);
+          console.log(`    2. Configure firewall for port ${serverPort} (see commands above)`);
+        } else {
+          console.log(`    1. Add reverse proxy config to ${hasNginx ? 'nginx' : hasCaddy ? 'Caddy' : 'your web server'} (see above)`);
+          console.log(`    2. Configure firewall for port ${serverPort} (see commands above)`);
+        }
+        console.log(`    3. Skip (local-only testing, external agents won't be able to call)`);
+        console.log(`\n  Ask your owner which option to proceed with.`);
       }
       console.log(`\n  Verify: curl -s ${verifyUrl}`);
     }
