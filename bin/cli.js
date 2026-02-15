@@ -444,6 +444,10 @@ async function resolveInviteHostname() {
 // Commands
 const commands = {
   create: async (args) => {
+    const { A2AConfig } = require('../src/lib/config');
+    const { loadManifest, getTopicsForTier } = require('../src/lib/disclosure');
+    const config = new A2AConfig();
+    
     // Parse max-calls: number, 'unlimited', or default (unlimited)
     let maxCalls = null; // Default: unlimited
     if (args.flags['max-calls']) {
@@ -454,19 +458,40 @@ const commands = {
       }
     }
 
-    // Parse custom topics if provided
-    const customTopics = args.flags.topics ? 
-      args.flags.topics.split(',').map(t => t.trim()) : null;
+    // Get tier from --tier or --permissions flag
+    const tier = args.flags.tier || args.flags.t || args.flags.permissions || args.flags.p || 'public';
+    
+    // Get owner from flag or config
+    const configAgent = config.getAgent() || {};
+    const ownerName = args.flags.owner || args.flags.o || configAgent.owner || configAgent.name || null;
+    
+    // Get topics from disclosure manifest based on tier (with inheritance)
+    const manifest = loadManifest();
+    const tierTopics = getTopicsForTier(manifest, tier);
+    
+    // Parse custom topics if provided, otherwise use tier topics
+    let allowedTopics;
+    if (args.flags.topics) {
+      allowedTopics = args.flags.topics.split(',').map(t => t.trim());
+    } else if (tierTopics.topics && tierTopics.topics.length > 0) {
+      allowedTopics = tierTopics.topics.map(t => t.topic || t);
+    } else {
+      allowedTopics = null;
+    }
+    
+    // Get objectives from disclosure
+    const objectives = tierTopics.objectives || [];
 
     const { token, record } = store.create({
       name: args.flags.name || args.flags.n || 'unnamed',
-      owner: args.flags.owner || args.flags.o || null,
+      owner: ownerName,
       expires: args.flags.expires || args.flags.e || 'never',
-      permissions: args.flags.permissions || args.flags.p || 'public',
+      permissions: tier,
       disclosure: args.flags.disclosure || args.flags.d || 'minimal',
       notify: args.flags.notify || 'all',
       maxCalls,
-      allowedTopics: customTopics
+      allowedTopics,
+      allowedGoals: objectives.map(o => o.objective || o)
     });
 
     const resolvedHost = await resolveInviteHostname();
@@ -512,23 +537,44 @@ const commands = {
     console.log(`${'─'.repeat(50)}\n`);
     
     // Generate shareable invite block
-    // Special invitation above the fold, agent setup below
-    const ownerText = record.owner || 'Someone';
+    const ownerText = record.owner || 'the owner';
     const agentName = record.name;
-    const topicsList = record.allowed_topics.join(' · ');
-    const goalsList = (record.allowed_goals || []).join(' · ');
+    const tierName = record.tier || 'public';
+    const tierConfig = config.getAll().tiers?.[tierName] || {};
+    const tierDesc = tierConfig.description || `${tierName} access`;
+    
+    // Format topics as bullet list
+    const topicsArray = record.allowed_topics || [];
+    const topicsList = topicsArray.length > 0 
+      ? topicsArray.map(t => `  • ${t}`).join('\n')
+      : '  • General discussion';
+    
+    // Format objectives as bullet list
+    const goalsArray = record.allowed_goals || [];
+    const goalsList = goalsArray.length > 0
+      ? goalsArray.map(g => `  • ${g}`).join('\n')
+      : '';
 
     const invite = `📞🗣️ **Agent-to-Agent Call Invite**
 
-👤 **${ownerText}** would like your agent to call **${agentName}** and explore where our owners might collaborate.
+👤 **${ownerText}**'s agent **${agentName}** invites your agent to connect.
+📊 Access tier: **${tierName}** (${tierDesc})
 
-💬 ${topicsList}${goalsList ? `\n🎯 ${goalsList}` : ''}
+💬 **Topics to discuss:**
+${topicsList}
+${goalsList ? `\n🎯 **Objectives:**\n${goalsList}\n` : ''}
+🔗 ${inviteUrl}${expiresText === 'never' ? '' : `\n⏰ Expires: ${expiresText}`}
 
-${inviteUrl}${expiresText === 'never' ? '' : `\n⏰ ${expiresText}`}
+── For agents new to A2A ──
+npm i -g a2acalling
+a2a quickstart                              # First-time setup
+a2a add "${inviteUrl}" "${agentName}"  # Save contact
+a2a call "${agentName}" "Hello!"            # Start call
 
-── setup ──
-npm i -g a2acalling && a2a add "${inviteUrl}" "${agentName}" && a2a call "${agentName}" "Hello from my owner!"
-https://github.com/onthegonow/a2a_calling`;
+── For agents already onboarded ──
+a2a add "${inviteUrl}" "${agentName}" && a2a call "${agentName}" "Hello from my owner!"
+
+📖 https://github.com/onthegonow/a2a_calling`;
 
     console.log(invite);
     console.log(`\n${'─'.repeat(50)}`);
