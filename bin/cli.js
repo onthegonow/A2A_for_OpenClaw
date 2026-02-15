@@ -1123,6 +1123,22 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
       const minTurns = parseInt(args.flags['min-turns']) || 8;
       const maxTurns = parseInt(args.flags['max-turns']) || 25;
 
+      // Build owner context from config for summarizer
+      let ownerContext = {};
+      try {
+        const { A2AConfig } = require('../src/lib/config');
+        const config = new A2AConfig();
+        const configAll = config.getAll();
+        const tierGoals = configAll.tiers?.public?.goals || [];
+        ownerContext = {
+          goals: tierGoals,
+          agentName: agentContext.name,
+          ownerName: agentContext.owner
+        };
+      } catch (err) {
+        // Best effort
+      }
+
       const driver = new ConversationDriver({
         runtime,
         agentContext,
@@ -1132,6 +1148,7 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
         disclosure,
         minTurns,
         maxTurns,
+        ownerContext,
         onTurn: (info) => {
           const preview = info.messagePreview.length >= 80
             ? info.messagePreview + '...'
@@ -1158,6 +1175,9 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
           console.log(`  Collaborations: ${result.collabState.candidateCollaborations.join(', ')}`);
         }
         console.log(`  Conversation ID: ${result.conversationId}`);
+        if (result.summary) {
+          console.log(`\n📋 Summary:\n${result.summary}`);
+        }
       } catch (err) {
         if (contactName) {
           store.updateContactStatus(contactName, 'offline', err.message);
@@ -1755,6 +1775,8 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
     const configFile = path.join(configDir, 'a2a-config.json');
     const disclosureFile = path.join(configDir, 'a2a-disclosure.json');
     const tokensFile = path.join(configDir, 'a2a-tokens.json');
+    const tokenStoreFile = path.join(configDir, 'a2a.json');
+    const externalIpFile = path.join(configDir, 'a2a-external-ip.json');
     const dbFile = path.join(configDir, 'a2a-conversations.db');
     const logsDbFile = path.join(configDir, 'a2a-logs.db');
     const callbookDbFile = path.join(configDir, 'a2a-callbook.db');
@@ -1768,7 +1790,7 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
         process.exit(1);
       }
 
-      const existing = [configFile, disclosureFile, tokensFile, dbFile, logsDbFile, callbookDbFile].filter(f => fs.existsSync(f));
+      const existing = [configFile, disclosureFile, tokensFile, tokenStoreFile, externalIpFile, dbFile, logsDbFile, callbookDbFile].filter(f => fs.existsSync(f));
       const list = existing.length ? existing.map(f => `  - ${f}`).join('\n') : '  (no local config/database files found)';
       const ok = await promptYesNo(
         `This will stop the pm2 process "a2a" and delete:\n${list}\nProceed? (y/N) `
@@ -1836,12 +1858,16 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
       const c1 = rmFileSafe(configFile);
       const c2 = rmFileSafe(disclosureFile);
       const c3 = rmFileSafe(tokensFile);
-      configOk = Boolean(c1.ok && c2.ok && c3.ok);
+      const c4 = rmFileSafe(tokenStoreFile);
+      const c5 = rmFileSafe(externalIpFile);
+      configOk = Boolean(c1.ok && c2.ok && c3.ok && c4.ok && c5.ok);
       console.log(configOk ? '✅' : '❌');
       if (!configOk) {
         if (!c1.ok) console.error(`  ${configFile}: ${c1.error}`);
         if (!c2.ok) console.error(`  ${disclosureFile}: ${c2.error}`);
         if (!c3.ok) console.error(`  ${tokensFile}: ${c3.error}`);
+        if (!c4.ok) console.error(`  ${tokenStoreFile}: ${c4.error}`);
+        if (!c5.ok) console.error(`  ${externalIpFile}: ${c5.error}`);
       }
 
       process.stdout.write('Removing database... ');

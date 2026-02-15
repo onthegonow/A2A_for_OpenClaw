@@ -36,6 +36,8 @@ class ConversationDriver {
    * @param {number} [options.maxTurns=30] - Maximum turns
    * @param {function} [options.onTurn] - Callback per turn: (turnInfo) => void
    * @param {string} [options.tier='public'] - Access tier
+   * @param {function} [options.summarizer] - async (messages, ownerContext) => summary result
+   * @param {object} [options.ownerContext] - Owner context for summarizer (goals, interests, etc.)
    */
   constructor(options) {
     this.runtime = options.runtime;
@@ -48,8 +50,73 @@ class ConversationDriver {
     this.maxTurns = options.maxTurns || 30;
     this.onTurn = options.onTurn || null;
     this.tier = options.tier || 'public';
+    this.summarizer = options.summarizer || null;
+    this.ownerContext = options.ownerContext || {};
 
     this.client = new A2AClient({ caller: this.caller, timeout: 65000 });
+  }
+
+  /**
+   * Build a summarizer function from the runtime adapter.
+   * Mirrors server.js generateSummary — uses runtime.summarize when available,
+   * falls back to defaultSummarizer otherwise.
+   */
+  _buildSummarizer() {
+    const runtime = this.runtime;
+    const agentContext = this.agentContext;
+
+    return async (messages, ownerContext) => {
+      if (!messages || messages.length === 0) {
+        return { summary: null };
+      }
+
+      // Build the summary prompt (same structure as server.js generateSummary)
+      const messageText = messages.map(m => {
+        const role = m.direction === 'inbound' ? '[Them]' : '[You]';
+        return `${role}: ${m.content}`;
+      }).join('\n');
+
+      const prompt = `Summarize this A2A call for the owner. Write from the owner's perspective.
+
+You initiated this call.
+
+Conversation:
+${messageText}
+
+Structure your summary with these sections:
+
+**Who:** Who you called, who they represent, key facts about them.
+**Key Discoveries:** What was learned about the other side — capabilities, interests, blind spots.
+**Collaboration Potential:** Rate HIGH/MEDIUM/LOW. List specific opportunities identified.
+**What We Learned vs Shared:** Brief information exchange audit — what did we get, what did we give.
+**Recommended Follow-Up:**
+- [ ] Actionable item 1
+- [ ] Actionable item 2
+**Assessment:** One-sentence strategic value judgment.
+
+Be concise but specific. No filler.`;
+
+      // Try runtime.summarize if available (OpenClaw path)
+      if (typeof runtime.summarize === 'function') {
+        try {
+          return await runtime.summarize({
+            sessionId: `summary-${Date.now()}`,
+            prompt,
+            messages,
+            callerInfo: { name: agentContext.name, owner: agentContext.owner }
+          });
+        } catch (err) {
+          logger.warn('Runtime summarizer failed, using default', {
+            event: 'driver_runtime_summarize_failed',
+            error: err
+          });
+        }
+      }
+
+      // Fallback: use defaultSummarizer
+      const { defaultSummarizer } = require('./summarizer');
+      return defaultSummarizer(messages, ownerContext);
+    };
   }
 
   /**
@@ -253,12 +320,22 @@ class ConversationDriver {
       });
     }
 
-    // Conclude locally
+    // Conclude locally with summarizer
+    let summary = null;
     if (this.convStore) {
       try {
-        await this.convStore.concludeConversation(conversationId);
+        const summarizer = this.summarizer || this._buildSummarizer();
+        const result = await this.convStore.concludeConversation(conversationId, {
+          summarizer,
+          ownerContext: this.ownerContext
+        });
+        summary = result.summary || null;
       } catch (err) {
-        // Best effort
+        logger.warn('Failed to conclude local conversation', {
+          event: 'driver_conclude_failed',
+          error: err,
+          data: { conversationId }
+        });
       }
     }
 
@@ -266,7 +343,8 @@ class ConversationDriver {
       conversationId,
       turnCount: collabState.turnCount,
       collabState,
-      transcript
+      transcript,
+      summary
     };
   }
 }
