@@ -465,10 +465,26 @@ function createDashboardApiRouter(options = {}) {
     let warnings = [];
     let inviteResolution = null;
     try {
+      // Determine default port based on config hostname:
+      // - If hostname has no port (e.g., "149.28.213.47"), assume port 80 (reverse proxy)
+      // - If hostname has explicit port, use that
+      // - Otherwise fall back to server port or env
+      const agent = context.config?.getAgent?.() || {};
+      const hostname = agent.hostname || '';
+      const hasExplicitPort = hostname.includes(':') && !hostname.startsWith('[');
+      let defaultPort;
+      if (hasExplicitPort) {
+        defaultPort = null; // Will be parsed from hostname
+      } else if (hostname && !hostname.includes('localhost')) {
+        defaultPort = 80; // External hostname without port = assume reverse proxy on 80
+      } else {
+        defaultPort = process.env.PORT || process.env.A2A_PORT || 80;
+      }
+      
       const resolved = await resolveInviteHost({
         config: context.config,
         fallbackHost: req.headers.host || process.env.HOSTNAME || 'localhost',
-        defaultPort: process.env.PORT || process.env.A2A_PORT || 3001,
+        defaultPort,
         refreshExternalIp: refreshIp,
         forceRefreshExternalIp: refreshIp,
         alwaysLookupExternalIp: true,
@@ -554,10 +570,23 @@ function createDashboardApiRouter(options = {}) {
     let resolvedHost = null;
     let warnings = [];
     try {
+      // Use same port logic as /status endpoint
+      const agent = context.config?.getAgent?.() || {};
+      const hostname = agent.hostname || '';
+      const hasExplicitPort = hostname.includes(':') && !hostname.startsWith('[');
+      let defaultPort;
+      if (hasExplicitPort) {
+        defaultPort = null;
+      } else if (hostname && !hostname.includes('localhost')) {
+        defaultPort = 80;
+      } else {
+        defaultPort = process.env.PORT || process.env.A2A_PORT || 80;
+      }
+      
       const resolved = await resolveInviteHost({
         config: context.config,
         fallbackHost: req.headers.host || process.env.HOSTNAME || 'localhost',
-        defaultPort: process.env.PORT || process.env.A2A_PORT || 3001,
+        defaultPort,
         refreshExternalIp: true,
         forceRefreshExternalIp: true
       });
