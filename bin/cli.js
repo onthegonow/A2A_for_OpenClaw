@@ -536,18 +536,15 @@ const commands = {
     console.log(`📋 SHAREABLE INVITE (copy everything below):`);
     console.log(`${'─'.repeat(50)}\n`);
     
-    // Generate shareable invite block
-    const ownerText = record.owner || 'the owner';
-    const agentName = record.name;
-    const tierName = record.tier || 'public';
-    const tierConfig = config.getAll().tiers?.[tierName] || {};
-    const tierDesc = tierConfig.description || `${tierName} access`;
+    // Get agent name from config (reuse configAgent from earlier)
+    const myAgentName = configAgent.name || 'my agent';
+    const ownerText = record.owner;
     
     // Format topics as bullet list
     const topicsArray = record.allowed_topics || [];
     const topicsList = topicsArray.length > 0 
       ? topicsArray.map(t => `  • ${t}`).join('\n')
-      : '  • General discussion';
+      : '';
     
     // Format objectives as bullet list
     const goalsArray = record.allowed_goals || [];
@@ -555,26 +552,49 @@ const commands = {
       ? goalsArray.map(g => `  • ${g}`).join('\n')
       : '';
 
+    // Build invite header
+    const inviteHeader = ownerText 
+      ? `**${ownerText}** invites you to connect with their agent **${myAgentName}**`
+      : `You're invited to connect with **${myAgentName}**`;
+
     const invite = `📞🗣️ **Agent-to-Agent Call Invite**
 
-👤 **${ownerText}**'s agent **${agentName}** invites your agent to connect.
-📊 Access tier: **${tierName}** (${tierDesc})
+${inviteHeader}
 
-💬 **Topics to discuss:**
-${topicsList}
-${goalsList ? `\n🎯 **Objectives:**\n${goalsList}\n` : ''}
-🔗 ${inviteUrl}${expiresText === 'never' ? '' : `\n⏰ Expires: ${expiresText}`}
+\`\`\`
+${inviteUrl}
+\`\`\`
+${topicsList ? `\n**Topics:**\n${topicsList}\n` : ''}${goalsList ? `\n**Goals:**\n${goalsList}\n` : ''}${expiresText !== 'never' ? `\n⏰ Expires: ${expiresText}\n` : ''}
+────────────────────────────────────────────────
 
-── For agents new to A2A ──
-npm i -g a2acalling
-a2a quickstart                              # First-time setup
-a2a add "${inviteUrl}" "${agentName}"  # Save contact
-a2a call "${agentName}" "Hello!"            # Start call
+**Setup Instructions**
 
-── For agents already onboarded ──
-a2a add "${inviteUrl}" "${agentName}" && a2a call "${agentName}" "Hello from my owner!"
+1. Install the A2A package:
+   \`\`\`
+   npm install -g a2acalling
+   \`\`\`
 
-📖 https://github.com/onthegonow/a2a_calling`;
+2. Run first-time setup (configures your agent's port, hostname, and disclosure topics):
+   \`\`\`
+   a2a quickstart
+   \`\`\`
+
+3. Add this contact to your agent's address book:
+   \`\`\`
+   a2a add "${inviteUrl}" "${ownerText || 'friend'}"
+   \`\`\`
+
+4. Start a conversation:
+   \`\`\`
+   a2a call "${ownerText || 'friend'}" "Hello! My owner asked me to reach out."
+   \`\`\`
+
+**Quick one-liner (if already set up):**
+\`\`\`
+a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'friend'}" "Hello!"
+\`\`\`
+
+📖 Protocol docs: https://github.com/onthegonow/a2a_calling`;
 
     console.log(invite);
     console.log(`\n${'─'.repeat(50)}`);
