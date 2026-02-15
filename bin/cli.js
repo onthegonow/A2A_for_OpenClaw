@@ -1126,6 +1126,40 @@ https://github.com/onthegonow/a2a_calling`;
     }
   },
 
+  config: (args) => {
+    const { A2AConfig } = require('../src/lib/config');
+    const config = new A2AConfig();
+    
+    const hostname = args.flags.hostname || args.flags.h;
+    const port = args.flags.port || args.flags.p;
+    const show = args.flags.show || args.flags.s || (!hostname && !port);
+    
+    if (show) {
+      const agent = config.getAgent();
+      console.log('A2A Configuration:\n');
+      console.log(`  Hostname: ${agent.hostname || '(not set)'}`);
+      console.log(`  Name: ${agent.name || '(not set)'}`);
+      console.log(`  Description: ${agent.description || '(not set)'}`);
+      const onboarding = config.getAll().onboarding || {};
+      console.log(`  Server port: ${onboarding.server_port || '(not running)'}`);
+      console.log(`  Onboarding step: ${onboarding.step || 'not started'}`);
+      return;
+    }
+    
+    const updates = {};
+    if (hostname) {
+      // Remove port from hostname if it's :80 (default)
+      const cleanHostname = hostname.replace(/:80$/, '');
+      updates.hostname = cleanHostname;
+      console.log(`  Hostname updated to: ${cleanHostname}`);
+    }
+    
+    if (Object.keys(updates).length > 0) {
+      config.setAgent(updates);
+      console.log('  ✅ Configuration saved.');
+    }
+  },
+
   server: (args) => {
     const explicitPort = args.flags.port || args.flags.p || process.env.PORT;
     if (explicitPort) {
@@ -1220,15 +1254,28 @@ https://github.com/onthegonow/a2a_calling`;
     }
 
     // ── Step 1: Port selection ───────────────────────────────────────────
-    // Scan ports 80, 3001-3020 and pick the first available one.
-    // Only show the selected port — agents don't need to see every candidate.
-    // Interactive users can override with a custom port; non-interactive
-    // auto-accepts the recommendation.
+    // Port 80 is strongly preferred (no firewall config needed for external access).
+    // If port 80 is available and bindable, use it. Otherwise fall back to 3001-3020.
     printSection('Port Configuration');
     const preferredPort = parsePort(args.flags.port || args.flags.p, null);
     const candidates = await inspectPorts(preferredPort);
     const availableCandidates = candidates.filter(c => c.available);
-    const recommendedPort = availableCandidates.length ? availableCandidates[0].port : null;
+    
+    // Strongly prefer port 80 if available
+    const port80Candidate = candidates.find(c => c.port === 80);
+    const port80Available = port80Candidate && port80Candidate.available;
+    
+    let recommendedPort;
+    if (port80Available) {
+      recommendedPort = 80;
+      console.log('  Port 80 is available — using it for easiest external access.');
+    } else if (availableCandidates.length) {
+      recommendedPort = availableCandidates[0].port;
+      console.log(`  Port 80 is in use. Using fallback port ${recommendedPort}.`);
+      console.log('  (Reverse proxy or firewall config will be needed for external access.)');
+    } else {
+      recommendedPort = null;
+    }
 
     if (!recommendedPort) {
       console.error('  Could not find a bindable port in the scan range.');
@@ -1240,9 +1287,14 @@ https://github.com/onthegonow/a2a_calling`;
       process.exit(1);
     }
 
-    console.log(`  Selected port: ${recommendedPort}`);
     let serverPort = recommendedPort;
-    const portChoice = await promptText(`Use port ${recommendedPort}? [Y/n/custom]: `, 'y');
+    
+    // If we got port 80, just confirm briefly. Otherwise allow override.
+    const portPrompt = port80Available 
+      ? `Use port 80? [Y/n]: `
+      : `Use port ${recommendedPort}? [Y/n/custom]: `;
+    const portChoice = await promptText(portPrompt, 'y');
+    
     if (!interactive) {
       serverPort = recommendedPort;
     } else if (!['', 'y', 'Y', 'yes', 'YES', 'ye'].includes(String(portChoice).trim())) {
@@ -1389,77 +1441,64 @@ https://github.com/onthegonow/a2a_calling`;
     console.log('  ✅ A2A server is running');
 
     if (externalIp) {
-      const verifyUrl = `http://${publicHost}/api/a2a/ping`;
-      if (serverPort !== 80) {
-        // Check what's using port 80 and detect web servers
-        const port80Status = await isPortListening(80, '127.0.0.1', { timeoutMs: 250 });
+      if (serverPort === 80) {
+        // Port 80 — optimal setup, no extra config needed
+        console.log(`\n  ✅ Running on port 80 — external agents can reach you directly.`);
+        console.log(`  Invite hostname: ${externalIp}`);
+        // Update publicHost to not include port since 80 is default
+        publicHost = externalIp;
+      } else {
+        // Not on port 80 — need reverse proxy or firewall config
         const { spawnSync } = require('child_process');
         const hasNginx = spawnSync('which', ['nginx'], { encoding: 'utf8' }).status === 0;
         const hasCaddy = spawnSync('which', ['caddy'], { encoding: 'utf8' }).status === 0;
-        const hasSudo = spawnSync('sudo', ['-n', 'true'], { encoding: 'utf8' }).status === 0;
         
-        console.log(`\n  ━━━ IMPORTANT: Port Configuration ━━━`);
-        console.log(`\n  A2A works best on port 80. Other ports require firewall configuration.`);
-        console.log(`  Current: A2A server on port ${serverPort}`);
+        console.log(`\n  ━━━ IMPORTANT: External Access Configuration ━━━`);
+        console.log(`\n  A2A server is on port ${serverPort}, but external callers expect port 80.`);
+        console.log(`  Port 80 is in use by ${hasNginx ? 'nginx' : hasCaddy ? 'Caddy' : 'another web server'}.`);
+        console.log(`\n  RECOMMENDED: Configure reverse proxy to route /api/a2a/* to port ${serverPort}`);
         
-        if (port80Status.listening) {
-          console.log(`  Port 80: IN USE (likely ${hasNginx ? 'nginx' : hasCaddy ? 'caddy' : 'a web server'})`);
-          console.log(`\n  RECOMMENDED: Configure reverse proxy to route /api/a2a/* from port 80 to ${serverPort}`);
-          console.log(`  This is the easiest option — no firewall changes needed.\n`);
-          
-          if (hasNginx) {
-            console.log(`  ── nginx config (add to /etc/nginx/sites-available/default) ──`);
-            console.log(`  location /api/a2a/ {`);
-            console.log(`      proxy_pass http://127.0.0.1:${serverPort}/api/a2a/;`);
-            console.log(`      proxy_http_version 1.1;`);
-            console.log(`      proxy_set_header Host $host;`);
-            console.log(`      proxy_set_header X-Real-IP $remote_addr;`);
-            console.log(`  }`);
-            console.log(`  ────────────────────────────────────────────────────────────`);
-            console.log(`\n  To apply: sudo nano /etc/nginx/sites-available/default`);
-            console.log(`            (add the location block inside your server {})`);
-            console.log(`            sudo nginx -t && sudo systemctl reload nginx`);
-          }
-          
-          if (hasCaddy) {
-            console.log(`\n  ── Caddy config ──`);
-            console.log(`  handle /api/a2a/* {`);
-            console.log(`      reverse_proxy 127.0.0.1:${serverPort}`);
-            console.log(`  }`);
-            console.log(`  ───────────────────`);
-          }
-          
-          console.log(`\n  After configuring, your invite hostname should be: ${externalIp}`);
-          console.log(`  (port 80 is the default, so no port number needed)`);
-          
-        } else {
-          console.log(`  Port 80: AVAILABLE`);
-          console.log(`\n  RECOMMENDED: Restart A2A on port 80 for easiest setup.`);
-          console.log(`  Run: a2a stop && a2a start --port 80`);
-          if (!hasSudo) {
-            console.log(`  Note: Port 80 may require sudo. Try: sudo a2a start --port 80`);
-          }
+        if (hasNginx) {
+          console.log(`\n  ── nginx config (add to /etc/nginx/sites-available/default) ──`);
+          console.log(`  location /api/a2a/ {`);
+          console.log(`      proxy_pass http://127.0.0.1:${serverPort}/api/a2a/;`);
+          console.log(`      proxy_http_version 1.1;`);
+          console.log(`      proxy_set_header Host $host;`);
+          console.log(`      proxy_set_header X-Real-IP $remote_addr;`);
+          console.log(`  }`);
+          console.log(`  ────────────────────────────────────────────────────────────`);
+          console.log(`\n  To apply:`);
+          console.log(`    sudo nano /etc/nginx/sites-available/default`);
+          console.log(`    (add the location block inside your server {})`);
+          console.log(`    sudo nginx -t && sudo systemctl reload nginx`);
         }
         
-        console.log(`\n  ── Alternative: Firewall route (more complex) ──`);
-        console.log(`  If you can't use port 80, open port ${serverPort} in your firewall:`);
+        if (hasCaddy) {
+          console.log(`\n  ── Caddy config ──`);
+          console.log(`  handle /api/a2a/* {`);
+          console.log(`      reverse_proxy 127.0.0.1:${serverPort}`);
+          console.log(`  }`);
+          console.log(`  ───────────────────`);
+        }
+        
+        console.log(`\n  After reverse proxy is configured:`);
+        console.log(`    Invite hostname will be: ${externalIp} (no port needed)`);
+        
+        console.log(`\n  ── Alternative: Direct firewall access ──`);
+        console.log(`  Open port ${serverPort} directly (less recommended):`);
         console.log(`    sudo ufw allow ${serverPort}/tcp   # Ubuntu/Debian`);
-        console.log(`    sudo firewall-cmd --add-port=${serverPort}/tcp --permanent && sudo firewall-cmd --reload  # RHEL/CentOS`);
-        console.log(`  Your invite will then use: ${publicHost}`);
+        console.log(`  Invite hostname will then be: ${publicHost}`);
         
         console.log(`\n  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-        console.log(`\n  AGENT ACTION: Configure ingress for A2A to receive external calls.`);
-        console.log(`  Options (in order of preference):`);
-        if (!port80Status.listening) {
-          console.log(`    1. Restart on port 80: a2a stop && ${hasSudo ? '' : 'sudo '}a2a start --port 80`);
-          console.log(`    2. Configure firewall for port ${serverPort} (see commands above)`);
-        } else {
-          console.log(`    1. Add reverse proxy config to ${hasNginx ? 'nginx' : hasCaddy ? 'Caddy' : 'your web server'} (see above)`);
-          console.log(`    2. Configure firewall for port ${serverPort} (see commands above)`);
-        }
-        console.log(`    3. Skip (local-only testing, external agents won't be able to call)`);
-        console.log(`\n  Ask your owner which option to proceed with.`);
+        console.log(`\n  AGENT ACTION REQUIRED:`);
+        console.log(`  1. Configure reverse proxy (recommended) — add nginx/caddy config above`);
+        console.log(`  2. OR open firewall for port ${serverPort} — run the ufw/firewall-cmd command`);
+        console.log(`  3. OR skip (local-only, external agents cannot call)`);
+        console.log(`\n  Ask your owner which option to use, then proceed.`);
+        console.log(`  If reverse proxy is configured, update hostname with: a2a config --hostname ${externalIp}`);
       }
+      
+      const verifyUrl = `http://${publicHost}/api/a2a/ping`;
       console.log(`\n  Verify: curl -s ${verifyUrl}`);
     }
 
