@@ -128,6 +128,7 @@ Be concise but specific. No filler.`;
   async run(openingMessage) {
     const transcript = [];
     let conversationId = null;
+    let dbConversationStarted = false;
 
     const collabState = {
       phase: 'handshake',
@@ -140,13 +141,8 @@ Be concise but specific. No filler.`;
       confidence: 0.25
     };
 
-    // Start conversation in DB if available
-    if (this.convStore) {
-      const convResult = this.convStore.startConversation({ direction: 'outbound' });
-      conversationId = convResult.id;
-    } else {
-      conversationId = `conv_${Date.now()}_local`;
-    }
+    // Don't start conversation in DB yet - wait for remote's conversation ID
+    conversationId = `conv_${Date.now()}_local`;
 
     let nextMessage = openingMessage;
 
@@ -166,26 +162,54 @@ Be concise but specific. No filler.`;
         break;
       }
 
-      // Update conversation ID from remote if first turn
+      // Update conversation ID from remote if first turn and start DB conversation
       if (turn === 0 && remoteResponse.conversation_id) {
         conversationId = remoteResponse.conversation_id;
+
+        // Now start the conversation in DB with the remote's ID
+        if (this.convStore) {
+          const convResult = this.convStore.startConversation({
+            id: conversationId,
+            direction: 'outbound'
+          });
+          if (convResult.success === false) {
+            logger.warn('Failed to start conversation in DB', {
+              event: 'driver_start_conversation_failed',
+              error: convResult.error
+            });
+          } else {
+            dbConversationStarted = true;
+          }
+        }
       }
 
       const remoteText = remoteResponse.response || '';
       const remoteContinue = remoteResponse.can_continue !== false;
 
-      // 2. Store messages in DB
-      if (this.convStore) {
-        this.convStore.addMessage(conversationId, {
+      // 2. Store messages in DB (only if conversation was started in DB)
+      if (this.convStore && dbConversationStarted) {
+        const outMsg = this.convStore.addMessage(conversationId, {
           direction: 'outbound',
           role: 'user',
           content: nextMessage
         });
-        this.convStore.addMessage(conversationId, {
+        if (outMsg.success === false) {
+          logger.warn('Failed to save outbound message', {
+            event: 'driver_save_message_failed',
+            error: outMsg.error
+          });
+        }
+        const inMsg = this.convStore.addMessage(conversationId, {
           direction: 'inbound',
           role: 'assistant',
           content: remoteText
         });
+        if (inMsg.success === false) {
+          logger.warn('Failed to save inbound message', {
+            event: 'driver_save_message_failed',
+            error: inMsg.error
+          });
+        }
       }
 
       transcript.push(

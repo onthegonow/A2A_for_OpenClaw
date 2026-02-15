@@ -18,6 +18,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { TokenStore } = require('../src/lib/tokens');
 const { A2AClient } = require('../src/lib/client');
@@ -294,6 +295,166 @@ function summarizePortResults(portResults) {
     if (item.blocked) return `Port ${item.port}: requires elevated privileges`;
     return `Port ${item.port}: in use`;
   });
+}
+
+/**
+ * Identify what process is using a given port.
+ * Returns { pid, name } or null if detection fails.
+ */
+function identifyPortProcess(port) {
+  const p = Number(port);
+  if (!Number.isFinite(p) || p <= 0) return null;
+  const { execSync } = require('child_process');
+  // Try lsof first (most common on Linux/macOS)
+  try {
+    const out = execSync(`lsof -i :${p} -sTCP:LISTEN -t 2>/dev/null`, { encoding: 'utf8', timeout: 5000 }).trim();
+    if (out) {
+      const pid = out.split('\n')[0].trim();
+      let name = 'unknown';
+      try {
+        name = execSync(`ps -p ${pid} -o comm= 2>/dev/null`, { encoding: 'utf8', timeout: 3000 }).trim();
+      } catch (e) { /* best-effort */ }
+      return { pid: Number(pid), name };
+    }
+  } catch (e) { /* lsof not available or failed */ }
+
+  // Fallback: ss (Linux)
+  try {
+    const out = execSync(`ss -tlnp 'sport = :${p}' 2>/dev/null`, { encoding: 'utf8', timeout: 5000 });
+    const pidMatch = out.match(/pid=(\d+)/);
+    const nameMatch = out.match(/\("([^"]+)"/);
+    if (pidMatch) {
+      return { pid: Number(pidMatch[1]), name: nameMatch ? nameMatch[1] : 'unknown' };
+    }
+  } catch (e) { /* ss not available */ }
+
+  return null;
+}
+
+/**
+ * When port 80 is unavailable, prompt the user with fallback options.
+ * Returns { strategy: 'kill' | 'proxy' | 'continue', port: number }
+ *
+ * Non-interactive: auto-returns 'continue' with a printed warning.
+ */
+async function promptPortFallbackStrategy(fallbackPort, interactive) {
+  const processInfo = identifyPortProcess(80);
+
+  console.log('\n  ┌─────────────────────────────────────────────────────────────────┐');
+  console.log('  │  ⚠  PORT 80 IS UNAVAILABLE                                     │');
+  console.log('  └─────────────────────────────────────────────────────────────────┘');
+  console.log('');
+  if (processInfo) {
+    console.log(`  Port 80 is held by: ${processInfo.name} (PID ${processInfo.pid})`);
+  } else {
+    console.log('  Port 80 is in use by another process (could not identify).');
+  }
+  console.log('');
+  console.log('  Why this matters:');
+  console.log('    - Port 80 is the default HTTP port — no firewall config needed');
+  console.log(`    - Fallback port ${fallbackPort} may be blocked by the caller's firewall`);
+  console.log(`    - If the server restarts on a different port, all invite URLs break`);
+  console.log(`    - Invite URLs with non-standard ports look like: a2a://host:${fallbackPort}/token`);
+  console.log('');
+
+  if (!interactive) {
+    console.log(`  Non-interactive mode: continuing on port ${fallbackPort}.`);
+    console.log('  Set up a reverse proxy (port 80 → ' + fallbackPort + ') for production use.\n');
+    return { strategy: 'continue', port: fallbackPort };
+  }
+
+  console.log('  Options:');
+  if (processInfo) {
+    console.log(`    1) Kill ${processInfo.name} (PID ${processInfo.pid}) and use port 80`);
+  } else {
+    console.log('    1) Kill the process on port 80 and retry');
+  }
+  console.log(`    2) Set up a reverse proxy (port 80 → ${fallbackPort})`);
+  console.log(`    3) Continue on port ${fallbackPort} (not recommended for production)`);
+  console.log('');
+
+  const choice = await promptText('  Choose [1/2/3]: ', '2');
+  const normalized = String(choice).trim();
+
+  if (normalized === '1') {
+    return { strategy: 'kill', port: 80, processInfo };
+  } else if (normalized === '3') {
+    console.log(`\n  ⚠  Continuing on port ${fallbackPort}.`);
+    console.log(`     Invite URLs will include :${fallbackPort} and may not be reachable externally.`);
+    console.log('     You can set up a reverse proxy later with: a2a config --help\n');
+    return { strategy: 'continue', port: fallbackPort };
+  } else {
+    // Default: reverse proxy (option 2)
+    return { strategy: 'proxy', port: fallbackPort };
+  }
+}
+
+/**
+ * Attempt to kill the process on a given port.
+ * Returns true if kill succeeded and port is now available.
+ */
+async function killPortProcess(processInfo) {
+  if (!processInfo || !Number.isFinite(processInfo.pid)) return false;
+  const { execSync } = require('child_process');
+  try {
+    console.log(`  Killing ${processInfo.name} (PID ${processInfo.pid})...`);
+    execSync(`kill ${processInfo.pid}`, { timeout: 5000 });
+    // Wait briefly for the port to free up
+    await new Promise(r => setTimeout(r, 1000));
+    const { tryBindPort } = require('../src/lib/port-scanner');
+    const result = await tryBindPort(80);
+    if (result.ok) {
+      console.log('  ✅ Port 80 is now available.');
+      return true;
+    }
+    console.log('  Port 80 is still in use after kill. The process may require sudo to stop.');
+    return false;
+  } catch (e) {
+    console.log(`  Could not kill process: ${e.message}`);
+    console.log('  You may need to run: sudo kill ' + processInfo.pid);
+    return false;
+  }
+}
+
+/**
+ * Detect installed web servers and generate reverse proxy config.
+ * Returns { hasNginx, hasCaddy, nginxConfig, caddyConfig }.
+ */
+function generateProxyConfig(backendPort) {
+  const { spawnSync } = require('child_process');
+  const hasNginx = spawnSync('which', ['nginx'], { encoding: 'utf8' }).status === 0;
+  const hasCaddy = spawnSync('which', ['caddy'], { encoding: 'utf8' }).status === 0;
+
+  const nginxConfig = [
+    '# ══════════════════════════════════════════════════════════════',
+    '# A2A (Agent-to-Agent) Protocol Proxy',
+    '# ══════════════════════════════════════════════════════════════',
+    '# Routes federation requests from port 80 to the local',
+    `# A2A server on port ${backendPort}.`,
+    '#',
+    '# Protocol: https://github.com/onthegonow/a2a_calling',
+    '# All requests to /api/a2a/* are agent-to-agent API calls.',
+    '# ══════════════════════════════════════════════════════════════',
+    'location /api/a2a/ {',
+    `    proxy_pass http://127.0.0.1:${backendPort}/api/a2a/;`,
+    '    proxy_http_version 1.1;',
+    '    proxy_set_header Host $host;',
+    '    proxy_set_header X-Real-IP $remote_addr;',
+    '    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
+    '    proxy_set_header X-Forwarded-Proto $scheme;',
+    '}'
+  ].join('\n');
+
+  const caddyConfig = [
+    '# A2A (Agent-to-Agent) Protocol Proxy',
+    `# Routes federation requests to local A2A server on port ${backendPort}`,
+    '# Protocol: https://github.com/onthegonow/a2a_calling',
+    'handle /api/a2a/* {',
+    `    reverse_proxy 127.0.0.1:${backendPort}`,
+    '}'
+  ].join('\n');
+
+  return { hasNginx, hasCaddy, nginxConfig, caddyConfig };
 }
 
 async function handleDisclosureSubmit(args, commandLabel = 'onboard') {
@@ -1204,28 +1365,45 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
 
       // Persist conversation locally
       const cs = getConvStore();
-      if (cs && response.conversation_id) {
+      if (cs) {
         try {
-          cs.startConversation({
-            id: response.conversation_id,
+          // Use remote conversation ID if provided, otherwise generate a local one
+          const convId = response.conversation_id || `conv_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+
+          const convResult = cs.startConversation({
+            id: convId,
             contactId: contactName || null,
             contactName: contactName || null,
             direction: 'outbound'
           });
-          cs.addMessage(response.conversation_id, {
-            direction: 'outbound',
-            role: 'user',
-            content: message
-          });
-          if (response.response) {
-            cs.addMessage(response.conversation_id, {
-              direction: 'inbound',
-              role: 'assistant',
-              content: response.response
+          if (convResult.success === false) {
+            console.error(`⚠️  Failed to save conversation: ${convResult.error}`);
+          } else {
+            const outMsg = cs.addMessage(convId, {
+              direction: 'outbound',
+              role: 'user',
+              content: message
             });
+            if (outMsg.success === false) {
+              console.error(`⚠️  Failed to save outbound message: ${outMsg.error}`);
+            }
+            if (response.response) {
+              const inMsg = cs.addMessage(convId, {
+                direction: 'inbound',
+                role: 'assistant',
+                content: response.response
+              });
+              if (inMsg.success === false) {
+                console.error(`⚠️  Failed to save inbound message: ${inMsg.error}`);
+              }
+            }
+            // Update response to include conversation ID for display
+            if (!response.conversation_id) {
+              response.conversation_id = convId;
+            }
           }
         } catch (err) {
-          // Best effort — don't fail the call if persistence fails
+          console.error(`⚠️  Error persisting conversation: ${err.message}`);
         }
       }
 
@@ -1474,11 +1652,8 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
     let recommendedPort;
     if (port80Available) {
       recommendedPort = 80;
-      console.log('  Port 80 is available — using it for easiest external access.');
     } else if (availableCandidates.length) {
       recommendedPort = availableCandidates[0].port;
-      console.log(`  Port 80 is in use. Using fallback port ${recommendedPort}.`);
-      console.log('  (Reverse proxy or firewall config will be needed for external access.)');
     } else {
       recommendedPort = null;
     }
@@ -1494,49 +1669,76 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
     }
 
     let serverPort = recommendedPort;
-    
-    // If we got port 80, just confirm briefly. Otherwise allow override.
-    const portPrompt = port80Available 
-      ? `Use port 80? [Y/n]: `
-      : `Use port ${recommendedPort}? [Y/n/custom]: `;
-    const portChoice = await promptText(portPrompt, 'y');
-    
-    if (!interactive) {
-      serverPort = recommendedPort;
-    } else if (!['', 'y', 'Y', 'yes', 'YES', 'ye'].includes(String(portChoice).trim())) {
-      if (/^(n|no|custom|c)$/i.test(String(portChoice).trim())) {
-        let customPort = null;
-        while (customPort === null) {
-          const raw = await promptText('Enter a custom port number: ', String(recommendedPort));
-          const parsed = parsePort(raw, null);
-          if (!parsed) {
-            console.log('  Invalid port. Enter a value between 1 and 65535.');
-            continue;
+    let proxyStrategy = false; // true if user chose reverse proxy option
+
+    if (port80Available) {
+      // Port 80 available — simple confirm
+      console.log('  Port 80 is available — using it for easiest external access.');
+      const portPrompt = `Use port 80? [Y/n]: `;
+      const portChoice = await promptText(portPrompt, 'y');
+
+      if (!interactive) {
+        serverPort = 80;
+      } else if (!['', 'y', 'Y', 'yes', 'YES', 'ye'].includes(String(portChoice).trim())) {
+        if (/^(n|no|custom|c)$/i.test(String(portChoice).trim())) {
+          let customPort = null;
+          while (customPort === null) {
+            const raw = await promptText('Enter a custom port number: ', String(recommendedPort));
+            const parsed = parsePort(raw, null);
+            if (!parsed) {
+              console.log('  Invalid port. Enter a value between 1 and 65535.');
+              continue;
+            }
+            const checked = await (async () => {
+              const scan = await inspectPorts(parsed);
+              return scan[0];
+            })();
+            if (!checked.available) {
+              console.log(`  Port ${parsed} is unavailable (${checked.code || 'in use'}).`);
+              continue;
+            }
+            customPort = parsed;
           }
-          const checked = await (async () => {
-            const scan = await inspectPorts(parsed);
-            return scan[0];
-          })();
-          if (!checked.available) {
-            console.log(`  Port ${parsed} is unavailable (${checked.code || 'in use'}).`);
-            continue;
+          serverPort = customPort;
+        } else {
+          const parsed = parsePort(portChoice, null);
+          if (parsed) {
+            const checked = await (async () => {
+              const scan = await inspectPorts(parsed);
+              return scan[0];
+            })();
+            if (!checked.available) {
+              console.log(`  Port ${parsed} is unavailable (${checked.code || 'in use'}).`);
+            } else {
+              serverPort = parsed;
+            }
           }
-          customPort = parsed;
         }
-        serverPort = customPort;
-      } else {
-        const parsed = parsePort(portChoice, null);
-        if (parsed) {
-          const checked = await (async () => {
-            const scan = await inspectPorts(parsed);
-            return scan[0];
-          })();
-          if (!checked.available) {
-            console.log(`  Port ${parsed} is unavailable (${checked.code || 'in use'}).`);
+      }
+    } else {
+      // Port 80 NOT available — show the fallback strategy prompt
+      const fallback = await promptPortFallbackStrategy(recommendedPort, interactive);
+
+      if (fallback.strategy === 'kill') {
+        const confirmKill = await promptYesNo(`  Kill ${(fallback.processInfo && fallback.processInfo.name) || 'process'} (PID ${(fallback.processInfo && fallback.processInfo.pid) || '?'})? (y/N) `);
+        if (confirmKill) {
+          const killed = await killPortProcess(fallback.processInfo);
+          if (killed) {
+            serverPort = 80;
           } else {
-            serverPort = parsed;
+            console.log(`\n  Falling back to port ${recommendedPort}.`);
+            console.log('  You can set up a reverse proxy after setup completes.\n');
+            serverPort = recommendedPort;
           }
+        } else {
+          console.log(`  Skipped. Using port ${recommendedPort}.\n`);
+          serverPort = recommendedPort;
         }
+      } else if (fallback.strategy === 'proxy') {
+        serverPort = fallback.port;
+        proxyStrategy = true;
+      } else {
+        serverPort = fallback.port;
       }
     }
 
@@ -1651,81 +1853,60 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
         // Port 80 — optimal setup, no extra config needed
         console.log(`\n  ✅ Running on port 80 — external agents can reach you directly.`);
         console.log(`  Invite hostname: ${externalIp}`);
-        // Update publicHost to not include port since 80 is default
+        publicHost = externalIp;
+      } else if (proxyStrategy) {
+        // User chose to set up a reverse proxy
+        const proxy = generateProxyConfig(serverPort);
+
+        console.log(`\n  ━━━ Reverse Proxy Configuration ━━━`);
+        console.log(`\n  A2A server running on port ${serverPort}. Configure your web server`);
+        console.log(`  to proxy port 80 → ${serverPort} so invite URLs work without a port number.\n`);
+
+        if (proxy.hasNginx) {
+          console.log('  ┌─────────────────────────────────────────────────────────────────┐');
+          console.log('  │  nginx — add inside your server {} block                        │');
+          console.log('  │  File: /etc/nginx/sites-available/default                       │');
+          console.log('  └─────────────────────────────────────────────────────────────────┘');
+          console.log('');
+          proxy.nginxConfig.split('\n').forEach(line => console.log(`  ${line}`));
+          console.log('');
+          console.log('  To apply:');
+          console.log('    1. sudo nano /etc/nginx/sites-available/default');
+          console.log('    2. Add the config above inside your server { } block');
+          console.log('    3. sudo nginx -t');
+          console.log('    4. sudo systemctl reload nginx');
+        }
+
+        if (proxy.hasCaddy) {
+          console.log('');
+          console.log('  ┌─────────────────────────────────────────────────────────────────┐');
+          console.log('  │  Caddy config                                                   │');
+          console.log('  └─────────────────────────────────────────────────────────────────┘');
+          console.log('');
+          proxy.caddyConfig.split('\n').forEach(line => console.log(`  ${line}`));
+        }
+
+        if (!proxy.hasNginx && !proxy.hasCaddy) {
+          console.log('  No nginx or Caddy detected. Install one:');
+          console.log('    sudo apt install nginx   # Debian/Ubuntu');
+          console.log('    sudo yum install nginx   # RHEL/CentOS');
+          console.log('');
+          console.log('  Then add this proxy config:');
+          proxy.nginxConfig.split('\n').forEach(line => console.log(`  ${line}`));
+        }
+
+        // With reverse proxy, invite URLs use port 80 (no port in URL)
+        console.log(`\n  After applying, invite hostname will be: ${externalIp} (no port needed)`);
         publicHost = externalIp;
       } else {
-        // Not on port 80 — need reverse proxy or firewall config
-        const { spawnSync } = require('child_process');
-        const hasNginx = spawnSync('which', ['nginx'], { encoding: 'utf8' }).status === 0;
-        const hasCaddy = spawnSync('which', ['caddy'], { encoding: 'utf8' }).status === 0;
-        
-        console.log(`\n  ━━━ IMPORTANT: External Access Configuration ━━━`);
-        console.log(`\n  A2A server is on port ${serverPort}, but external callers expect port 80.`);
-        console.log(`  Port 80 is in use by ${hasNginx ? 'nginx' : hasCaddy ? 'Caddy' : 'another web server'}.`);
-        console.log(`\n  RECOMMENDED: Configure reverse proxy to route /api/a2a/* to port ${serverPort}`);
-        
-        if (hasNginx) {
-          console.log(`\n  ┌─────────────────────────────────────────────────────────────────┐`);
-          console.log(`  │  nginx config — add inside your server {} block                 │`);
-          console.log(`  │  File: /etc/nginx/sites-available/default                       │`);
-          console.log(`  └─────────────────────────────────────────────────────────────────┘`);
-          console.log(``);
-          console.log(`  # ══════════════════════════════════════════════════════════════`);
-          console.log(`  # A2A (Agent-to-Agent) Protocol Proxy`);
-          console.log(`  # ══════════════════════════════════════════════════════════════`);
-          console.log(`  # A2A enables AI agents to communicate across different instances.`);
-          console.log(`  # This proxy routes federation requests from port 80 to the local`);
-          console.log(`  # A2A server on port ${serverPort}.`);
-          console.log(`  #`);
-          console.log(`  # Protocol: https://github.com/onthegonow/a2a_calling`);
-          console.log(`  # All requests to /api/a2a/* are agent-to-agent API calls.`);
-          console.log(`  # ══════════════════════════════════════════════════════════════`);
-          console.log(`  location /api/a2a/ {`);
-          console.log(`      proxy_pass http://127.0.0.1:${serverPort}/api/a2a/;`);
-          console.log(`      proxy_http_version 1.1;`);
-          console.log(`      proxy_set_header Host $host;`);
-          console.log(`      proxy_set_header X-Real-IP $remote_addr;`);
-          console.log(`      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`);
-          console.log(`      proxy_set_header X-Forwarded-Proto $scheme;`);
-          console.log(`  }`);
-          console.log(``);
-          console.log(`  To apply:`);
-          console.log(`    1. sudo nano /etc/nginx/sites-available/default`);
-          console.log(`    2. Add the config above inside your server { } block`);
-          console.log(`    3. sudo nginx -t`);
-          console.log(`    4. sudo systemctl reload nginx`);
-        }
-        
-        if (hasCaddy) {
-          console.log(`\n  ┌─────────────────────────────────────────────────────────────────┐`);
-          console.log(`  │  Caddy config                                                   │`);
-          console.log(`  └─────────────────────────────────────────────────────────────────┘`);
-          console.log(``);
-          console.log(`  # A2A (Agent-to-Agent) Protocol Proxy`);
-          console.log(`  # Routes federation requests to local A2A server on port ${serverPort}`);
-          console.log(`  # Protocol: https://github.com/onthegonow/a2a_calling`);
-          console.log(`  handle /api/a2a/* {`);
-          console.log(`      reverse_proxy 127.0.0.1:${serverPort}`);
-          console.log(`  }`);
-        }
-        
-        console.log(`\n  After reverse proxy is configured:`);
-        console.log(`    Invite hostname will be: ${externalIp} (no port needed)`);
-        
-        console.log(`\n  ── Alternative: Direct firewall access ──`);
-        console.log(`  Open port ${serverPort} directly (less recommended):`);
-        console.log(`    sudo ufw allow ${serverPort}/tcp   # Ubuntu/Debian`);
-        console.log(`  Invite hostname will then be: ${publicHost}`);
-        
-        console.log(`\n  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
-        console.log(`\n  AGENT ACTION REQUIRED:`);
-        console.log(`  1. Configure reverse proxy (recommended) — add nginx/caddy config above`);
-        console.log(`  2. OR open firewall for port ${serverPort} — run the ufw/firewall-cmd command`);
-        console.log(`  3. OR skip (local-only, external agents cannot call)`);
-        console.log(`\n  Ask your owner which option to use, then proceed.`);
-        console.log(`  If reverse proxy is configured, update hostname with: a2a config --hostname ${externalIp}`);
+        // User chose 'continue' on non-standard port — brief reminder
+        console.log(`\n  ⚠  Running on port ${serverPort} (non-standard).`);
+        console.log(`  Invite hostname: ${publicHost}`);
+        console.log(`\n  To set up a reverse proxy later:`);
+        console.log(`    a2a config --hostname ${externalIp}`);
+        console.log(`  Then configure nginx/caddy to proxy port 80 → ${serverPort}.`);
       }
-      
+
       const verifyUrl = `http://${publicHost}/api/a2a/ping`;
       console.log(`\n  Verify: curl -s ${verifyUrl}`);
     }
