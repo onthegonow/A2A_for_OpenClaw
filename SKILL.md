@@ -42,7 +42,20 @@ a2a quickstart          # run onboarding
 a2a quickstart --force  # re-run from scratch
 ```
 
-After the onboarding walkthrough prints, scan your workspace files (USER.md, SOUL.md, etc.), build the disclosure JSON, and submit:
+After the onboarding walkthrough prints, scan ALL available context to build the disclosure JSON:
+
+**Primary sources:**
+- USER.md, SOUL.md — owner identity, interests, values
+- memory/*.md — may contain relevant context
+
+**If workspace files are missing/empty, also scan:**
+- ~/.gitconfig — name, email hints
+- Environment: whoami, hostname, $USER
+- ~/.config/ — installed tools reveal work domain
+- Installed CLIs — infer developer/devops/data roles
+- System hostname — may indicate project or role
+
+Build disclosure tiers from whatever context exists, then submit:
 
 ```bash
 a2a quickstart --submit '<json>'
@@ -101,13 +114,16 @@ a2a quickstart --port 3001 --interactive
 
 If reverse proxy/ingress is required, Quickstart will stop and ask for explicit confirmation (`--confirm-ingress`).
 
-Full disclosure onboarding (manifest editing) remains available below: it generates a disclosure manifest that controls what topics your agent leads with, discusses, or deflects during A2A calls — scoped by access tier (public, friends, family).
+Full disclosure onboarding (manifest editing) remains available below: it generates a disclosure manifest that controls what topics your agent discusses or redirects during A2A calls — scoped by access tier (public, friends, family).
 
 This onboarding is required before the first `/a2a call`. The owner must approve permissions first.
 
 Flow:
 
-1. Scan USER.md, HEARTBEAT.md, SOUL.md to generate a default manifest
+1. Scan ALL available context to generate a default manifest:
+   - Primary: USER.md, SOUL.md, memory/*.md
+   - Fallback: ~/.gitconfig, env vars, hostname, installed tools
+   - Infer owner's domain from system state if workspace is empty
 2. Present the manifest as a numbered text list grouped by tier:
 
 ```

@@ -580,15 +580,31 @@ function buildExtractionPrompt(availableFiles) {
       .join('\n') || '  (none detected)';
     fileSection = `### Available workspace files\n${fileList}\n\nRead the available files above and extract disclosure topics.`;
   } else {
-    fileSection = `### Workspace files to look for
+    fileSection = `### Context sources to scan
+
+**Primary sources (workspace files):**
   - USER.md — owner identity, bio, interests
   - SOUL.md — values, personality, communication style
-  - HEARTBEAT.md — skip this (contains agent tasks, not disclosure topics)
-  - SKILL.md — skip this (contains agent instructions)
-  - CLAUDE.md — skip this (contains agent instructions)
   - memory/*.md — may contain relevant context
+  - Skip HEARTBEAT.md, SKILL.md, CLAUDE.md (agent instructions, not owner info)
 
-Look for these files in your workspace directory and read the ones that exist. Extract disclosure topics from USER.md and SOUL.md primarily.`;
+**If workspace files are missing or empty, scan these additional sources:**
+  - ~/.gitconfig — name, email, identity hints
+  - Environment: whoami, hostname, $USER, $HOME
+  - ~/.config/ — installed tools hint at owner's work
+  - ~/.ssh/config — project/server names may reveal domains
+  - Any README.md files in common locations
+  - Shell history patterns (languages, tools used)
+  - Installed CLIs (what's in PATH)
+
+**Inference from system state:**
+  - Programming languages installed → likely a developer
+  - Cloud CLIs (aws, gcloud, az) → infrastructure/devops
+  - Design tools → creative work
+  - Data tools (jupyter, pandas) → data science
+  - Server hostname → may indicate role or project
+
+Use ALL available context to build a reasonable disclosure profile. If truly nothing exists, create a minimal placeholder with "New agent setup - owner details pending" and suggest what info the owner should provide.`;
   }
 
   const jsonBlock = `\`\`\`json
