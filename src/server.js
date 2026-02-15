@@ -717,18 +717,28 @@ const app = express();
 app.use(express.json());
 
 // Minimal owner dashboard (local by default unless A2A_ADMIN_TOKEN is provided)
+// All routes under /api/a2a/* so reverse proxy config stays simple.
 app.use('/api/a2a/dashboard', createDashboardApiRouter({
   tokenStore,
   agentContext,
   logger: logger.child({ component: 'a2a.dashboard' })
 }));
-app.use('/dashboard', createDashboardUiRouter({
+app.use('/api/a2a/dashboard', createDashboardUiRouter({
   tokenStore,
   agentContext,
   logger: logger.child({ component: 'a2a.dashboard' })
 }));
 
 // Callbook Remote pairing flow (public install page).
+// Mounted under /api/a2a/ for reverse proxy compatibility.
+app.use('/api/a2a/callbook', createCallbookRouter());
+
+// Legacy routes for backwards compatibility (direct access without reverse proxy)
+app.use('/dashboard', createDashboardUiRouter({
+  tokenStore,
+  agentContext,
+  logger: logger.child({ component: 'a2a.dashboard' })
+}));
 app.use('/callbook', createCallbookRouter());
 
 app.use('/api/a2a', createRoutes({

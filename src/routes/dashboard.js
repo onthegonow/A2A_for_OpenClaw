@@ -502,7 +502,7 @@ function createDashboardApiRouter(options = {}) {
       manifest_file: require('../lib/disclosure').MANIFEST_FILE,
       public_base_url: publicBaseUrl,
       public_dashboard_url: publicBaseUrl ? `${publicBaseUrl}/dashboard/` : null,
-      callbook_install_base: publicBaseUrl ? `${publicBaseUrl}/callbook/install` : null,
+      callbook_install_base: publicBaseUrl ? `${publicBaseUrl}/api/a2a/callbook/install` : null,
       invite_host: inviteResolution ? {
         host: inviteResolution.host,
         source: inviteResolution.source || null,
@@ -570,7 +570,7 @@ function createDashboardApiRouter(options = {}) {
     const schemeOverride = String(process.env.A2A_PUBLIC_SCHEME || '').trim();
     const scheme = schemeOverride || (isHttpsRequest(req) ? 'https' : 'http');
     const baseUrl = resolvedHost ? `${scheme}://${resolvedHost}` : null;
-    const installUrl = baseUrl ? `${baseUrl}/callbook/install#code=${created.code}` : null;
+    const installUrl = baseUrl ? `${baseUrl}/api/a2a/callbook/install#code=${created.code}` : null;
 
     return res.json({
       success: true,
