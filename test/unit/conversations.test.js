@@ -359,4 +359,167 @@ module.exports = function (test, assert, helpers) {
     store.close();
     tmp.cleanup();
   });
+
+  // ── Collaboration State Persistence ────────────────────────
+
+  test('saveCollabState and loadCollabState round-trip', () => {
+    const store = freshStore();
+    store.startConversation({ id: 'conv_collab1', direction: 'inbound' });
+
+    const state = {
+      phase: 'explore',
+      turnCount: 5,
+      overlapScore: 0.65,
+      activeThreads: ['market analysis', 'api integration'],
+      candidateCollaborations: ['joint pilot program'],
+      openQuestions: ['What is your timeline?'],
+      closeSignal: false,
+      confidence: 0.7
+    };
+
+    const result = store.saveCollabState('conv_collab1', state);
+    assert.ok(result.success);
+
+    const loaded = store.loadCollabState('conv_collab1');
+    assert.ok(loaded);
+    assert.equal(loaded.phase, 'explore');
+    assert.equal(loaded.turnCount, 5);
+    assert.equal(loaded.overlapScore, 0.65);
+    assert.deepEqual(loaded.activeThreads, ['market analysis', 'api integration']);
+    assert.deepEqual(loaded.candidateCollaborations, ['joint pilot program']);
+    assert.deepEqual(loaded.openQuestions, ['What is your timeline?']);
+    assert.equal(loaded.closeSignal, false);
+    assert.equal(loaded.confidence, 0.7);
+    assert.ok(loaded.updatedAt);
+
+    store.close();
+    tmp.cleanup();
+  });
+
+  test('loadCollabState returns null for nonexistent conversation', () => {
+    const store = freshStore();
+    const loaded = store.loadCollabState('conv_nonexist');
+    assert.equal(loaded, null);
+    store.close();
+    tmp.cleanup();
+  });
+
+  test('saveCollabState persists closeSignal as integer', () => {
+    const store = freshStore();
+    store.startConversation({ id: 'conv_close', direction: 'inbound' });
+
+    store.saveCollabState('conv_close', {
+      phase: 'close',
+      turnCount: 10,
+      overlapScore: 0.8,
+      closeSignal: true,
+      confidence: 0.9
+    });
+
+    const loaded = store.loadCollabState('conv_close');
+    assert.equal(loaded.closeSignal, true);
+    assert.equal(loaded.phase, 'close');
+
+    store.close();
+    tmp.cleanup();
+  });
+
+  test('collab state survives store close and reopen (simulated restart)', () => {
+    const tmpDir = helpers.tmpConfigDir('conv-restart');
+
+    // First store instance: save state
+    delete require.cache[require.resolve('../../src/lib/conversations')];
+    const { ConversationStore: CS1 } = require('../../src/lib/conversations');
+    const store1 = new CS1(tmpDir.dir);
+    store1.startConversation({ id: 'conv_restart', direction: 'inbound' });
+    store1.saveCollabState('conv_restart', {
+      phase: 'deep_dive',
+      turnCount: 7,
+      overlapScore: 0.55,
+      activeThreads: ['topic A'],
+      candidateCollaborations: [],
+      openQuestions: [],
+      closeSignal: false,
+      confidence: 0.6
+    });
+    store1.close();
+
+    // Second store instance: verify state persisted
+    delete require.cache[require.resolve('../../src/lib/conversations')];
+    const { ConversationStore: CS2 } = require('../../src/lib/conversations');
+    const store2 = new CS2(tmpDir.dir);
+    const loaded = store2.loadCollabState('conv_restart');
+    assert.ok(loaded);
+    assert.equal(loaded.phase, 'deep_dive');
+    assert.equal(loaded.turnCount, 7);
+    assert.equal(loaded.overlapScore, 0.55);
+    assert.deepEqual(loaded.activeThreads, ['topic A']);
+
+    store2.close();
+    tmpDir.cleanup();
+  });
+
+  // ── Outbound Call Persistence ─────────────────────────────────
+
+  test('outbound single-shot call persists conversation and messages', () => {
+    const store = freshStore();
+
+    // Simulate what CLI call command should do after a successful outbound call
+    const convId = 'conv_outbound_001';
+    const contactName = 'Alice';
+    const sentMessage = 'Hello Alice!';
+    const receivedResponse = 'Hi there! Nice to meet you.';
+
+    store.startConversation({
+      id: convId,
+      contactId: contactName,
+      contactName: contactName,
+      direction: 'outbound'
+    });
+
+    store.addMessage(convId, {
+      direction: 'outbound',
+      role: 'user',
+      content: sentMessage
+    });
+
+    store.addMessage(convId, {
+      direction: 'inbound',
+      role: 'assistant',
+      content: receivedResponse
+    });
+
+    // Verify conversation appears in list
+    const conversations = store.listConversations();
+    assert.equal(conversations.length, 1);
+    assert.equal(conversations[0].id, convId);
+    assert.equal(conversations[0].direction, 'outbound');
+    assert.equal(conversations[0].contact_name, contactName);
+    assert.equal(conversations[0].message_count, 2);
+
+    // Verify individual conversation retrieval
+    const conv = store.getConversation(convId);
+    assert.ok(conv);
+    assert.equal(conv.direction, 'outbound');
+    assert.equal(conv.messages.length, 2);
+
+    const outMsg = conv.messages.find(m => m.direction === 'outbound');
+    assert.ok(outMsg);
+    assert.equal(outMsg.content, sentMessage);
+    assert.equal(outMsg.role, 'user');
+
+    const inMsg = conv.messages.find(m => m.direction === 'inbound');
+    assert.ok(inMsg);
+    assert.equal(inMsg.content, receivedResponse);
+    assert.equal(inMsg.role, 'assistant');
+
+    // Verify context retrieval works
+    const ctx = store.getConversationContext(convId);
+    assert.ok(ctx);
+    assert.equal(ctx.contact, contactName);
+    assert.equal(ctx.messageCount, 2);
+
+    store.close();
+    tmp.cleanup();
+  });
 };

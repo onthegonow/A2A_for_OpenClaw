@@ -452,7 +452,7 @@ function createRoutes(options = {}) {
         }
       });
 
-      res.json({
+      const responsePayload = {
         success: true,
         trace_id: traceId,
         request_id: requestId,
@@ -460,7 +460,13 @@ function createRoutes(options = {}) {
         response: response.text,
         can_continue: response.canContinue !== false,
         tokens_remaining: validation.calls_remaining
-      });
+      };
+
+      if (response.collaboration) {
+        responsePayload.collaboration = response.collaboration;
+      }
+
+      res.json(responsePayload);
 
     } catch (err) {
       reqLogger.error('Message handling error', {

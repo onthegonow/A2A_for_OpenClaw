@@ -306,6 +306,89 @@ module.exports = function (test, assert, helpers) {
     await teardown();
   });
 
+  // ── Collaboration Field in Response ──────────────────────────
+
+  test('invoke returns collaboration field when handleMessage provides it', async () => {
+    const { tokenStore } = setup(async (message, context) => {
+      return {
+        text: `Response to: ${message}`,
+        canContinue: true,
+        collaboration: {
+          phase: 'explore',
+          turnCount: 3,
+          overlapScore: 0.45,
+          activeThreads: ['market analysis'],
+          candidateCollaborations: [],
+          closeSignal: false
+        }
+      };
+    });
+
+    const { token } = tokenStore.create({ name: 'CollabTest' });
+
+    const res = await client.post('/api/a2a/invoke', {
+      headers: { Authorization: `Bearer ${token}` },
+      body: { message: 'Test collaboration field' }
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.ok(res.body.success);
+    assert.ok(res.body.collaboration, 'Response should include collaboration field');
+    assert.equal(res.body.collaboration.phase, 'explore');
+    assert.equal(res.body.collaboration.turnCount, 3);
+    assert.equal(res.body.collaboration.overlapScore, 0.45);
+    assert.equal(res.body.can_continue, true);
+    await teardown();
+  });
+
+  test('invoke omits collaboration field when not provided', async () => {
+    const { tokenStore } = setup(async (message, context) => {
+      return { text: 'No collab', canContinue: true };
+    });
+
+    const { token } = tokenStore.create({ name: 'NoCollabTest' });
+
+    const res = await client.post('/api/a2a/invoke', {
+      headers: { Authorization: `Bearer ${token}` },
+      body: { message: 'Test no collaboration' }
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.ok(res.body.success);
+    assert.equal(res.body.collaboration, undefined);
+    await teardown();
+  });
+
+  test('invoke returns can_continue false when handler signals close', async () => {
+    const { tokenStore } = setup(async (message, context) => {
+      return {
+        text: 'Wrapping up',
+        canContinue: false,
+        collaboration: {
+          phase: 'close',
+          turnCount: 10,
+          overlapScore: 0.8,
+          activeThreads: [],
+          candidateCollaborations: ['joint project'],
+          closeSignal: true
+        }
+      };
+    });
+
+    const { token } = tokenStore.create({ name: 'CloseTest' });
+
+    const res = await client.post('/api/a2a/invoke', {
+      headers: { Authorization: `Bearer ${token}` },
+      body: { message: 'Final message' }
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.can_continue, false);
+    assert.ok(res.body.collaboration);
+    assert.equal(res.body.collaboration.closeSignal, true);
+    await teardown();
+  });
+
   // ── Handler Error ─────────────────────────────────────────────
 
   test('invoke returns 500 when handler throws', async () => {

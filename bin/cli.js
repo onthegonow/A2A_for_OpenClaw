@@ -1084,6 +1084,9 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
 
     if (!target || !message) {
       console.error('Usage: a2a call <contact_or_url> <message>');
+      console.error('  --multi         Enable multi-turn conversation');
+      console.error('  --min-turns N   Minimum turns before close (default: 8)');
+      console.error('  --max-turns N   Maximum turns (default: 25)');
       process.exit(1);
     }
 
@@ -1098,19 +1101,114 @@ a2a add "${inviteUrl}" "${ownerText || 'friend'}" && a2a call "${ownerText || 'f
       }
     }
 
+    const multi = Boolean(args.flags.multi);
+    const callerName = args.flags.name || 'CLI User';
+
+    if (multi) {
+      // Multi-turn conversation via ConversationDriver
+      const { ConversationDriver } = require('../src/lib/conversation-driver');
+      const { createRuntimeAdapter } = require('../src/lib/runtime-adapter');
+      const { loadManifest } = require('../src/lib/disclosure');
+
+      const workspaceDir = process.env.A2A_WORKSPACE || process.env.OPENCLAW_WORKSPACE || process.cwd();
+      const agentContext = {
+        name: process.env.A2A_AGENT_NAME || process.env.AGENT_NAME || 'a2a-agent',
+        owner: process.env.A2A_OWNER_NAME || process.env.USER || 'Agent Owner'
+      };
+
+      const runtime = createRuntimeAdapter({ workspaceDir, agentContext });
+      const cs = getConvStore();
+      const disclosure = loadManifest();
+
+      const minTurns = parseInt(args.flags['min-turns']) || 8;
+      const maxTurns = parseInt(args.flags['max-turns']) || 25;
+
+      const driver = new ConversationDriver({
+        runtime,
+        agentContext,
+        caller: { name: callerName },
+        endpoint: url,
+        convStore: cs,
+        disclosure,
+        minTurns,
+        maxTurns,
+        onTurn: (info) => {
+          const preview = info.messagePreview.length >= 80
+            ? info.messagePreview + '...'
+            : info.messagePreview;
+          console.log(`  Turn ${info.turn} | ${info.phase} | overlap: ${info.overlapScore.toFixed(2)} | ${preview}`);
+        }
+      });
+
+      console.log(`📞 Starting multi-turn conversation with ${contactName || url}...`);
+      console.log(`  Min turns: ${minTurns} | Max turns: ${maxTurns}\n`);
+
+      try {
+        const result = await driver.run(message);
+
+        if (contactName) {
+          store.updateContactStatus(contactName, 'online');
+        }
+
+        console.log(`\n✅ Conversation complete`);
+        console.log(`  Turns: ${result.turnCount}`);
+        console.log(`  Phase: ${result.collabState.phase}`);
+        console.log(`  Overlap: ${result.collabState.overlapScore.toFixed(2)}`);
+        if (result.collabState.candidateCollaborations.length > 0) {
+          console.log(`  Collaborations: ${result.collabState.candidateCollaborations.join(', ')}`);
+        }
+        console.log(`  Conversation ID: ${result.conversationId}`);
+      } catch (err) {
+        if (contactName) {
+          store.updateContactStatus(contactName, 'offline', err.message);
+        }
+        console.error(`❌ Multi-turn call failed: ${err.message}`);
+        process.exit(1);
+      }
+      return;
+    }
+
+    // Single-shot call (existing behavior)
     const client = new A2AClient({
-      caller: { name: args.flags.name || 'CLI User' }
+      caller: { name: callerName }
     });
 
     try {
       console.log(`📞 Calling ${contactName || url}...`);
       const response = await client.call(url, message);
-      
+
       // Update contact status on success
       if (contactName) {
         store.updateContactStatus(contactName, 'online');
       }
-      
+
+      // Persist conversation locally
+      const cs = getConvStore();
+      if (cs && response.conversation_id) {
+        try {
+          cs.startConversation({
+            id: response.conversation_id,
+            contactId: contactName || null,
+            contactName: contactName || null,
+            direction: 'outbound'
+          });
+          cs.addMessage(response.conversation_id, {
+            direction: 'outbound',
+            role: 'user',
+            content: message
+          });
+          if (response.response) {
+            cs.addMessage(response.conversation_id, {
+              direction: 'inbound',
+              role: 'assistant',
+              content: response.response
+            });
+          }
+        } catch (err) {
+          // Best effort — don't fail the call if persistence fails
+        }
+      }
+
       console.log(`\n✅ Response:\n`);
       console.log(response.response);
       if (response.conversation_id) {
@@ -1942,6 +2040,9 @@ Conversations:
 
 Calling:
   call <contact|url> <msg>  Call a contact (or invite URL)
+    --multi           Enable multi-turn conversation
+    --min-turns N     Minimum turns before close (default: 8)
+    --max-turns N     Maximum turns (default: 25)
   ping <url>          Check if agent is reachable
   status <url>        Get A2A status
   gui                 Open the local dashboard GUI in a browser

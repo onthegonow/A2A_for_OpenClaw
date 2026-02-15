@@ -92,6 +92,17 @@ class ConversationStore {
         message_count INTEGER DEFAULT 0,
         status TEXT DEFAULT 'active', -- 'active', 'concluded', 'timeout'
         
+        -- Live collaboration state
+        collab_phase TEXT DEFAULT 'handshake',
+        collab_turn_count INTEGER DEFAULT 0,
+        collab_overlap_score REAL DEFAULT 0.15,
+        collab_active_threads TEXT,
+        collab_candidate_collaborations TEXT,
+        collab_open_questions TEXT,
+        collab_close_signal INTEGER DEFAULT 0,
+        collab_confidence REAL DEFAULT 0.25,
+        collab_updated_at TEXT,
+
         -- Raw summary (neutral, could be shared)
         summary TEXT,
         summary_at TEXT,
@@ -140,7 +151,8 @@ class ConversationStore {
       const cols = new Set(info.map(row => row && row.name).filter(Boolean));
       const required = [
         'joint_action_items',
-        'collaboration_opportunity'
+        'collaboration_opportunity',
+        'collab_phase'
       ];
       const missing = required.filter(c => !cols.has(c));
       if (missing.length === 0) {
@@ -544,6 +556,76 @@ class ConversationStore {
       startedAt: conversation.started_at,
       endedAt: conversation.ended_at,
       status: conversation.status
+    };
+  }
+
+  /**
+   * Save live collaboration state for a conversation
+   */
+  saveCollabState(conversationId, collabState) {
+    const db = this._initDb();
+    if (!db) return { success: false, error: this._dbError };
+    if (!collabState || typeof collabState !== 'object') {
+      return { success: false, error: 'invalid_state' };
+    }
+
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE conversations SET
+        collab_phase = ?,
+        collab_turn_count = ?,
+        collab_overlap_score = ?,
+        collab_active_threads = ?,
+        collab_candidate_collaborations = ?,
+        collab_open_questions = ?,
+        collab_close_signal = ?,
+        collab_confidence = ?,
+        collab_updated_at = ?
+      WHERE id = ?
+    `).run(
+      collabState.phase || 'handshake',
+      collabState.turnCount || 0,
+      collabState.overlapScore != null ? collabState.overlapScore : 0.15,
+      collabState.activeThreads ? JSON.stringify(collabState.activeThreads) : null,
+      collabState.candidateCollaborations ? JSON.stringify(collabState.candidateCollaborations) : null,
+      collabState.openQuestions ? JSON.stringify(collabState.openQuestions) : null,
+      collabState.closeSignal ? 1 : 0,
+      collabState.confidence != null ? collabState.confidence : 0.25,
+      now,
+      conversationId
+    );
+
+    return { success: true };
+  }
+
+  /**
+   * Load live collaboration state for a conversation
+   */
+  loadCollabState(conversationId) {
+    const db = this._initDb();
+    if (!db) return null;
+
+    const row = db.prepare(
+      'SELECT collab_phase, collab_turn_count, collab_overlap_score, collab_active_threads, collab_candidate_collaborations, collab_open_questions, collab_close_signal, collab_confidence, collab_updated_at FROM conversations WHERE id = ?'
+    ).get(conversationId);
+
+    if (!row || row.collab_phase == null) return null;
+
+    const parseJson = (str) => {
+      if (!str) return [];
+      try { return JSON.parse(str); } catch { return []; }
+    };
+
+    return {
+      phase: row.collab_phase,
+      turnCount: row.collab_turn_count || 0,
+      overlapScore: row.collab_overlap_score != null ? row.collab_overlap_score : 0.15,
+      activeThreads: parseJson(row.collab_active_threads),
+      candidateCollaborations: parseJson(row.collab_candidate_collaborations),
+      openQuestions: parseJson(row.collab_open_questions),
+      closeSignal: Boolean(row.collab_close_signal),
+      confidence: row.collab_confidence != null ? row.collab_confidence : 0.25,
+      updatedAt: row.collab_updated_at
     };
   }
 

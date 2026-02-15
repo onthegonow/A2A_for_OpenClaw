@@ -65,6 +65,27 @@ const runtime = createRuntimeAdapter({
   agentContext,
   logger: logger.child({ component: 'a2a.runtime' })
 });
+// Lazy-load conversation store for collab state persistence
+let ConversationStore = null;
+let serverConvStore = null;
+function getServerConvStore() {
+  if (serverConvStore === false) return null;
+  if (!serverConvStore) {
+    try {
+      ConversationStore = require('./lib/conversations').ConversationStore;
+      serverConvStore = new ConversationStore();
+      if (!serverConvStore.isAvailable()) {
+        serverConvStore = false;
+        return null;
+      }
+    } catch (err) {
+      serverConvStore = false;
+      return null;
+    }
+  }
+  return serverConvStore;
+}
+
 const VALID_PHASES = new Set(['handshake', 'explore', 'deep_dive', 'synthesize', 'close']);
 const collaborationSessions = new Map();
 const COLLAB_STATE_TTL_MS = readPositiveIntEnv('A2A_COLLAB_STATE_TTL_MS', 6 * 60 * 60 * 1000);
@@ -247,6 +268,33 @@ function getOrCreateCollaborationState(conversationId, context = {}) {
   if (existing) {
     existing.updatedAt = Date.now();
     return existing;
+  }
+
+  // Check DB for persisted state (enables restart recovery)
+  const convStore = getServerConvStore();
+  if (convStore) {
+    const dbState = convStore.loadCollabState(conversationId);
+    if (dbState) {
+      const now = Date.now();
+      const restored = {
+        conversationId,
+        phase: dbState.phase,
+        turnCount: dbState.turnCount,
+        overlapScore: dbState.overlapScore,
+        activeThreads: dbState.activeThreads,
+        candidateCollaborations: dbState.candidateCollaborations,
+        openQuestions: dbState.openQuestions,
+        closeSignal: dbState.closeSignal,
+        confidence: dbState.confidence,
+        callerName: cleanText(context.callerName, 80),
+        callerOwner: cleanText(context.callerOwner, 80),
+        tier: context.tier || 'public',
+        createdAt: now,
+        updatedAt: now
+      };
+      collaborationSessions.set(conversationId, restored);
+      return restored;
+    }
   }
 
   const now = Date.now();
@@ -600,6 +648,19 @@ async function callAgent(message, a2aContext) {
     collabState.updatedAt = Date.now();
     collaborationSessions.set(conversationId, collabState);
 
+    // Write-through to DB for restart recovery
+    const convStoreForPersist = getServerConvStore();
+    if (convStoreForPersist) {
+      try {
+        convStoreForPersist.saveCollabState(conversationId, collabState);
+      } catch (err) {
+        callLogger.warn('Failed to persist collab state to DB', {
+          event: 'collab_state_persist_failed',
+          error: err
+        });
+      }
+    }
+
     callLogger.info('Call turn completed', {
       event: 'call_turn_complete',
       data: {
@@ -747,9 +808,10 @@ app.use('/api/a2a', createRoutes({
   
   async handleMessage(message, context, options) {
     const traceId = context.trace_id || null;
+    const conversationId = context.conversation_id;
     const requestLogger = logger.child({
       traceId,
-      conversationId: context.conversation_id,
+      conversationId,
       tokenId: context.token_id
     });
     requestLogger.info('Inbound message accepted for handling', {
@@ -758,17 +820,38 @@ app.use('/api/a2a', createRoutes({
         caller_name: context.caller?.name || 'unknown'
       }
     });
-    
+
     const response = await callAgent(message, context);
-    
+
+    // Check close conditions from collab state
+    const collabState = collaborationSessions.get(conversationId);
+    let canContinue = true;
+    let collaboration = null;
+
+    if (collabState) {
+      collaboration = {
+        phase: collabState.phase,
+        turnCount: collabState.turnCount,
+        overlapScore: collabState.overlapScore,
+        activeThreads: collabState.activeThreads,
+        candidateCollaborations: collabState.candidateCollaborations,
+        closeSignal: collabState.closeSignal
+      };
+
+      if (collabState.closeSignal && collabState.turnCount >= 8) {
+        canContinue = false;
+      }
+    }
+
     requestLogger.info('Outbound response generated', {
       event: 'handle_message_complete',
       data: {
-        response_length: String(response || '').length
+        response_length: String(response || '').length,
+        can_continue: canContinue
       }
     });
-    
-    return { text: response, canContinue: true };
+
+    return { text: response, canContinue, collaboration };
   },
   
   summarizer: generateSummary,
