@@ -1480,26 +1480,48 @@ https://github.com/onthegonow/a2a_calling`;
         console.log(`\n  RECOMMENDED: Configure reverse proxy to route /api/a2a/* to port ${serverPort}`);
         
         if (hasNginx) {
-          console.log(`\n  ── nginx config (add to /etc/nginx/sites-available/default) ──`);
+          console.log(`\n  ┌─────────────────────────────────────────────────────────────────┐`);
+          console.log(`  │  nginx config — add inside your server {} block                 │`);
+          console.log(`  │  File: /etc/nginx/sites-available/default                       │`);
+          console.log(`  └─────────────────────────────────────────────────────────────────┘`);
+          console.log(``);
+          console.log(`  # ══════════════════════════════════════════════════════════════`);
+          console.log(`  # A2A (Agent-to-Agent) Protocol Proxy`);
+          console.log(`  # ══════════════════════════════════════════════════════════════`);
+          console.log(`  # A2A enables AI agents to communicate across different instances.`);
+          console.log(`  # This proxy routes federation requests from port 80 to the local`);
+          console.log(`  # A2A server on port ${serverPort}.`);
+          console.log(`  #`);
+          console.log(`  # Protocol: https://github.com/onthegonow/a2a_calling`);
+          console.log(`  # All requests to /api/a2a/* are agent-to-agent API calls.`);
+          console.log(`  # ══════════════════════════════════════════════════════════════`);
           console.log(`  location /api/a2a/ {`);
           console.log(`      proxy_pass http://127.0.0.1:${serverPort}/api/a2a/;`);
           console.log(`      proxy_http_version 1.1;`);
           console.log(`      proxy_set_header Host $host;`);
           console.log(`      proxy_set_header X-Real-IP $remote_addr;`);
+          console.log(`      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`);
+          console.log(`      proxy_set_header X-Forwarded-Proto $scheme;`);
           console.log(`  }`);
-          console.log(`  ────────────────────────────────────────────────────────────`);
-          console.log(`\n  To apply:`);
-          console.log(`    sudo nano /etc/nginx/sites-available/default`);
-          console.log(`    (add the location block inside your server {})`);
-          console.log(`    sudo nginx -t && sudo systemctl reload nginx`);
+          console.log(``);
+          console.log(`  To apply:`);
+          console.log(`    1. sudo nano /etc/nginx/sites-available/default`);
+          console.log(`    2. Add the config above inside your server { } block`);
+          console.log(`    3. sudo nginx -t`);
+          console.log(`    4. sudo systemctl reload nginx`);
         }
         
         if (hasCaddy) {
-          console.log(`\n  ── Caddy config ──`);
+          console.log(`\n  ┌─────────────────────────────────────────────────────────────────┐`);
+          console.log(`  │  Caddy config                                                   │`);
+          console.log(`  └─────────────────────────────────────────────────────────────────┘`);
+          console.log(``);
+          console.log(`  # A2A (Agent-to-Agent) Protocol Proxy`);
+          console.log(`  # Routes federation requests to local A2A server on port ${serverPort}`);
+          console.log(`  # Protocol: https://github.com/onthegonow/a2a_calling`);
           console.log(`  handle /api/a2a/* {`);
           console.log(`      reverse_proxy 127.0.0.1:${serverPort}`);
           console.log(`  }`);
-          console.log(`  ───────────────────`);
         }
         
         console.log(`\n  After reverse proxy is configured:`);
